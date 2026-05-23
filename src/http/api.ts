@@ -20,6 +20,7 @@
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
  * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
+ * | GET    | /v1/messages/:id/attempts | Bearer | List a message's per-attempt audit log. |
  * | POST   | /v1/messages/:id/retry | Bearer | Replay a message's dead-lettered deliveries. |
  * | GET    | /v1/endpoints        | Bearer | List the tenant's endpoints.             |
  * | POST   | /v1/endpoints        | Bearer | Create an endpoint (201, secret once).   |
@@ -63,6 +64,10 @@ import {
 } from "../endpoints/endpoint.js";
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
+import type {
+  DeliveryAttempt,
+  DeliveryAttemptStore,
+} from "../attempts/delivery-attempt.js";
 import type { App, AppStore } from "../apps/app.js";
 import { ingest } from "../fanout/fanout.js";
 import {
@@ -89,6 +94,8 @@ export interface ApiDeps {
   readonly messages: MessageStore;
   /** Where {@link ingest} enqueues the resulting delivery work. */
   readonly queue: DeliveryQueue;
+  /** The per-attempt delivery audit log read by `GET /v1/messages/:id/attempts`. */
+  readonly attempts: DeliveryAttemptStore;
   /**
    * Operational metrics. When supplied, `GET /metrics` serves the Prometheus
    * exposition and ingest is counted; when omitted (a minimal embedding),
@@ -295,6 +302,29 @@ function deliveryView(task: DeliveryTask): Record<string, unknown> {
 }
 
 /**
+ * The tenant-facing view of one recorded delivery attempt — the per-attempt audit
+ * log behind `GET /v1/messages/:id/attempts`. An attempt carries no secrets, so the
+ * view is the full record: which task/endpoint, the 1-based attempt number, the
+ * outcome, the HTTP status (or `null` on a transport/pre-flight failure), the error,
+ * the latency, and when it ran. It is mapped explicitly (rather than echoed) so a
+ * future internal field is never leaked by accident — the same discipline as
+ * {@link deliveryView} and {@link endpointView}.
+ */
+function attemptView(attempt: DeliveryAttempt): Record<string, unknown> {
+  return {
+    id: attempt.id,
+    taskId: attempt.taskId,
+    endpointId: attempt.endpointId,
+    attemptNumber: attempt.attemptNumber,
+    outcome: attempt.outcome,
+    responseStatus: attempt.responseStatus,
+    error: attempt.error,
+    durationMs: attempt.durationMs,
+    attemptedAt: attempt.attemptedAt,
+  };
+}
+
+/**
  * The summary view of a message in a list/index response. Deliberately lighter
  * than {@link messageView}: it omits the (potentially large) `payload` and the
  * per-endpoint `deliveries` — listing a page of messages should not fan out into
@@ -355,6 +385,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/messages",
   "GET /v1/messages",
   "GET /v1/messages/:id",
+  "GET /v1/messages/:id/attempts",
   "POST /v1/messages/:id/retry",
   "GET /v1/endpoints",
   "POST /v1/endpoints",
@@ -510,6 +541,20 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, messageView(message, deliveries));
   };
 
+  const listMessageAttempts: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const message = await deps.messages.get(id);
+    // Tenancy from the key; another tenant's (or an absent) message is 404 —
+    // existence is never revealed, identical to the read/retry routes above.
+    if (message === null || message.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no message with id "${id}"`);
+    }
+    // The per-attempt audit log, oldest-first. Bounded by (endpoints × attempts),
+    // so it is returned in full (no pagination) like the per-endpoint deliveries.
+    const attempts = await deps.attempts.listByMessage(id);
+    return json(200, { data: attempts.map(attemptView) });
+  };
+
   const retryMessage: AuthedHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     const message = await deps.messages.get(id);
@@ -594,6 +639,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/messages": authed(createMessage),
     "GET /v1/messages": authed(listMessages),
     "GET /v1/messages/:id": authed(getMessage),
+    "GET /v1/messages/:id/attempts": authed(listMessageAttempts),
     "POST /v1/messages/:id/retry": authed(retryMessage),
     "GET /v1/endpoints": authed(listEndpoints),
     "POST /v1/endpoints": authed(createEndpoint),

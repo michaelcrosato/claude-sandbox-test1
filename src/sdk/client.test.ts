@@ -9,6 +9,7 @@ import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import {
   PosthornApiError,
   PosthornClient,
@@ -58,6 +59,7 @@ async function startServer(): Promise<Harness> {
     endpoints: new InMemoryEndpointStore(),
     messages: new InMemoryMessageStore(),
     queue: new InMemoryDeliveryQueue(),
+    attempts: new InMemoryDeliveryAttemptStore(),
   });
   servers.push(server);
   const port = await listen(server);
@@ -491,6 +493,19 @@ describe("PosthornClient end-to-end via a running gateway", () => {
       expect(msg.deliveries[0]!.status).toBe("succeeded");
       expect(msg.deliveries[0]!.attempts).toBe(1);
       expect(JSON.parse(msg.payload)).toEqual(payload);
+
+      // The per-attempt audit log records that one succeeded attempt (HTTP 2xx),
+      // observed all the way through the SDK.
+      const attempts = await client.listMessageAttempts(sent.message.id);
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        endpointId: endpoint.id,
+        attemptNumber: 1,
+        outcome: "succeeded",
+        error: null,
+      });
+      expect(attempts[0]!.responseStatus).toBeGreaterThanOrEqual(200);
+      expect(attempts[0]!.responseStatus).toBeLessThan(300);
     },
     15_000,
   );

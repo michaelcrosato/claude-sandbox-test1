@@ -19,6 +19,7 @@ import {
 import { fixedSchedule, type RetryPolicy } from "../delivery/retry-policy.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
 import { type Message } from "../storage/message-store.js";
+import { type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 
 // A fixed, valid base64 secret reused across the suite so signature round-trips
 // against the real verifier are deterministic.
@@ -549,6 +550,169 @@ describe("DeliveryWorker.processOnce", () => {
     await worker.processOnce();
     expect(ticks).toHaveLength(2);
     expect(ticks[1]).toMatchObject({ claimed: 0, succeeded: 0 });
+  });
+});
+
+describe("DeliveryWorker — recordAttempt (audit log)", () => {
+  /** A sink that captures every attempt the worker reports. */
+  function collector(): {
+    recordAttempt: (a: NewDeliveryAttempt) => void;
+    attempts: NewDeliveryAttempt[];
+  } {
+    const attempts: NewDeliveryAttempt[] = [];
+    return {
+      recordAttempt: (a) => {
+        attempts.push(a);
+      },
+      attempts,
+    };
+  }
+
+  async function enqueueOne(env: ReturnType<typeof setup>): Promise<Message> {
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id, endpointId: "ep_1" });
+    return message;
+  }
+
+  it("records a succeeded attempt with its status, number, and endpoint", async () => {
+    const env = setup({ startMs: 1_700_000_000_000 });
+    const message = await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      recordAttempt,
+    }).processOnce();
+
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      taskId: "dtask_0",
+      messageId: message.id,
+      endpointId: "ep_1",
+      attemptNumber: 1,
+      outcome: "succeeded",
+      responseStatus: 200,
+      error: null,
+      attemptedAt: 1_700_000_000_000,
+    });
+    expect(attempts[0]!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("records a failed (non-2xx) attempt with the status and error", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      recordAttempt,
+    }).processOnce();
+
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      outcome: "failed",
+      responseStatus: 503,
+    });
+    expect(attempts[0]!.error).toContain("HTTP 503");
+  });
+
+  it("records a transport throw as a failed attempt with a null status", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+
+    const transport: Transport = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    await makeWorker(env, { transport, recordAttempt }).processOnce();
+
+    expect(attempts[0]).toMatchObject({ outcome: "failed", responseStatus: null });
+    expect(attempts[0]!.error).toContain("ECONNREFUSED");
+  });
+
+  it("records a pre-flight failure (no endpoint resolved) with no send and zero duration", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      resolveEndpoint: () => null,
+      recordAttempt,
+    }).processOnce();
+
+    expect(attempts[0]).toMatchObject({
+      outcome: "failed",
+      responseStatus: null,
+      durationMs: 0,
+    });
+    expect(attempts[0]!.error).toContain("no endpoint");
+  });
+
+  it("captures attempt latency from the clock around the send", async () => {
+    const env = setup({ startMs: 1_000, visibilityTimeoutMs: 1_000_000 });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+
+    // The transport "takes" 250ms of wall-clock before returning.
+    const transport: Transport = async () => {
+      env.setClock(1_250);
+      return { status: 200 };
+    };
+    await makeWorker(env, { transport, recordAttempt }).processOnce();
+
+    expect(attempts[0]!.durationMs).toBe(250);
+    // attemptedAt stays the tick instant, not the post-send time.
+    expect(attempts[0]!.attemptedAt).toBe(1_000);
+  });
+
+  it("numbers attempts 1, 2, … across retries", async () => {
+    const env = setup({ startMs: 0, retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+    const worker = makeWorker(env, {
+      transport: recordingTransport(500).transport,
+      recordAttempt,
+    });
+
+    await worker.processOnce(); // attempt 1 fails → retry scheduled at 60_000
+    env.setClock(60_000);
+    await worker.processOnce(); // attempt 2
+
+    expect(attempts.map((a) => a.attemptNumber)).toEqual([1, 2]);
+  });
+
+  it("treats recording as best-effort: a thrown record never breaks delivery", async () => {
+    const env = setup();
+    await enqueueOne(env);
+    const errors: unknown[] = [];
+    const boom = new Error("audit store down");
+
+    const result = await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      recordAttempt: () => {
+        throw boom;
+      },
+      onError: (e) => errors.push(e),
+    }).processOnce();
+
+    // The delivery still succeeded; the audit failure was routed to onError.
+    expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(await env.queue.get("dtask_0")).toMatchObject({ status: "succeeded" });
+    expect(errors).toEqual([boom]);
+  });
+
+  it("records nothing (and does not fail) when no recordAttempt seam is wired", async () => {
+    const env = setup();
+    await enqueueOne(env);
+    const result = await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+    }).processOnce();
+    expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
   });
 });
 

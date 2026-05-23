@@ -48,6 +48,7 @@ import {
   type DeliveryQueue,
   type DeliveryTask,
 } from "../queue/delivery-queue.js";
+import type { NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 
 /**
  * Where a task's message should be delivered, and the secret to sign it with.
@@ -236,6 +237,17 @@ export interface DeliveryWorkerOptions {
    * no-op.
    */
   readonly onTick?: (result: TickResult) => void;
+  /**
+   * Audit-log seam: called once per delivery attempt with that attempt's outcome,
+   * HTTP status, error, and latency — the data behind the per-attempt audit log
+   * (`GET /v1/messages/:id/attempts`). The gateway wires this to a
+   * {@link import("../attempts/delivery-attempt.js").DeliveryAttemptStore}'s
+   * `record`. The worker holds no audit logic of its own; it only reports what
+   * happened. Recording is **best-effort** — a thrown/rejected record is routed to
+   * `onError` and never blocks or fails the delivery (the audit trail is an add-on,
+   * delivery is the core). Omit to record nothing (the default).
+   */
+  readonly recordAttempt?: (attempt: NewDeliveryAttempt) => void | Promise<void>;
 }
 
 function describeError(error: unknown): string {
@@ -265,6 +277,9 @@ export class DeliveryWorker {
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #onError: ((error: unknown) => void) | undefined;
   readonly #onTick: ((result: TickResult) => void) | undefined;
+  readonly #recordAttempt:
+    | ((attempt: NewDeliveryAttempt) => void | Promise<void>)
+    | undefined;
 
   #stopped = false;
   #running = false;
@@ -301,6 +316,7 @@ export class DeliveryWorker {
     this.#sleep = sleep;
     this.#onError = options.onError;
     this.#onTick = options.onTick;
+    this.#recordAttempt = options.recordAttempt;
   }
 
   /** Whether {@link run} is currently looping. */
@@ -405,6 +421,7 @@ export class DeliveryWorker {
 
     let response: HttpDeliveryResponse | null = null;
     let failure: string | null = null;
+    let durationMs = 0;
     try {
       const message = await this.#store.get(task.messageId);
       if (message === null) {
@@ -414,19 +431,82 @@ export class DeliveryWorker {
         if (target === null) {
           failure = `no endpoint resolved for task "${task.id}"`;
         } else {
-          response = await this.#send(buildSignedRequest(message, target, nowMs));
+          const sentAt = this.#now();
+          try {
+            response = await this.#send(buildSignedRequest(message, target, nowMs));
+          } finally {
+            // Capture latency even when #send throws — a timeout's duration is the
+            // most useful number there is. Math.max guards a non-monotonic clock.
+            durationMs = Math.max(0, this.#now() - sentAt);
+          }
         }
       }
     } catch (error) {
       failure = describeError(error);
     }
 
-    if (response !== null && isSuccessStatus(response.status)) {
+    const succeeded = response !== null && isSuccessStatus(response.status);
+    const error = succeeded
+      ? null
+      : failure ?? `endpoint returned HTTP ${String(response?.status)}`;
+
+    // Append this attempt to the audit log before settling. Best-effort: a failed
+    // record never changes the delivery outcome (see #recordDeliveryAttempt).
+    await this.#recordDeliveryAttempt(task, nowMs, {
+      succeeded,
+      responseStatus: response?.status ?? null,
+      error,
+      durationMs,
+    });
+
+    if (succeeded) {
       return this.#settleSuccess(task, leaseToken);
     }
-    const error =
-      failure ?? `endpoint returned HTTP ${String(response?.status)}`;
-    return this.#settleFailure(task, leaseToken, error, nowMs);
+    return this.#settleFailure(
+      task,
+      leaseToken,
+      error ?? "unknown delivery error",
+      nowMs,
+    );
+  }
+
+  /**
+   * Append this attempt to the audit log via the injected `recordAttempt` seam, if
+   * any. Best-effort by contract: a thrown/rejected record is routed to `onError`
+   * and swallowed, so a flaky audit write never blocks or fails an otherwise-fine
+   * delivery. The attempt's `attemptedAt` is the tick instant; its `attemptNumber`
+   * is the claimed task's `attempts` (already incremented by `applyClaim`, so it is
+   * this attempt's 1-based number).
+   */
+  async #recordDeliveryAttempt(
+    task: DeliveryTask,
+    attemptedAt: number,
+    detail: {
+      readonly succeeded: boolean;
+      readonly responseStatus: number | null;
+      readonly error: string | null;
+      readonly durationMs: number;
+    },
+  ): Promise<void> {
+    const record = this.#recordAttempt;
+    if (record === undefined) {
+      return;
+    }
+    try {
+      await record({
+        taskId: task.id,
+        messageId: task.messageId,
+        endpointId: task.endpointId,
+        attemptNumber: task.attempts,
+        outcome: detail.succeeded ? "succeeded" : "failed",
+        responseStatus: detail.responseStatus,
+        error: detail.error,
+        durationMs: detail.durationMs,
+        attemptedAt,
+      });
+    } catch (err) {
+      this.#onError?.(err);
+    }
   }
 
   /** Run the transport with a per-attempt timeout. */

@@ -98,6 +98,26 @@ export {
 } from "./queue/sqlite-queue.js";
 
 export {
+  createAttemptId,
+  normalizeNewAttempt,
+  type DeliveryAttempt,
+  type DeliveryAttemptOutcome,
+  type NewDeliveryAttempt,
+  type NormalizedNewAttempt,
+  type DeliveryAttemptStore,
+} from "./attempts/delivery-attempt.js";
+
+export {
+  InMemoryDeliveryAttemptStore,
+  type InMemoryDeliveryAttemptStoreOptions,
+} from "./attempts/in-memory-attempt-store.js";
+
+export {
+  SqliteDeliveryAttemptStore,
+  type SqliteDeliveryAttemptStoreOptions,
+} from "./attempts/sqlite-attempt-store.js";
+
+export {
   DeliveryWorker,
   buildSignedRequest,
   isSuccessStatus,
@@ -272,6 +292,7 @@ export {
   type MessageWithDeliveries,
   type RetryMessageResponse,
   type DeliveryView,
+  type DeliveryAttemptView,
   type EndpointView,
   type CreatedEndpoint,
   type CreateEndpointInput,

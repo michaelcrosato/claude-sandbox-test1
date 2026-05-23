@@ -24,6 +24,7 @@ import { SqliteAppStore } from "../apps/sqlite-app-store.js";
 import { SqliteEndpointStore } from "../endpoints/sqlite-endpoint-store.js";
 import { SqliteMessageStore } from "../storage/sqlite-store.js";
 import { SqliteDeliveryQueue } from "../queue/sqlite-queue.js";
+import { SqliteDeliveryAttemptStore } from "../attempts/sqlite-attempt-store.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
@@ -34,6 +35,7 @@ import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
 import type { MessageStore } from "../storage/message-store.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
+import type { DeliveryAttemptStore } from "../attempts/delivery-attempt.js";
 import { MEMORY_DATA_DIR, type GatewayConfig } from "./config.js";
 
 /** The address the gateway's HTTP server actually bound to (after `start`). */
@@ -58,6 +60,8 @@ export interface Gateway {
   readonly messages: MessageStore;
   /** Durable delivery queue. */
   readonly queue: DeliveryQueue;
+  /** Per-attempt delivery audit log (written by the worker, read at `GET /v1/messages/:id/attempts`). */
+  readonly attempts: DeliveryAttemptStore;
   /** The delivery loop (started by {@link Gateway.start}, halted by {@link Gateway.stop}). */
   readonly worker: DeliveryWorker;
   /**
@@ -92,10 +96,11 @@ export interface StoreLocations {
   readonly endpoints: string;
   readonly messages: string;
   readonly queue: string;
+  readonly attempts: string;
 }
 
 /**
- * Resolve where each store's SQLite database lives. For `:memory:` all four are
+ * Resolve where each store's SQLite database lives. For `:memory:` all are
  * ephemeral (each its own independent in-memory db, matching the per-store
  * architecture). For a directory, one file per store is created under it; the
  * directory is created if absent.
@@ -112,6 +117,7 @@ export function resolveLocations(dataDir: string): StoreLocations {
       endpoints: MEMORY_DATA_DIR,
       messages: MEMORY_DATA_DIR,
       queue: MEMORY_DATA_DIR,
+      attempts: MEMORY_DATA_DIR,
     };
   }
   mkdirSync(dataDir, { recursive: true });
@@ -120,13 +126,14 @@ export function resolveLocations(dataDir: string): StoreLocations {
     endpoints: join(dataDir, "endpoints.db"),
     messages: join(dataDir, "messages.db"),
     queue: join(dataDir, "queue.db"),
+    attempts: join(dataDir, "attempts.db"),
   };
 }
 
 /**
  * Wire a complete Posthorn gateway from a validated {@link GatewayConfig}. The
  * returned {@link Gateway} is constructed but not yet listening — call
- * {@link Gateway.start}. All four SQLite backends share the lifetime of the
+ * {@link Gateway.start}. All SQLite backends share the lifetime of the
  * gateway and are closed together by {@link Gateway.stop}.
  */
 export function createGateway(config: GatewayConfig): Gateway {
@@ -139,6 +146,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     location: locations.queue,
     visibilityTimeoutMs: config.worker.visibilityTimeoutMs,
   });
+  const attempts = new SqliteDeliveryAttemptStore({ location: locations.attempts });
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
@@ -151,6 +159,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     idlePollMs: config.worker.idlePollMs,
     // Fold each tick's tally into the metrics counters.
     onTick: metrics.recordTick,
+    // Append every attempt to the durable audit log (best-effort: a failed write
+    // is routed to the worker's onError and never blocks a delivery).
+    recordAttempt: async (attempt) => {
+      await attempts.record(attempt);
+    },
   });
 
   const dispatcher = new FanoutDispatcher({
@@ -163,7 +176,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   });
 
   const httpServer = createHttpServer(
-    { apps, endpoints, messages, queue, metrics },
+    { apps, endpoints, messages, queue, attempts, metrics },
     { maxBodyBytes: config.maxBodyBytes },
   );
 
@@ -225,6 +238,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     endpoints.close();
     messages.close();
     queue.close();
+    attempts.close();
   };
 
   return {
@@ -232,6 +246,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     endpoints,
     messages,
     queue,
+    attempts,
     worker,
     dispatcher,
     metrics,

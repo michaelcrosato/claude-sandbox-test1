@@ -237,6 +237,27 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/messages/{id}/attempts": {
+        get: {
+          operationId: "listMessageAttempts",
+          tags: ["Messages"],
+          summary: "List a message's delivery attempts",
+          description:
+            "The per-attempt audit log for this message — one record per HTTP attempt the " +
+            "worker made, oldest-first, across every endpoint it fanned out to. Each carries " +
+            "the attempt number, outcome, the receiver's HTTP status (or `null` on a transport/" +
+            "pre-flight failure), the error, and the latency. This is the depth behind " +
+            '"observable": where `GET /v1/messages/{id}` shows each delivery\'s *current* state, ' +
+            "this shows the *history* of how it got there. Another tenant's (or an unknown) " +
+            "message is `404`.",
+          parameters: [idParam("The message id.")],
+          responses: {
+            "200": jsonResponse("The message's delivery attempts.", ref("DeliveryAttemptList")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such message for this tenant."),
+          },
+        },
+      },
       "/v1/messages/{id}/retry": {
         post: {
           operationId: "retryMessage",
@@ -422,6 +443,49 @@ export function buildOpenApiDocument(): OpenApiDocument {
             updatedAt: epochMs("Last state change, epoch ms."),
           },
         },
+        DeliveryAttempt: {
+          type: "object",
+          description: "One recorded HTTP delivery attempt (an append-only audit record).",
+          required: [
+            "id",
+            "taskId",
+            "endpointId",
+            "attemptNumber",
+            "outcome",
+            "responseStatus",
+            "error",
+            "durationMs",
+            "attemptedAt",
+          ],
+          properties: {
+            id: { type: "string", examples: ["datt_5Qm2..."] },
+            taskId: { type: "string", description: "The delivery (message×endpoint) this attempt belongs to." },
+            endpointId: { type: ["string", "null"], description: "The destination endpoint." },
+            attemptNumber: {
+              type: "integer",
+              minimum: 1,
+              description: "Which attempt this was for its delivery, 1-based (1 = first try).",
+            },
+            outcome: {
+              type: "string",
+              enum: ["succeeded", "failed"],
+              description: "Whether the attempt reached the receiver with a 2xx.",
+            },
+            responseStatus: {
+              type: ["integer", "null"],
+              description:
+                "The receiver's HTTP status, or null when no response arrived (a transport " +
+                "failure such as DNS/refused/timeout, or a pre-flight failure).",
+            },
+            error: { type: ["string", "null"], description: "Failure detail when `outcome` is `failed`; null on success." },
+            durationMs: {
+              type: "integer",
+              minimum: 0,
+              description: "Wall-clock duration of the attempt, ms (0 for a pre-flight failure with no send).",
+            },
+            attemptedAt: epochMs("When the attempt started, epoch ms."),
+          },
+        },
         Endpoint: {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
@@ -541,6 +605,12 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           required: ["data"],
           properties: { data: { type: "array", items: ref("Endpoint") } },
+        },
+        DeliveryAttemptList: {
+          type: "object",
+          description: "A message's delivery attempts, oldest-first.",
+          required: ["data"],
+          properties: { data: { type: "array", items: ref("DeliveryAttempt") } },
         },
         RetryResult: {
           type: "object",

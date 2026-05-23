@@ -4,6 +4,7 @@ import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
 import { DeliveryWorker, type HttpDeliveryRequest } from "../worker/delivery-worker.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
@@ -15,6 +16,7 @@ interface Fixture {
   readonly endpoints: InMemoryEndpointStore;
   readonly messages: InMemoryMessageStore;
   readonly queue: InMemoryDeliveryQueue;
+  readonly attempts: InMemoryDeliveryAttemptStore;
   readonly api: ApiHandler;
   readonly appId: string;
   readonly secret: string;
@@ -25,10 +27,11 @@ async function setup(): Promise<Fixture> {
   const endpoints = new InMemoryEndpointStore();
   const messages = new InMemoryMessageStore();
   const queue = new InMemoryDeliveryQueue();
-  const api = createApi({ apps, endpoints, messages, queue });
+  const attempts = new InMemoryDeliveryAttemptStore();
+  const api = createApi({ apps, endpoints, messages, queue, attempts });
   const app = await apps.create({ name: "Acme" });
   const { secret } = await apps.createApiKey(app.id);
-  return { apps, endpoints, messages, queue, api, appId: app.id, secret };
+  return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
 }
 
 /** Build a request, defaulting the unset fields. */
@@ -639,6 +642,148 @@ describe("createApi — GET /v1/messages/:id (delivery status)", () => {
   });
 });
 
+describe("createApi — GET /v1/messages/:id/attempts (audit log)", () => {
+  it("rejects an unauthenticated read with 401", async () => {
+    const { api } = await setup();
+    const res = await api(
+      request({ method: "GET", path: "/v1/messages/msg_1/attempts" }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown message id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/messages/msg_missing/attempts",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("is an empty list before any attempt has run", async () => {
+    const { api, secret } = await setup();
+    const ingest = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    const id = body(ingest).message.id;
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}/attempts`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).data).toEqual([]);
+  });
+
+  it("lists a succeeded attempt after the worker delivers", async () => {
+    const { api, secret, endpoints, messages, queue, attempts } = await setup();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ingest = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: { ok: true } },
+        secret,
+      ),
+    );
+    const id = body(ingest).message.id;
+
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: 200 }),
+      recordAttempt: async (a) => {
+        await attempts.record(a);
+      },
+    });
+    expect((await worker.processOnce()).succeeded).toBe(1);
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}/attempts`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).data).toHaveLength(1);
+    const attempt = body(res).data[0];
+    expect(attempt).toMatchObject({
+      attemptNumber: 1,
+      outcome: "succeeded",
+      responseStatus: 200,
+      error: null,
+    });
+    expect(attempt).toHaveProperty("taskId");
+    expect(attempt).toHaveProperty("durationMs");
+    expect(attempt).toHaveProperty("attemptedAt");
+  });
+
+  it("records a failed attempt with its HTTP status and error", async () => {
+    const { api, secret, endpoints, messages, queue, attempts } = await setup();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ingest = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    const id = body(ingest).message.id;
+
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: 503 }),
+      recordAttempt: async (a) => {
+        await attempts.record(a);
+      },
+    });
+    await worker.processOnce(); // one failed attempt (then auto-retry is scheduled)
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}/attempts`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(body(res).data).toHaveLength(1);
+    expect(body(res).data[0]).toMatchObject({ outcome: "failed", responseStatus: 503 });
+    expect(body(res).data[0].error).toContain("HTTP 503");
+  });
+
+  it("hides another tenant's attempts behind 404", async () => {
+    const { api, apps } = await setup();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+    const ingest = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, bKey),
+    );
+    const bMessageId = body(ingest).message.id;
+
+    // A cannot read B's attempts — 404, not 403 (existence is not revealed).
+    const aRead = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${bMessageId}/attempts`,
+        headers: { authorization: `Bearer ${aKey}` },
+      }),
+    );
+    expect(aRead.status).toBe(404);
+  });
+});
+
 describe("createApi — POST /v1/messages/:id/retry (replay)", () => {
   /** Like setup(), but the queue dead-letters on the first failed attempt. */
   async function setupNoRetry(): Promise<Fixture> {
@@ -646,10 +791,11 @@ describe("createApi — POST /v1/messages/:id/retry (replay)", () => {
     const endpoints = new InMemoryEndpointStore();
     const messages = new InMemoryMessageStore();
     const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
-    const api = createApi({ apps, endpoints, messages, queue });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
-    return { apps, endpoints, messages, queue, api, appId: app.id, secret };
+    return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
   }
 
   it("rejects an unauthenticated retry with 401", async () => {
@@ -970,8 +1116,9 @@ describe("createApi — GET /metrics", () => {
     const endpoints = new InMemoryEndpointStore();
     const messages = new InMemoryMessageStore();
     const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
     const metrics = new MetricsRegistry({ version: "9.9.9", now: () => 0 });
-    const api = createApi({ apps, endpoints, messages, queue, metrics });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, metrics });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
     await endpoints.create({

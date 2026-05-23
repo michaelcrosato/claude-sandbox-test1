@@ -167,6 +167,29 @@ export interface DeliveryView {
   readonly updatedAt: number;
 }
 
+/**
+ * One recorded delivery attempt, as returned by
+ * {@link PosthornClient.listMessageAttempts}. An append-only audit record: the
+ * HTTP status, error, and latency of one attempt the worker made.
+ */
+export interface DeliveryAttemptView {
+  readonly id: string;
+  /** The delivery (message×endpoint) this attempt belongs to. */
+  readonly taskId: string;
+  readonly endpointId: string | null;
+  /** Which attempt this was for its delivery, 1-based (1 = first try). */
+  readonly attemptNumber: number;
+  readonly outcome: "succeeded" | "failed";
+  /** The receiver's HTTP status, or `null` when no response arrived (transport/pre-flight failure). */
+  readonly responseStatus: number | null;
+  /** Failure detail when `outcome` is `failed`; `null` on success. */
+  readonly error: string | null;
+  /** Wall-clock duration of the attempt, ms. */
+  readonly durationMs: number;
+  /** When the attempt started, epoch ms. */
+  readonly attemptedAt: number;
+}
+
 /** Options for {@link PosthornClient.listMessages}. */
 export interface ListMessagesParams {
   /** Page size, 1..200. Defaults to the gateway's default (50). */
@@ -337,6 +360,20 @@ export class PosthornClient {
       "GET",
       `/v1/messages/${encodeURIComponent(id)}`,
     );
+  }
+
+  /**
+   * List a message's per-attempt delivery audit log — `GET /v1/messages/:id/attempts`.
+   * One record per HTTP attempt the worker made (across every endpoint it fanned out
+   * to), oldest-first, each carrying the response status, error, and latency — the
+   * *history* behind {@link PosthornClient.getMessage}'s current-state view.
+   */
+  async listMessageAttempts(id: string): Promise<readonly DeliveryAttemptView[]> {
+    const res = await this.#request<{ data: readonly DeliveryAttemptView[] }>(
+      "GET",
+      `/v1/messages/${encodeURIComponent(id)}/attempts`,
+    );
+    return res.data;
   }
 
   /**

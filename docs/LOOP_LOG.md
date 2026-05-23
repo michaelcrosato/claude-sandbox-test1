@@ -4,6 +4,54 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 21: P3 — per-attempt delivery audit log (`GET /v1/messages/:id/attempts`)
+
+**Repo truth at start — reconciliation, not a clean baseline.** `git log` head was `51585d7` (iter 20,
+OpenAPI), but the **workspace was dirty**: a complete, untracked `src/attempts/` plus matching edits to
+the worker, api, openapi, sdk, gateway, index, README, and PROJECT.md — and **no LOOP_LOG entry**. A prior
+tick had clearly *built* the per-attempt audit log and *updated the docs to mark it ✅*, then was
+interrupted before validating, logging, or committing. So this tick's highest-leverage move was not to
+write a new feature but to **reconcile and adjudicate** the orphaned work: prove it green and land it
+(Axiom 2), or archive + restore it (Axiom 3). The work is exactly the top "next candidate" iter 20 named
+(the remaining observability *depth* item) and matches the dual-backend conformance pattern used
+throughout, so it was a credible landing candidate, not slop to discard.
+
+**Reconciliation findings (read before trusting):** reviewed the load-bearing pieces by hand —
+`src/attempts/delivery-attempt.ts` (immutable `DeliveryAttempt`, strict `normalizeNewAttempt` intake
+guard, `datt_` ids), `sqlite-attempt-store.ts` (the `createRequire("node:sqlite")` builtin path, `STRICT`
+append-only table, `idx_delivery_attempts_message`, prepared statements), the **worker hot-path edit**
+(records one attempt through a best-effort `recordAttempt` seam *before* settling; latency captured in a
+`finally` so a thrown/aborted send still measures; `attemptNumber = task.attempts`, already incremented by
+`applyClaim`; a thrown audit write is routed to `onError`, never failing the delivery), the `api.ts` route
+(tenant-scoped `404`-not-`403`, explicit `attemptView` map so no internal field leaks, key added to the
+compile-checked `API_ROUTE_KEYS` map), and the gateway wiring (opens/closes the 5th SQLite backend, feeds
+the worker + HTTP server). Coherent and faithful to the codebase's conventions.
+
+**Force Absolute Validation (the manual gate, per `[[validation-gate-is-manual]]`):** `tsc -p
+tsconfig.json --noEmit` clean (strict). `npx vitest run` **585/585** (was 540 at iter 20 end; **+45**: the
+new `src/attempts/` suite — pure normalize/id + in-memory & SQLite shared conformance — plus worker
+`recordAttempt` cases, api handler, sdk `listMessageAttempts`, gateway end-to-end, and the openapi
+operation/schema drift coverage). `npm run build` clean. Integrity gate exit 0; local gate exit 0 (the
+three hash-protected files untouched).
+
+**Beyond the gate — compiled-`dist` smoke (the unique production-ESM proof vitest's bundler workaround
+can mask):** booted the **built** gateway against a **file-backed** data dir (real `node:sqlite`
+`createRequire` path, not `:memory:`), fanned one message to a 200 receiver and a 500 receiver, and polled
+`GET /v1/messages/:id/attempts` until **both first attempts were recorded** — `succeeded`/`responseStatus
+200` and `failed`/`responseStatus 500`, each `attemptNumber 1`, non-negative `durationMs` — then confirmed
+a second tenant's key gets `404` (cross-tenant isolation). Exit 0. Temp dir + smoke script removed; git
+status shows only the intended files.
+
+**State:** GREEN → committing the reconciled work to main as Iteration 21. Net: `dead_letter`/`succeeded`
+state was already observable; now the *history* behind it is — one immutable record per HTTP attempt, the
+view a developer debugs a flaky receiver from. **Standing deferred (next candidates):** an admin/control-
+plane *HTTP* route for app/key provisioning (CLI already covers local bootstrap); per-key `lastUsedAt`;
+pagination/retention for the attempt log once a single message's attempt count can grow large; and the
+larger P5 hosted control plane. With the audit log landed, the v1 observability surface (status → list →
+retry → attempts) is complete.
+
+---
+
 ## 2026-05-23 — Iteration 20: P3 — OpenAPI 3.1 contract (`GET /openapi.json`)
 
 **Repo truth at start:** clean main @ `7669885`. Baseline re-verified before any change: `tsc --noEmit`

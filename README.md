@@ -85,6 +85,17 @@ Early foundation. Implemented so far:
   (another tenant's message is `404`, never revealed), and proven end-to-end (ingest → worker delivers
   → the status flips to `succeeded`).
 
+- ✅ **Per-attempt delivery audit log** — the *depth* behind "observable", and the single most-used
+  view in every incumbent's dashboard. The status read above shows each delivery's *current* state;
+  `GET /v1/messages/:id/attempts` (and `client.listMessageAttempts(id)`) shows the *history* of how it
+  got there — **one record per HTTP attempt**: attempt number, outcome, the receiver's HTTP status (or
+  `null` on a transport/pre-flight failure), the error, latency, and timestamp, oldest-first. This is
+  the data you debug a flaky receiver from ("attempt 3: 503 in 1.2s; attempt 4: timeout"). It is an
+  append-only `DeliveryAttemptStore` kept **separate from the queue** (so the scheduler's hot path
+  never scans the unbounded audit table), written by the worker through a best-effort `recordAttempt`
+  seam (a failed audit write never blocks a delivery), tenant-scoped (`404` for another tenant's
+  message), and dual-backend (in-memory + durable SQLite, one conformance suite).
+
 - ✅ **Message listing** — the collection half of "what have I sent?": `GET /v1/messages` returns the
   tenant's messages **newest-first**, **keyset-paginated** (`?limit=` + an opaque `?cursor=` fed back
   from each page's `nextCursor`). Keyset paging stays correct as the message log grows unbounded and is

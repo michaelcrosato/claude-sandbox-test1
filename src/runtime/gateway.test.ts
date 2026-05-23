@@ -222,6 +222,20 @@ describe("createGateway", () => {
       expect(status.deliveries).toHaveLength(1);
       expect(status.deliveries[0]!.status).toBe("succeeded");
       expect(status.deliveries[0]!.attempts).toBe(1);
+
+      // The per-attempt audit log was written by the worker and is readable over
+      // HTTP — one succeeded attempt with a recorded 2xx.
+      const attemptsRes = await fetch(`${base}/v1/messages/${message.id}/attempts`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      expect(attemptsRes.status).toBe(200);
+      const { data: attempts } = (await attemptsRes.json()) as {
+        data: { attemptNumber: number; outcome: string; responseStatus: number | null }[];
+      };
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]!.attemptNumber).toBe(1);
+      expect(attempts[0]!.outcome).toBe("succeeded");
+      expect(attempts[0]!.responseStatus).toBe(200);
     },
     15_000,
   );

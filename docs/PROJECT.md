@@ -341,9 +341,35 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     (0 errors; the only output is the stylistic "no 4xx response" warning on the two probe routes that
     legitimately have none). SDK coverage of this *meta* endpoint is intentionally omitted (the SDK is the
     typed-TS path; OpenAPI exists for everyone else).
+  - **Per-attempt delivery audit log — `GET /v1/messages/:id/attempts` ✅ (this tick):** the *depth*
+    behind the "observable" promise, and the single most-used view in every incumbent's dashboard
+    (Svix "message attempts", Convoy "delivery attempts"). The `DeliveryQueue` already persisted each
+    delivery's *latest* state (status/attempts/`lastError`) — "where does this delivery stand now?" — but
+    threw away the history: it could not say *attempt 3 got an HTTP 503 after 1.2s, attempt 4 timed out*,
+    the data a developer actually debugs a flaky receiver from. This adds that history as a separate,
+    append-only **`DeliveryAttemptStore`** (`src/attempts/`): one immutable record per HTTP attempt —
+    `attemptNumber` (1-based), `outcome` (succeeded/failed), `responseStatus` (or `null` on a transport/
+    pre-flight failure), `error`, `durationMs`, `attemptedAt`. Deliberately **separate from the queue**:
+    the scheduler's hot path never scans the unbounded audit table, and it can be pruned/tiered later
+    without touching delivery correctness. Same proven dual-backend + one-shared-conformance-suite pattern
+    (in-memory reference + durable SQLite on `node:sqlite`, `STRICT`, a `message_id` index, append-only —
+    no `UPDATE`/`DELETE`). The {@link DeliveryWorker} writes one record per attempt through a new injected
+    **`recordAttempt`** seam (the structural twin of the metrics `onTick` hook — the worker holds no audit
+    logic; it captures the response status + measures latency around the send and reports facts);
+    recording is **best-effort** — a failed audit write is routed to `onError` and never blocks or fails a
+    delivery (audit is an add-on, delivery is the core). Pre-flight and transport failures are logged too
+    (`responseStatus:null`), so the trail is complete; at-least-once duplicate attempts are recorded
+    faithfully. The route is tenant-scoped (another tenant's/absent message is `404`, never revealed,
+    identical to the read/retry routes), returns the full log oldest-first (bounded by endpoints×attempts,
+    no pagination — like the per-endpoint deliveries), the SDK gains `client.listMessageAttempts(id)`, and
+    the OpenAPI doc gains the operation + `DeliveryAttempt`/`DeliveryAttemptList` schemas (the bidirectional
+    drift test forces both). Proven by the shared conformance suite (×2 backends), worker tests (success/
+    non-2xx/transport-throw/pre-flight/latency/attempt-numbering/best-effort-absorb), pure handler + SDK
+    tests, running-gateway end-to-end, and a **compiled-`dist` smoke** (succeeded-200 + failed-500 attempts
+    recorded and read back through production ESM, incl. the `node:sqlite` `createRequire` path).
   - **Deferred (next ticks):** an admin/control-plane *HTTP* route for app/key provisioning (the CLI
-    now covers local bootstrap); a full per-attempt audit log (one record per HTTP attempt with response
-    detail — richer than the current latest-state-per-endpoint view); and per-key `lastUsedAt`.
+    now covers local bootstrap); per-key `lastUsedAt`; and pagination/retention for the attempt log once
+    a single message's attempt count can grow large (today it is bounded by endpoints × the retry budget).
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a
