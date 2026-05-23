@@ -4,6 +4,90 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 34: P4 — operator deploy/monitoring guide (GitHub Actions CI, Docker Compose, Prometheus)
+
+**Repo truth at start:** clean main @ `41c4d31` (iter 33, per-key `lastUsedAt`) — a real clean
+baseline (git clean; iter-33 LOOP_LOG entry present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **814/814, 37 files**, `npm run build`
+clean, integrity + local gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Complete the **P4 operator self-host packaging story**
+— the one explicit remaining P4 item. Standing deferred items after iter 33: Stripe billing
+(ungateable — external account); attempt-log pagination (scaling concern, not immediate user gap);
+**operator deploy/monitoring guide** (P4 docs); `endpoint.disabled` notification event. The
+operator guide is the highest-leverage buildable move because:
+*(a)* Without it, the headline wedge ("single container, no Redis, Prometheus-monitorable") is a
+prose claim with no deployment path beyond `docker run` — a real self-hoster has no authoritative
+reference for TLS termination, security hardening, alerting, or upgrading;
+*(b)* GitHub Actions CI is a prerequisite for any meaningful open-source credibility — without CI,
+every merge to main is validated only by a local gate, which is not visible to contributors or
+evaluators;
+*(c)* Docker Compose + Prometheus wires up the monitoring story end-to-end so "operator deploys
+and can alert on `dead_letter` backlog" becomes a one-command, no-configuration task.
+Fully gateable with no code changes (tests stay at 814/814, tsc stays clean).
+
+**Built this tick:** 7 new files, 678 lines added, README updated.
+
+- **`.github/workflows/ci.yml`** — GitHub Actions CI: Node 24 + `npm ci` + `npm run typecheck`
+  + `npm test` + `npm run build`. Triggers on push/PR to `main`. Makes "keep main green" (Axiom 2)
+  automated and visible; a failing tsc/vitest now blocks a PR before review.
+- **`docker-compose.yml`** — the one-command production stack: `posthorn` (built from the local
+  `Dockerfile`) + `prometheus` (prom/prometheus:v3.3.1). `posthorn` persists state to the
+  `posthorn-data` named volume; Prometheus to `prometheus-data`. Reads from `.env` for
+  `POSTHORN_ADMIN_TOKEN` + any tuning vars; mounts the `monitoring/` configs as read-only.
+  Admin provisioning via `docker compose run --rm posthorn admin …`.
+- **`monitoring/prometheus.yml`** — Prometheus scrape config: `job_name: posthorn`, target
+  `posthorn:3000` (docker-compose service name), `metrics_path: /metrics`, 15s interval.
+  Loads `alerts.yml` via `rule_files`.
+- **`monitoring/alerts.yml`** — 5 production-ready alerting rules: `PosthornDown` (critical,
+  scrape target unreachable > 1 min); `PosthornDeadLetterBacklog` (warning, any dead-lettered
+  tasks > 5 min — **the one the DEPLOY.md says to keep at zero**); `PosthornDeadLetterBacklogHigh`
+  (critical, > 100 dead-lettered); `PosthornDeliveryFailureRateHigh` (warning, > 20% failure
+  rate over 10 min); `PosthornDeliveryQueueDepthHigh` (warning, > 1000 pending tasks > 5 min).
+- **`.env.example`** — all `POSTHORN_*` environment variables with defaults and comments, including
+  an admin-token generation snippet. The `.gitignore` already had `!.env.example` to keep it tracked.
+- **`docs/DEPLOY.md`** — 448-line comprehensive operator guide: requirements table, Docker Compose
+  quick start, tenant bootstrap (Compose + plain Docker + admin HTTP API), full configuration
+  reference (12 variables), security hardening (TLS/reverse-proxy with nginx example, admin token
+  generation, `/metrics` restriction, data-dir permissions, tenant-isolation model), Prometheus
+  monitoring guide (metrics catalog + 4 key PromQL queries), alerting guide (5 rules + Alertmanager
+  wiring), Grafana add-on (docker-compose.override.yml + 5 recommended dashboard panels), upgrade
+  procedure (forward-only migrations + online backup), standalone binary + systemd unit, embedding
+  as a library, throughput tuning table.
+- **`README.md`** — CI badge (`[![CI]…badge.svg](…/actions/workflows/ci.yml)`); link to DEPLOY.md
+  in the Docker section; `POSTHORN_ADMIN_TOKEN` and `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS`
+  added to the configuration table (both were missing); `.env.example` reference.
+
+**Key decisions (honest tradeoffs):**
+- **Docker Compose runs `build: .` (local image), not a registry pull.** There is no published
+  registry image yet; the compose file builds from the local `Dockerfile`. When a registry is set
+  up, change `build: .` to `image: posthorn/posthorn:latest` — noted in DEPLOY.md under Upgrading.
+- **Grafana not in the base `docker-compose.yml`.** Grafana adds 200+ MB and an extra credential
+  to manage. It is documented as an opt-in `docker-compose.override.yml` so the default stack stays
+  minimal. Most operators already have Grafana centrally; a separate override avoids bloat.
+- **Alerting rules are in `monitoring/alerts.yml`, not inline in `prometheus.yml`.** Separation makes
+  them easier to manage independently (add a rule without touching the scrape config, reload via
+  `--web.enable-lifecycle`).
+- **No Grafana dashboard JSON shipped.** The PromQL queries are documented and well-named; generating
+  a dashboard JSON for a specific Grafana version would rot. The DEPLOY.md gives the queries and
+  panel descriptions so an operator builds it once in their own instance.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean (strict, zero
+code changes). vitest **814/814, 37 files** (unchanged — no code added). `npm run build` clean.
+Integrity gate exit 0 (three hash-protected files untouched); local gate exit 0.
+
+**State:** GREEN → committing to main as Iteration 34. P4 self-host packaging is now complete:
+the gateway boots in Docker (P4 ✅), exports Prometheus metrics (P4 ✅), ships a deploy guide
+with alerting rules (P4 ✅ this tick), and CI auto-validates main on push (new). **Standing
+deferred (next candidates):** Stripe billing (ungateable); attempt-log pagination (explicit P3/P5
+deferred item — keyset cursor on `(attemptedAt, id)`, same pattern as message listing); `endpoint.disabled`
+notification event (named parity with Svix, requires a new system-event design); `endpoint.disabled`
+notification in the tenant dashboard (currently auto-disable is silent — observable via API/dashboard
+but no push signal).
+
+---
+
 ## 2026-05-23 — Iteration 33: P3/P5 — per-key `lastUsedAt` — API-key activity observability
 
 **Repo truth at start:** clean main @ `cf629e8` (iter 32, tenant dashboard UI) — a real clean

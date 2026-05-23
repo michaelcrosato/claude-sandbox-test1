@@ -532,7 +532,16 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     (Prometheus detects resets). Proven by a pure renderer/registry suite, a pure handler suite, a
     real-socket raw-text test, a running-gateway end-to-end (deliver → scrape → counters reflect it),
     and a **compiled-`dist` smoke** through production ESM (incl. the `version.js`/`node:sqlite`
-    `createRequire` paths). Remaining in P4: operator docs (a deploy/monitoring guide).
+    `createRequire` paths).
+  - **Operator deploy/monitoring guide ✅ (iter 34):** `docs/DEPLOY.md` — requirements, Docker
+    Compose quick start, tenant bootstrap, full configuration reference (12 `POSTHORN_*` vars),
+    security hardening (TLS/reverse-proxy, admin token, `/metrics` restriction, data-dir perms),
+    Prometheus metrics catalog + PromQL queries, alerting guide (5 rules), Grafana add-on,
+    upgrade procedure, standalone binary + systemd unit, library embedding, throughput tuning.
+    `docker-compose.yml` + `monitoring/prometheus.yml` + `monitoring/alerts.yml` wire up the
+    production monitoring stack in one command. `.env.example` documents every environment
+    variable. GitHub Actions CI (`.github/workflows/ci.yml`) automates `tsc + vitest + build` on
+    every push and PR to main. **P4 is now complete.**
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization). Its
   **foundation now exists** — the admin-token-gated `/v1/admin/*` provisioning API (see P3) is the
   control-plane seam a hosted dashboard/billing layer drives tenants and keys through.
@@ -695,7 +704,9 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     the admin SDK `AdminApiKey` type, and the OpenAPI `ApiKey` schema. Both backends (in-memory +
     SQLite with a seamless `ALTER TABLE` migration).
   - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop); attempt-log pagination (scaling concern); operator deploy/monitoring guide (P4 docs).
+    loop); attempt-log pagination (scaling concern — keyset cursor on `(attemptedAt, id)`, same
+    pattern as message listing, next code tick); `endpoint.disabled` notification event (system
+    webhook when auto-disable fires — named parity with Svix, requires a new system-event design).
 
 ## 5. Out of scope / non-goals
 
