@@ -28,6 +28,12 @@ export const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 export interface HttpServerOptions {
   /** Reject a request body larger than this many bytes with `413`. Defaults to {@link DEFAULT_MAX_BODY_BYTES}. */
   readonly maxBodyBytes?: number;
+  /**
+   * When provided, requests whose pathname begins with `/dashboard` are forwarded
+   * to this handler instead of the JSON API handler. Omit to disable the dashboard
+   * (all `/dashboard/*` paths fall through to the API, which returns `404`).
+   */
+  readonly dashboardHandler?: ApiHandler;
 }
 
 /** Signals that a request body exceeded the configured cap. */
@@ -131,6 +137,7 @@ async function serve(
   res: ServerResponse,
   handle: ApiHandler,
   maxBodyBytes: number,
+  dashboardHandler: ApiHandler | undefined,
 ): Promise<void> {
   let rawBody: string;
   try {
@@ -163,9 +170,15 @@ async function serve(
   }
 
   const url = new URL(req.url ?? "/", "http://localhost");
+  // Route to the dashboard handler when the path starts with /dashboard and a
+  // dashboard handler has been configured; otherwise use the JSON API handler.
+  const isDashboard =
+    dashboardHandler !== undefined &&
+    (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"));
+  const activeHandle = isDashboard ? dashboardHandler : handle;
   let response: ApiResponse;
   try {
-    response = await handle({
+    response = await activeHandle({
       method: req.method ?? "GET",
       path: url.pathname,
       headers: normalizeHeaders(req.headers),
@@ -192,7 +205,8 @@ async function serve(
 export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {}): Server {
   const handle = createApi(deps);
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const { dashboardHandler } = options;
   return createServer((req, res) => {
-    void serve(req, res, handle, maxBodyBytes);
+    void serve(req, res, handle, maxBodyBytes, dashboardHandler);
   });
 }

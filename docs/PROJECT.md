@@ -643,8 +643,30 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     **compiled-`dist` smoke** (provision over HTTP → real worker delivers a verified webhook →
     admin + tenant SDK both read `deliveries.total ≥ 1` → counts **survive a restart** on the real
     `node:sqlite` files).
+  - **Admin dashboard UI ✅ (this tick):** the browser-facing face of the operator control plane —
+    `src/dashboard/`. A server-rendered HTML admin panel served under `/dashboard/*`, enabled by the
+    same `POSTHORN_ADMIN_TOKEN` already required to enable the admin JSON API (no new config, identical
+    opt-in model — unset = every `/dashboard/*` route is `404`). Session auth: presenting the admin
+    token in a login form issues an `HttpOnly; SameSite=Strict` session cookie (8-hour TTL,
+    in-memory — sessions are ephemeral by design for an operator tool). **Security (decided, not
+    incidental):** token comparison is constant-time (both sides SHA-256'd, `timingSafeEqual`); tenant
+    API keys never satisfy the dashboard login; `SameSite=Strict` prevents CSRF from cross-site forms;
+    `Secure` flag deliberately omitted (the Node server has no TLS — operators add it via a reverse
+    proxy). Pages: login, apps list (+ create form with optional quota), app detail (keys table +
+    one-time-create + revoke + delete-with-confirm). One-time key display on `POST …/keys` is a
+    direct 200 response (not a redirect) so the secret is visible immediately; the operator copies it
+    once and it is never retrievable again. Zero new runtime dependencies: pure HTML/CSS string
+    builders (`src/dashboard/views.ts` — escapes all user content via `esc()` for XSS safety), a
+    tiny in-memory `InMemorySessionStore` (`src/dashboard/sessions.ts`), and the handler
+    (`src/dashboard/handler.ts`) re-uses the `ApiRequest`/`ApiResponse` types the JSON API already
+    defines. `server.ts` dispatches on the `/dashboard` path prefix; `gateway.ts` wires the handler
+    when `adminToken != null`. Proven by 6 session-store tests + 15 dashboard-handler pure tests
+    (login/logout flow, auth guard, CRUD paths, key management, 404 for unknown routes), plus a
+    **compiled-`dist` smoke run** (26/26 checks: login rejects wrong token, correct token sets
+    `HttpOnly` cookie; create app → app detail; create key → secret shown → minted key authenticates
+    a real tenant API request; cascade-delete invalidates key → 401; logout clears session).
   - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop) and the dashboard UI.
+    loop); tenant-facing webhook event dashboard (message/delivery browse UI for individual tenants).
 
 ## 5. Out of scope / non-goals
 

@@ -4,6 +4,81 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 31: P5 — admin dashboard UI
+
+**Repo truth at start:** clean main @ `93489a0` (iter 30, endpoint health + auto-disable) — a real
+clean baseline, not an interrupted tick (git clean; the iter-30 LOOP_LOG entry is present and
+matches head; [[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the
+manual gate ([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **769/769, 33 files**
+(+1 file on my own run: no tinypool flake [[vitest-tinypool-flaky-worker-exit]]), `npm run build`
+clean, integrity + local gate exit 0. Node 24.15. GOAL→PROJECT reconciliation stands (Posthorn).
+
+**High-leverage move chosen (checklist #3):** Build the **P5 admin dashboard UI** — the
+browser-facing face of the operator control plane. The reasoning: the two ungateable items
+(Stripe billing, needs external account; tenant webhook browse UI, needs tenant session auth — a
+more complex auth surface I won't rush in a security product) remain blocked. The admin dashboard
+is the single highest-leverage move I can land as a complete, fully-validated green unit:
+*(a)* it closes the "operator must use CLI to manage tenants" gap — a deployed hosted instance
+now has a web UI for provisioning without shell access; *(b)* it directly advances the SaaS
+monetization story by making the product self-service; *(c)* it reuses `POSTHORN_ADMIN_TOKEN` and
+the existing `AppStore` — no new architecture, no new config, consistent with the zero-dep and
+opt-in-by-default posture.
+
+**Decisive design calls.**
+- **No new credentials or config.** The dashboard reuses `POSTHORN_ADMIN_TOKEN` as its login
+  password. Unset = all `/dashboard/*` routes are `404`, indistinguishable from a nonexistent path
+  — identical to the admin JSON API model. No `POSTHORN_DASHBOARD_PASSWORD` needed.
+- **Session auth over `SameSite=Strict` httpOnly cookie.** A browser session is fundamentally
+  different from a Bearer token, but the security model is the same: a secret compared in constant
+  time, a random opaque token stored in an httpOnly cookie. `SameSite=Strict` prevents cross-site
+  CSRF without needing a separate CSRF token; `Secure` flag is omitted because the Node server has
+  no TLS (operators add it via a reverse proxy, as documented in the HTML meta/comment).
+- **Zero new runtime dependencies.** Pure HTML string builders (`views.ts`) with an inline CSS
+  stylesheet and `esc()` for XSS safety; a 45-line in-memory session store (`sessions.ts`) using
+  `node:crypto`'s `randomUUID`; the handler (`handler.ts`) re-uses the existing `ApiRequest`/
+  `ApiResponse` types. `server.ts` dispatches on the `/dashboard` path prefix; `gateway.ts` wires
+  it when `adminToken != null`. The JSON API route table, OpenAPI doc, and bidirectional drift test
+  are completely untouched (dashboard routes are HTML, not JSON — they live in a separate handler).
+- **One-time key secret on a direct 200 response.** `POST /dashboard/apps/:id/keys` returns 200
+  (not 302) with the secret displayed once, the same behaviour as the JSON API's `201` response.
+  The operator sees and copies it immediately; it is never retrievable again.
+
+**Built this tick:** `src/dashboard/sessions.ts` (`InMemorySessionStore`, 8h TTL);
+`src/dashboard/views.ts` (pure `loginPage`/`appsPage`/`appDetailPage` HTML builders, `esc()`
+XSS guard); `src/dashboard/handler.ts` (`createDashboardHandler(deps)` — login/logout, apps
+CRUD, key create/revoke/delete, constant-time token compare); `scripts/smoke-dashboard.mjs`
+(compiled-dist proof). Modified: `src/http/server.ts` (optional `dashboardHandler` in options,
+path-prefix dispatch); `src/runtime/gateway.ts` (wire `InMemorySessionStore` +
+`createDashboardHandler` when `adminToken != null`). Docs: PROJECT.md P5 ✅ + deferred list,
+this entry.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **790/790,
+35 files** (was 769/33; **+21**: 6 `InMemorySessionStore` (create/validate/expire/delete/no-op);
+15 dashboard handler (login page, wrong token, correct token + cookie attrs, logout clears,
+GET /dashboard redirect, unauthenticated guard, authenticated apps page, POST create app +
+quota, GET app detail, 404 for ghost app, delete app, create key + secret shown, revoke key,
+unknown route)). `npm run build` clean. Integrity gate exit 0 (three hash-protected files
+untouched); local gate exit 0.
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** 26/26 checks PASS: (1)
+`GET /dashboard/login` → 200 HTML, login form present; (2) wrong token → 200 + error message; (3)
+correct token → 302 + `Set-Cookie: ph_session=…; HttpOnly; SameSite=Strict`; (4) session cookie
+authenticates `GET /dashboard/apps`; (5) `POST /dashboard/apps` (name + quota) → 302 to detail;
+(6) `GET /dashboard/apps/:id` → 200 with app name and quota; (7) `POST …/keys` → 200, secret
+banner visible, `phk_` prefix present; (8) minted key authenticates a real tenant API request
+(`GET /v1/endpoints → 200`); (9) `POST …/delete` → 302 to apps list + cascade: minted key → 401;
+(10) `POST /dashboard/logout` → 302 + `Max-Age=0` clears cookie; (11) post-logout session invalid
+→ 302 to login. Temp script retained (not gitignored) for traceability per Axiom 3.
+
+**State:** GREEN → committing to main as Iteration 31. Net: a deployed Posthorn instance with
+`POSTHORN_ADMIN_TOKEN` set now has a full browser UI for operator provisioning — create apps with
+quotas, mint and revoke API keys (secret shown once), delete apps — without needing shell/CLI
+access. **Standing deferred (next candidates):** Stripe billing (ungateable); tenant-facing
+webhook/delivery browse UI (needs tenant session auth); per-key `lastUsedAt`; attempt-log
+pagination; operator deploy/monitoring guide (P4 docs).
+
+---
+
 ## 2026-05-23 — Iteration 30: endpoint health + automatic disabling of dead endpoints
 
 **Repo truth at start:** clean main @ `a5930ea` (iter 29, per-tenant delivery usage) — a real clean

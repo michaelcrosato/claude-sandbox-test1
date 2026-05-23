@@ -29,6 +29,8 @@ import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { createHttpServer } from "../http/server.js";
+import { createDashboardHandler } from "../dashboard/handler.js";
+import { InMemorySessionStore } from "../dashboard/sessions.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
 import { POSTHORN_VERSION } from "../version.js";
 import type { AppStore } from "../apps/app.js";
@@ -189,6 +191,17 @@ export function createGateway(config: GatewayConfig): Gateway {
     idlePollMs: config.fanout.idlePollMs,
   });
 
+  // The admin dashboard reuses POSTHORN_ADMIN_TOKEN as its login password, so it is
+  // also disabled by default (no token = no dashboard). Sessions are ephemeral.
+  const dashboardHandler =
+    config.adminToken !== null
+      ? createDashboardHandler({
+          apps,
+          sessions: new InMemorySessionStore(),
+          adminToken: config.adminToken,
+        })
+      : undefined;
+
   const httpServer = createHttpServer(
     {
       apps,
@@ -201,7 +214,10 @@ export function createGateway(config: GatewayConfig): Gateway {
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
     },
-    { maxBodyBytes: config.maxBodyBytes },
+    {
+      maxBodyBytes: config.maxBodyBytes,
+      ...(dashboardHandler !== undefined ? { dashboardHandler } : {}),
+    },
   );
 
   let runPromise: Promise<void> | null = null;
