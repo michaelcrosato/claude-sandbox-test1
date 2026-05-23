@@ -278,11 +278,23 @@ export interface CreateEndpointInput {
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
 export interface UpdateEndpointInput {
   readonly url?: string;
-  /** Rotate the signing secret. */
+  /** Hard-swap the signing secret (no overlap). For zero-downtime use {@link PosthornClient.rotateEndpointSecret}. */
   readonly secret?: string;
   readonly description?: string;
   readonly eventTypes?: readonly string[] | null;
   readonly disabled?: boolean;
+}
+
+/** Options for {@link PosthornClient.rotateEndpointSecret}; all fields optional. */
+export interface RotateEndpointSecretInput {
+  /** The new primary secret. Omit to have the gateway generate a secure one (the common case). */
+  readonly secret?: string;
+  /**
+   * How long (ms) the *old* secret keeps signing after the rotation, so receivers
+   * mid-migration still verify. Defaults to the gateway's window (24h). `0` is an
+   * instant hard swap with no overlap.
+   */
+  readonly overlapMs?: number;
 }
 
 /** Default `fetch`, bound to the platform global, adapting it to {@link PosthornFetch}. */
@@ -440,6 +452,29 @@ export class PosthornClient {
     await this.#request<void>(
       "DELETE",
       `/v1/endpoints/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * Rotate an endpoint's signing secret with **zero downtime** —
+   * `POST /v1/endpoints/:id/rotate-secret`. A fresh secret is installed while the
+   * old one keeps signing for an overlap window, so deliveries carry both
+   * signatures until your receivers switch — no webhook is dropped mid-rotation.
+   * The returned {@link CreatedEndpoint} carries the **new** signing `secret`
+   * **once**; persist it and configure your receivers, then let the old one expire.
+   * Omit `input` to auto-generate the secret with the default overlap.
+   */
+  async rotateEndpointSecret(
+    id: string,
+    input: RotateEndpointSecretInput = {},
+  ): Promise<CreatedEndpoint> {
+    const body: Record<string, unknown> = {};
+    if (input.secret !== undefined) body["secret"] = input.secret;
+    if (input.overlapMs !== undefined) body["overlapMs"] = input.overlapMs;
+    return this.#request<CreatedEndpoint>(
+      "POST",
+      `/v1/endpoints/${encodeURIComponent(id)}/rotate-secret`,
+      body,
     );
   }
 

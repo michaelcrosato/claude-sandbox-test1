@@ -16,15 +16,37 @@ import type {
   DeliveryTarget,
   EndpointResolver,
 } from "../worker/delivery-worker.js";
-import type { Endpoint, EndpointStore } from "./endpoint.js";
+import { activeSigningSecrets, type Endpoint, type EndpointStore } from "./endpoint.js";
 
 /**
- * Adapt a stored {@link Endpoint} into the worker's {@link DeliveryTarget}. Pure.
- * v1 forwards only the URL and signing secret; per-endpoint custom headers are a
- * later add-on (the field already exists on the target).
+ * Adapt a stored {@link Endpoint} into the worker's {@link DeliveryTarget} as of
+ * `nowMs`. Pure. The primary `secret` signs the delivery; any secrets still inside
+ * their rotation overlap window (see {@link activeSigningSecrets}) are forwarded as
+ * `additionalSecrets`, so during a rotation the payload carries one signature token
+ * per active secret and a receiver that has not yet switched still verifies. The
+ * `additionalSecrets` field is omitted entirely when there is no active overlap.
+ * (Per-endpoint custom headers are a later add-on; the target field already exists.)
  */
-export function endpointToDeliveryTarget(endpoint: Endpoint): DeliveryTarget {
-  return { url: endpoint.url, secret: endpoint.secret };
+export function endpointToDeliveryTarget(
+  endpoint: Endpoint,
+  nowMs: number,
+): DeliveryTarget {
+  // activeSigningSecrets returns [primary, ...still-active retirees]; the primary
+  // is `secret`, the rest (if any) are the rotation-overlap extras.
+  const additionalSecrets = activeSigningSecrets(endpoint, nowMs).slice(1);
+  return additionalSecrets.length > 0
+    ? { url: endpoint.url, secret: endpoint.secret, additionalSecrets }
+    : { url: endpoint.url, secret: endpoint.secret };
+}
+
+/** Options for {@link storeBackedResolver}. */
+export interface StoreBackedResolverOptions {
+  /**
+   * Clock returning epoch ms, used to decide which rotation-overlap secrets are
+   * still active at resolution (≈ send) time. Defaults to {@link Date.now};
+   * inject a fake clock in tests.
+   */
+  readonly now?: () => number;
 }
 
 /**
@@ -40,7 +62,11 @@ export function endpointToDeliveryTarget(endpoint: Endpoint): DeliveryTarget {
  *    enqueue work for a disabled endpoint, but one disabled *after* enqueue is
  *    declined here so paused endpoints stop receiving deliveries.
  */
-export function storeBackedResolver(store: EndpointStore): EndpointResolver {
+export function storeBackedResolver(
+  store: EndpointStore,
+  options: StoreBackedResolverOptions = {},
+): EndpointResolver {
+  const now = options.now ?? Date.now;
   return async (task) => {
     if (task.endpointId === null) {
       return null;
@@ -49,6 +75,6 @@ export function storeBackedResolver(store: EndpointStore): EndpointResolver {
     if (endpoint === null || endpoint.disabled) {
       return null;
     }
-    return endpointToDeliveryTarget(endpoint);
+    return endpointToDeliveryTarget(endpoint, now());
   };
 }

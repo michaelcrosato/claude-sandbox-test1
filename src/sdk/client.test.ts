@@ -180,6 +180,22 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(updated.updatedAt).toBeGreaterThanOrEqual(created.updatedAt);
   });
 
+  it("rotates an endpoint's secret, returning the new one once", async () => {
+    const { client } = await startServer();
+    const created = await client.createEndpoint({ url: "https://acme.example/hook" });
+
+    const rotated = await client.rotateEndpointSecret(created.id, { overlapMs: 60_000 });
+    expect(rotated.secret).toMatch(/^whsec_/);
+    expect(rotated.secret).not.toBe(created.secret);
+    expect(rotated.id).toBe(created.id);
+    // The retired-secret machinery is never sent over the wire.
+    expect(rotated).not.toHaveProperty("previousSecrets");
+
+    // A subsequent read still never exposes the secret.
+    const fetched = await client.getEndpoint(created.id);
+    expect(fetched).not.toHaveProperty("secret");
+  });
+
   it("deletes an endpoint, after which it is 404", async () => {
     const { client } = await startServer();
     const created = await client.createEndpoint({ url: "https://acme.example/hook" });
@@ -506,6 +522,52 @@ describe("PosthornClient end-to-end via a running gateway", () => {
       });
       expect(attempts[0]!.responseStatus).toBeGreaterThanOrEqual(200);
       expect(attempts[0]!.responseStatus).toBeLessThan(300);
+    },
+    15_000,
+  );
+
+  it(
+    "rotates a secret with zero downtime — the delivery verifies against BOTH old and new",
+    async () => {
+      const gateway = createGateway(memoryConfig());
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const app = await gateway.apps.create({ name: "Acme" });
+      const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+      const client = new PosthornClient({ baseUrl: base, apiKey });
+
+      const receiver = await startReceiver();
+      receivers.push(receiver);
+
+      // Create an endpoint (old secret), then rotate to a new secret with a
+      // generous overlap so the old one is still active when the message ships.
+      const created = await client.createEndpoint({
+        url: receiver.url,
+        eventTypes: ["user.created"],
+      });
+      const oldSecret = created.secret;
+      const rotated = await client.rotateEndpointSecret(created.id, {
+        overlapMs: 3_600_000, // 1h — comfortably covers the sub-second delivery
+      });
+      const newSecret = rotated.secret;
+      expect(newSecret).not.toBe(oldSecret);
+
+      const payload = { event: "rotation", n: 42 };
+      await client.sendMessage({ eventType: "user.created", payload });
+
+      // The single delivered request carries one signature token per active secret,
+      // so a receiver still on the OLD secret AND one already on the NEW secret both
+      // verify — no webhook is dropped while receivers migrate.
+      const delivered = await receiver.received;
+      expect(delivered.body).toBe(JSON.stringify(payload));
+      expect(() =>
+        verifyWebhook(oldSecret, delivered.headers, delivered.body),
+      ).not.toThrow();
+      expect(() =>
+        verifyWebhook(newSecret, delivered.headers, delivered.body),
+      ).not.toThrow();
     },
     15_000,
   );

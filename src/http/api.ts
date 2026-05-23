@@ -27,6 +27,7 @@
  * | GET    | /v1/endpoints/:id    | Bearer | Fetch one endpoint (tenant-scoped).      |
  * | PATCH  | /v1/endpoints/:id    | Bearer | Update an endpoint (tenant-scoped).      |
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
+ * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
  *
  * ## Security model (decided, not incidental)
  *
@@ -37,9 +38,11 @@
  *   app's endpoint is indistinguishable from "does not exist", so the API never
  *   confirms the existence of another tenant's resources.
  * - **Signing secrets are write-only over HTTP.** An endpoint's `secret` is
- *   returned exactly once, in the `201` create response (you need it to configure
- *   verification); it is never echoed by list/get/update. The receiver-side secret
- *   should not be sprayed across every read.
+ *   returned exactly once — in the `201` create response, and again as the *new*
+ *   secret in the `rotate-secret` response (you need it to configure verification);
+ *   it is never echoed by list/get/update. The retired secrets kept active during a
+ *   rotation overlap are never exposed at all. The receiver-side secret should not
+ *   be sprayed across every read.
  * - **App/key provisioning is intentionally not an HTTP route.** Minting a tenant
  *   or an API key is a privileged, bootstrap operation; exposing it unauthenticated
  *   would be an open door, and there is no key yet to authenticate it. It stays on
@@ -61,6 +64,7 @@ import {
   type EndpointStore,
   type EndpointUpdate,
   type NewEndpoint,
+  type RotateSecretOptions,
 } from "../endpoints/endpoint.js";
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
@@ -392,6 +396,7 @@ export const API_ROUTE_KEYS = [
   "GET /v1/endpoints/:id",
   "PATCH /v1/endpoints/:id",
   "DELETE /v1/endpoints/:id",
+  "POST /v1/endpoints/:id/rotate-secret",
 ] as const;
 
 /** One of the {@link API_ROUTE_KEYS} `"METHOD pattern"` strings. */
@@ -629,6 +634,29 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return { status: 204, body: undefined };
   };
 
+  const rotateEndpointSecret: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    await loadOwnedEndpoint(ctx.app.id, id); // 404 unless it is the caller's
+    // The body is optional: an empty body means "generate a fresh secret, default
+    // overlap" (the common case). When present, it may set `secret` and/or
+    // `overlapMs`; both are validated by the store's pure rotateEndpointSecret
+    // (TypeError → 400).
+    const options: { secret?: string; overlapMs?: number } = {};
+    if (ctx.req.rawBody.length > 0) {
+      const body = parseJsonObject(ctx.req);
+      if ("secret" in body) options.secret = body["secret"] as string;
+      if ("overlapMs" in body) options.overlapMs = body["overlapMs"] as number;
+    }
+    const rotated = await deps.endpoints.rotateSecret(
+      id,
+      options satisfies RotateSecretOptions,
+    );
+    // Like create, the NEW primary secret is revealed exactly once here so the
+    // tenant can configure receiver-side verification; the prior secret keeps
+    // verifying through the overlap window. Retired secrets are never exposed.
+    return json(200, { ...endpointView(rotated), secret: rotated.secret });
+  };
+
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
   // exhaustive: a missing key or a stray extra key is a compile error, so the route
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
@@ -646,6 +674,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /v1/endpoints/:id": authed(getEndpoint),
     "PATCH /v1/endpoints/:id": authed(updateEndpoint),
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
+    "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
   };
 
   const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>(

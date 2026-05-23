@@ -24,6 +24,7 @@ function endpoint(overrides: Partial<Endpoint>): Endpoint {
     appId: APP,
     url: "https://x.test/hook",
     secret: "whsec_x",
+    previousSecrets: [],
     description: "",
     eventTypes: null,
     disabled: false,

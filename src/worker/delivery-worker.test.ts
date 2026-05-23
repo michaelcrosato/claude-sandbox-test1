@@ -25,6 +25,8 @@ import { type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 // A fixed, valid base64 secret reused across the suite so signature round-trips
 // against the real verifier are deterministic.
 const SECRET = "whsec_dGVzdHNlY3JldGtleWZvcndlYmhvb2tzaWduaW5n";
+// A second valid secret, standing in for one retired during a rotation overlap.
+const OLD_SECRET = "whsec_b2xkc2VjcmV0a2V5cmV0aXJlZGR1cmluZ3JvdGF0aW9u";
 
 const TARGET_URL = "https://example.test/hook";
 
@@ -170,6 +172,28 @@ describe("buildSignedRequest", () => {
     expect(request.headers["content-type"]).toBe("text/plain");
     // The signed id cannot be spoofed by a caller-supplied header.
     expect(request.headers[HEADERS.id]).toBe("msg_1");
+  });
+
+  it("signs with every additionalSecret so the header verifies against the new AND old secret", () => {
+    const request = buildSignedRequest(
+      message,
+      { url: TARGET_URL, secret: SECRET, additionalSecrets: [OLD_SECRET] },
+      1_700_000_000_000,
+    );
+    // Two space-delimited v1 tokens — the Standard Webhooks multi-sign form.
+    const header = request.headers[HEADERS.signature]!;
+    expect(header.split(" ")).toHaveLength(2);
+    expect(header.split(" ").every((t) => t.startsWith("v1,"))).toBe(true);
+
+    const headers = {
+      id: request.headers[HEADERS.id]!,
+      timestamp: request.headers[HEADERS.timestamp]!,
+      signature: header,
+    };
+    // The headline zero-downtime guarantee: a receiver on the NEW secret verifies…
+    expect(() => verify(SECRET, headers, request.body, { now: 1_700_000_000 })).not.toThrow();
+    // …and a receiver still on the OLD secret (mid-migration) also verifies.
+    expect(() => verify(OLD_SECRET, headers, request.body, { now: 1_700_000_000 })).not.toThrow();
   });
 });
 

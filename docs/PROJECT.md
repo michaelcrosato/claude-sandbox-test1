@@ -376,6 +376,32 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     non-2xx/transport-throw/pre-flight/latency/attempt-numbering/best-effort-absorb), pure handler + SDK
     tests, running-gateway end-to-end, and a **compiled-`dist` smoke** (succeeded-200 + failed-500 attempts
     recorded and read back through production ESM, incl. the `node:sqlite` `createRequire` path).
+  - **Zero-downtime secret rotation — `POST /v1/endpoints/:id/rotate-secret` ✅ (this tick):** the
+    completion of a named Standard Webhooks capability whose *receiver* half already existed but whose
+    *sender* half did not. The verifier (and the SDK's `verifyWebhook`) have always accepted a
+    multi-token `webhook-signature` header — the spec's mechanism for rotating a signing secret without
+    dropping a webhook — but the sender only ever signed with one secret, and the lone rotation path
+    (`PATCH …{secret}`) was a **hard swap** that breaks every receiver until it is reconfigured in
+    lockstep. This adds the missing half. The `Endpoint` gains `previousSecrets: {secret, expiresAt}[]`
+    — secrets retired by a rotation that keep signing until each expires; a pure
+    `rotateEndpointSecret(current, newSecret, now, overlapMs)` installs a fresh primary, retires the old
+    one with an overlap window (`DEFAULT_SECRET_ROTATION_OVERLAP_MS` = 24h; `0` = instant hard swap),
+    prunes expired retirees, and caps the set at `MAX_PREVIOUS_SECRETS`; a pure `activeSigningSecrets
+    (endpoint, now)` is the one shared rule for "which secrets sign right now". The worker's
+    `buildSignedRequest` now signs with the primary **plus** every `additionalSecrets` the resolver
+    forwards (the still-active retirees, filtered by an injected clock in `storeBackedResolver`/
+    `endpointToDeliveryTarget`), emitting one space-delimited `v1,…` token per active secret — so during
+    the overlap a receiver on *either* the old or the new secret verifies, then the old simply expires.
+    A new **`EndpointStore.rotateSecret`** primitive (both backends, one shared conformance suite; the
+    SQLite backend persists the retirees in a `previous_secrets` JSON column added by a seamless
+    `ALTER TABLE` migration so a pre-rotation DB upgrades with no data loss and no re-delivery) is wired
+    to a tenant-scoped HTTP route that reveals the **new** primary exactly once (like create) and
+    **never** exposes the retired secrets, the SDK's `client.rotateEndpointSecret(id, {secret?,
+    overlapMs?})`, and the OpenAPI doc (the bidirectional drift test forces both). Proven by pure
+    helper tests, the expanded conformance suite (×2 backends, incl. overlap-then-expiry + reopen +
+    migration), worker multi-sign tests, pure handler + SDK tests, and a **running-gateway +
+    compiled-`dist`** end-to-end where one delivered webhook **verifies against both the old and the
+    new secret** and the rotation survives a restart on the real `node:sqlite` file path.
   - **Deferred (next ticks):** an admin/control-plane *HTTP* route for app/key provisioning (the CLI
     now covers local bootstrap); per-key `lastUsedAt`; and pagination/retention for the attempt log once
     a single message's attempt count can grow large (today it is bounded by endpoints × the retry budget).

@@ -142,9 +142,15 @@ export {
   endpointSubscribesTo,
   normalizeNewEndpoint,
   applyEndpointUpdate,
+  activeSigningSecrets,
+  rotateEndpointSecret,
+  DEFAULT_SECRET_ROTATION_OVERLAP_MS,
+  MAX_PREVIOUS_SECRETS,
   type Endpoint,
+  type ExpiringSecret,
   type NewEndpoint,
   type EndpointUpdate,
+  type RotateSecretOptions,
   type EndpointStore,
   type NormalizedNewEndpoint,
 } from "./endpoints/endpoint.js";
@@ -162,6 +168,7 @@ export {
 export {
   storeBackedResolver,
   endpointToDeliveryTarget,
+  type StoreBackedResolverOptions,
 } from "./endpoints/endpoint-resolver.js";
 
 export {
@@ -298,6 +305,7 @@ export {
   type CreatedEndpoint,
   type CreateEndpointInput,
   type UpdateEndpointInput,
+  type RotateEndpointSecretInput,
 } from "./sdk/client.js";
 
 export {

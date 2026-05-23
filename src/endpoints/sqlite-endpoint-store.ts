@@ -21,11 +21,14 @@ import {
   applyEndpointUpdate,
   createEndpointId,
   normalizeNewEndpoint,
+  rotateEndpointSecret,
   UnknownEndpointError,
   type Endpoint,
   type EndpointStore,
   type EndpointUpdate,
+  type ExpiringSecret,
   type NewEndpoint,
+  type RotateSecretOptions,
 } from "./endpoint.js";
 
 // `node:sqlite` is loaded through createRequire rather than a static
@@ -58,6 +61,7 @@ interface EndpointRow {
   readonly app_id: string;
   readonly url: string;
   readonly secret: string;
+  readonly previous_secrets: string;
   readonly description: string;
   readonly event_types: string | null;
   readonly disabled: number;
@@ -71,6 +75,9 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
     appId: row.app_id,
     url: row.url,
     secret: row.secret,
+    // Stored as a JSON array of { secret, expiresAt }; '[]' for a never-rotated
+    // endpoint (and the migration default for rows from a pre-rotation build).
+    previousSecrets: JSON.parse(row.previous_secrets) as ExpiringSecret[],
     description: row.description,
     eventTypes:
       row.event_types === null
@@ -98,6 +105,7 @@ export class SqliteEndpointStore implements EndpointStore {
   readonly #selectByApp: StatementSync;
   readonly #insertEndpoint: StatementSync;
   readonly #updateEndpoint: StatementSync;
+  readonly #rotateSecretStmt: StatementSync;
   readonly #deleteEndpoint: StatementSync;
   readonly #countEndpoints: StatementSync;
 
@@ -118,6 +126,9 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#db.exec("PRAGMA journal_mode = WAL");
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec(SCHEMA);
+    // Bring a database created by a pre-rotation version up to schema. For a fresh
+    // database the column is in SCHEMA and this is a no-op.
+    this.#migratePreviousSecretsColumn();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -128,9 +139,9 @@ export class SqliteEndpointStore implements EndpointStore {
     );
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
-         (id, app_id, url, secret, description, event_types, disabled,
-          created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, app_id, url, secret, previous_secrets, description, event_types,
+          disabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
@@ -138,9 +149,34 @@ export class SqliteEndpointStore implements EndpointStore {
              disabled = ?, updated_at = ?
        WHERE id = ?`,
     );
+    // Rotation is the only path that writes previous_secrets after creation; it is
+    // separate from #updateEndpoint (which preserves the column untouched).
+    this.#rotateSecretStmt = this.#db.prepare(
+      `UPDATE endpoints
+         SET secret = ?, previous_secrets = ?, updated_at = ?
+       WHERE id = ?`,
+    );
     this.#deleteEndpoint = this.#db.prepare("DELETE FROM endpoints WHERE id = ?");
     this.#countEndpoints = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM endpoints",
+    );
+  }
+
+  /**
+   * Add the `previous_secrets` column to a database created before zero-downtime
+   * secret rotation existed. Existing rows default to `'[]'` (never rotated), so an
+   * upgrade is seamless. For a fresh database the column is in {@link SCHEMA} and
+   * this is a no-op.
+   */
+  #migratePreviousSecretsColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "previous_secrets")) {
+      return;
+    }
+    this.#db.exec(
+      "ALTER TABLE endpoints ADD COLUMN previous_secrets TEXT NOT NULL DEFAULT '[]'",
     );
   }
 
@@ -158,6 +194,7 @@ export class SqliteEndpointStore implements EndpointStore {
       appId: normalized.appId,
       url: normalized.url,
       secret: normalized.secret ?? this.#generateSecret(),
+      previousSecrets: [],
       description: normalized.description,
       eventTypes: normalized.eventTypes,
       disabled: normalized.disabled,
@@ -170,6 +207,7 @@ export class SqliteEndpointStore implements EndpointStore {
       endpoint.appId,
       endpoint.url,
       endpoint.secret,
+      JSON.stringify(endpoint.previousSecrets),
       endpoint.description,
       eventTypesToColumn(endpoint.eventTypes),
       endpoint.disabled ? 1 : 0,
@@ -209,6 +247,34 @@ export class SqliteEndpointStore implements EndpointStore {
     });
   }
 
+  async rotateSecret(
+    id: string,
+    options: RotateSecretOptions = {},
+  ): Promise<Endpoint> {
+    // Read-modify-write under one BEGIN IMMEDIATE so a concurrent rotation cannot
+    // interleave and lose a retired secret (the same atomicity create/update use).
+    return this.#transaction(() => {
+      const row = this.#selectEndpoint.get(id) as EndpointRow | undefined;
+      if (row === undefined) {
+        throw new UnknownEndpointError(id);
+      }
+      const newSecret = options.secret ?? this.#generateSecret();
+      const next = rotateEndpointSecret(
+        rowToEndpoint(row),
+        newSecret,
+        this.#now(),
+        options.overlapMs,
+      );
+      this.#rotateSecretStmt.run(
+        next.secret,
+        JSON.stringify(next.previousSecrets),
+        next.updatedAt,
+        next.id,
+      );
+      return next;
+    });
+  }
+
   async delete(id: string): Promise<boolean> {
     const result = this.#deleteEndpoint.run(id);
     return Number(result.changes) > 0;
@@ -241,19 +307,23 @@ export class SqliteEndpointStore implements EndpointStore {
  * `STRICT` enforces declared column types; `IF NOT EXISTS` lets a restart
  * reattach to an existing database unchanged (crash-safe replay). The index backs
  * the {@link SqliteEndpointStore.listByApp} scan. `event_types` is a JSON array
- * (or `NULL` = subscribe-to-all); `disabled` is a 0/1 integer.
+ * (or `NULL` = subscribe-to-all); `disabled` is a 0/1 integer. `previous_secrets`
+ * is a JSON array of `{ secret, expiresAt }` retired during rotation (`'[]'` when
+ * never rotated); a pre-rotation database gains it via
+ * {@link SqliteEndpointStore.#migratePreviousSecretsColumn}.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS endpoints (
-  id          TEXT    PRIMARY KEY,
-  app_id      TEXT    NOT NULL,
-  url         TEXT    NOT NULL,
-  secret      TEXT    NOT NULL,
-  description TEXT    NOT NULL,
-  event_types TEXT,
-  disabled    INTEGER NOT NULL,
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  id               TEXT    PRIMARY KEY,
+  app_id           TEXT    NOT NULL,
+  url              TEXT    NOT NULL,
+  secret           TEXT    NOT NULL,
+  previous_secrets TEXT    NOT NULL DEFAULT '[]',
+  description      TEXT    NOT NULL,
+  event_types      TEXT,
+  disabled         INTEGER NOT NULL,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_endpoints_app ON endpoints (app_id);

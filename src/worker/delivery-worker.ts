@@ -65,8 +65,17 @@ import type { NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 export interface DeliveryTarget {
   /** Absolute destination URL the signed payload is POSTed to. */
   readonly url: string;
-  /** The endpoint's signing secret (`whsec_…` or bare base64), per Standard Webhooks. */
+  /** The endpoint's primary signing secret (`whsec_…` or bare base64), per Standard Webhooks. */
   readonly secret: string;
+  /**
+   * Additional signing secrets to include alongside {@link DeliveryTarget.secret}
+   * — typically secrets retired during a rotation that are still inside their
+   * overlap window. The payload is signed with the primary secret **and** each of
+   * these, producing a multi-token `webhook-signature` header, so a receiver that
+   * has not yet switched to the new secret still verifies (zero-downtime rotation).
+   * Omitted when there is no active overlap.
+   */
+  readonly additionalSecrets?: readonly string[];
   /**
    * Extra headers to merge into the request (e.g. a customer-defined header).
    * They cannot override the Standard Webhooks `webhook-*` signing headers, which
@@ -174,9 +183,13 @@ export function isSuccessStatus(status: number): boolean {
  * Pure: the Standard Webhooks signature is computed over `{id}.{timestamp}.
  * {payload}` with the target's secret. The `webhook-timestamp` is the *send* time
  * in unix seconds (for the receiver's replay window), not the message's creation
- * time. Caller-supplied `target.headers` are merged first so they can customize
- * transport-level headers, but the `webhook-*` headers are applied last and thus
- * cannot be clobbered. The output verifies against {@link verify} by construction.
+ * time. When the target carries {@link DeliveryTarget.additionalSecrets} (rotation
+ * overlap), the payload is signed with the primary secret **and** each additional
+ * one, joined into a single space-delimited `webhook-signature` header — the
+ * Standard Webhooks multi-token form a verifier accepts a match on any of. Caller-
+ * supplied `target.headers` are merged first so they can customize transport-level
+ * headers, but the `webhook-*` headers are applied last and thus cannot be
+ * clobbered. The output verifies against {@link verify} by construction.
  */
 export function buildSignedRequest(
   message: Message,
@@ -184,11 +197,11 @@ export function buildSignedRequest(
   sentAtMs: number,
 ): HttpDeliveryRequest {
   const timestamp = Math.floor(sentAtMs / 1000);
-  const signature = sign(target.secret, {
-    id: message.id,
-    timestamp,
-    payload: message.payload,
-  });
+  const input = { id: message.id, timestamp, payload: message.payload };
+  // One token per active secret (primary first), space-joined per Standard Webhooks.
+  const signature = [target.secret, ...(target.additionalSecrets ?? [])]
+    .map((secret) => sign(secret, input))
+    .join(" ");
   const headers: Record<string, string> = {
     "content-type": "application/json",
     ...(target.headers ?? {}),

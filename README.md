@@ -123,6 +123,20 @@ Early foundation. Implemented so far:
   state in the delivery FSM, scoped to the authenticated tenant (another tenant's message is `404`),
   and targets only dead-lettered deliveries — succeeded/in-flight ones are left untouched.
 
+- ✅ **Zero-downtime secret rotation** — rotating an endpoint's signing secret is the security
+  operation that *breaks* naive webhook setups: swap the secret and every receiver fails verification
+  until it is reconfigured in lockstep. Posthorn does it the Standard Webhooks way instead.
+  `POST /v1/endpoints/:id/rotate-secret` (and `client.rotateEndpointSecret(id)`) installs a fresh
+  primary secret while keeping the old one **active for an overlap window** (default 24h, tunable per
+  call; `0` = instant hard swap). During the overlap every delivery is signed with **all** active
+  secrets — multiple space-delimited tokens in the `webhook-signature` header, the multi-sign form the
+  verifier already accepts — so a receiver still on the old secret keeps verifying while it migrates to
+  the new one at its leisure; then the old secret simply expires. The new secret is revealed exactly
+  once (like create); the retired secrets are never exposed over HTTP. Modeled as a pure
+  `rotateEndpointSecret` helper + an `EndpointStore.rotateSecret` method (both backends, one
+  conformance suite; SQLite stores them in a `previous_secrets` column added by a seamless migration),
+  proven end-to-end (a delivered webhook verifies against **both** the old and the new secret).
+
 - ✅ **Single-container image (the deployment wedge made real)** — a multi-stage `Dockerfile`
   packages the gateway as **one container, no Redis, no Postgres**, with durable state in an embedded
   SQLite volume. Because the runtime has **zero dependencies**, the image carries only a Node binary
@@ -463,6 +477,7 @@ curl -s localhost:3000/openapi.json | jq .openapi   # "3.1.0"
 | GET    | `/v1/endpoints/:id` | Bearer | Fetch one endpoint.                    |
 | PATCH  | `/v1/endpoints/:id` | Bearer | Update an endpoint.                    |
 | DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`).            |
+| POST   | `/v1/endpoints/:id/rotate-secret` | Bearer | Rotate the signing secret, zero-downtime (new secret once).|
 
 ## Quickstart (TypeScript SDK)
 
@@ -499,6 +514,11 @@ status.deliveries[0]?.status; // "pending" | "delivering" | "succeeded" | "dead_
 // Receiver was down and a delivery dead-lettered? Fix it, then replay:
 const replay = await client.retryMessage(message.id);
 replay.retried; // how many dead-lettered deliveries were re-driven (now "pending")
+
+// Rotate the signing secret with zero downtime — the OLD secret keeps verifying
+// for the overlap window, so receivers migrate at their own pace, no dropped webhooks:
+const rotated = await client.rotateEndpointSecret(endpoint.id); // default 24h overlap
+rotated.secret; // the NEW secret, revealed once — configure your receivers with it
 
 // Browse what you've sent, newest-first. Page forward with the returned cursor:
 let page = await client.listMessages({ limit: 50 });

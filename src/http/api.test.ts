@@ -426,6 +426,100 @@ describe("createApi — endpoints CRUD", () => {
   });
 });
 
+describe("createApi — POST /v1/endpoints/:id/rotate-secret", () => {
+  /** Create an endpoint via the API and return its id + one-time secret. */
+  async function createEndpoint(
+    api: ApiHandler,
+    secret: string,
+  ): Promise<{ id: string; secret: string }> {
+    const res = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, secret),
+    );
+    return { id: body(res).id, secret: body(res).secret };
+  }
+
+  it("rotates to a fresh secret, returned exactly once, and never leaks previousSecrets", async () => {
+    const { api, secret } = await setup();
+    const ep = await createEndpoint(api, secret);
+
+    const res = await api(
+      jsonRequest("POST", `/v1/endpoints/${ep.id}/rotate-secret`, {}, secret),
+    );
+    expect(res.status).toBe(200);
+    // A new primary secret is revealed once, and it is different from the original.
+    expect(typeof body(res).secret).toBe("string");
+    expect(body(res).secret).not.toBe(ep.secret);
+    // The retired-secret machinery is never exposed over HTTP.
+    expect(body(res)).not.toHaveProperty("previousSecrets");
+
+    // A subsequent GET still omits both the secret and the retired secrets.
+    const got = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${ep.id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(got.body).not.toHaveProperty("secret");
+    expect(got.body).not.toHaveProperty("previousSecrets");
+  });
+
+  it("accepts an empty body (auto-generates the new secret)", async () => {
+    const { api, secret } = await setup();
+    const ep = await createEndpoint(api, secret);
+    // No body at all — the common case.
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${ep.id}/rotate-secret`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).secret).not.toBe(ep.secret);
+  });
+
+  it("honors an explicit secret in the body", async () => {
+    const { api, secret } = await setup();
+    const ep = await createEndpoint(api, secret);
+    const res = await api(
+      jsonRequest(
+        "POST",
+        `/v1/endpoints/${ep.id}/rotate-secret`,
+        { secret: "whsec_chosen" },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).secret).toBe("whsec_chosen");
+  });
+
+  it("rejects a malformed secret or a negative overlap with 400", async () => {
+    const { api, secret } = await setup();
+    const ep = await createEndpoint(api, secret);
+    const badSecret = await api(
+      jsonRequest("POST", `/v1/endpoints/${ep.id}/rotate-secret`, { secret: "" }, secret),
+    );
+    const badOverlap = await api(
+      jsonRequest("POST", `/v1/endpoints/${ep.id}/rotate-secret`, { overlapMs: -1 }, secret),
+    );
+    expect(badSecret.status).toBe(400);
+    expect(badOverlap.status).toBe(400);
+  });
+
+  it("returns 404 for a missing endpoint and requires auth", async () => {
+    const { api, secret } = await setup();
+    const missing = await api(
+      jsonRequest("POST", "/v1/endpoints/ep_missing/rotate-secret", {}, secret),
+    );
+    expect(missing.status).toBe(404);
+    const unauth = await api(
+      jsonRequest("POST", "/v1/endpoints/ep_x/rotate-secret", {}),
+    );
+    expect(unauth.status).toBe(401);
+  });
+});
+
 describe("createApi — tenant isolation", () => {
   it("hides another tenant's endpoint behind 404 for get/patch/delete and list", async () => {
     const { api, apps } = await setup();
@@ -468,9 +562,13 @@ describe("createApi — tenant isolation", () => {
         headers: { authorization: `Bearer ${aKey}` },
       }),
     );
+    const aRotate = await api(
+      jsonRequest("POST", `/v1/endpoints/${bId}/rotate-secret`, {}, aKey),
+    );
     expect(aGet.status).toBe(404);
     expect(aPatch.status).toBe(404);
     expect(aDelete.status).toBe(404);
+    expect(aRotate.status).toBe(404);
 
     // B's endpoint is untouched.
     const bGet = await api(

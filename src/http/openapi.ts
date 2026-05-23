@@ -346,6 +346,35 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/endpoints/{id}/rotate-secret": {
+        post: {
+          operationId: "rotateEndpointSecret",
+          tags: ["Endpoints"],
+          summary: "Rotate an endpoint's signing secret (zero-downtime)",
+          description:
+            "Install a fresh signing secret while keeping the old one valid for an overlap " +
+            "window, so deliveries are signed with **both** until receivers switch — no webhook " +
+            "is dropped mid-rotation. The **new** secret is returned **exactly once** in this " +
+            "response (configure your receivers with it); the old secret keeps verifying until " +
+            "`overlapMs` elapses, then stops being used. The request body is optional: omit it " +
+            "to auto-generate the new secret with the default overlap. Another tenant's (or an " +
+            "unknown) endpoint is `404`.",
+          parameters: [idParam("The endpoint id.")],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: ref("RotateSecretRequest") } },
+          },
+          responses: {
+            "200": jsonResponse(
+              "The endpoint with its new one-time secret installed.",
+              ref("EndpointWithSecret"),
+            ),
+            "400": errorResponse("Malformed request body (e.g. an empty `secret` or negative `overlapMs`)."),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -553,13 +582,34 @@ export function buildOpenApiDocument(): OpenApiDocument {
         },
         EndpointUpdate: {
           type: "object",
-          description: "The body of `PATCH /v1/endpoints/{id}`. Only the provided fields change.",
+          description:
+            "The body of `PATCH /v1/endpoints/{id}`. Only the provided fields change. A `secret` " +
+            "here is a hard swap (no overlap); use `rotate-secret` for zero-downtime rotation.",
           properties: {
             url: { type: "string", format: "uri" },
-            secret: { type: "string", description: "Rotate the signing secret." },
+            secret: { type: "string", description: "Hard-swap the signing secret (no overlap)." },
             description: { type: "string" },
             eventTypes: { type: ["array", "null"], items: { type: "string" } },
             disabled: { type: "boolean" },
+          },
+        },
+        RotateSecretRequest: {
+          type: "object",
+          description:
+            "The (optional) body of `POST /v1/endpoints/{id}/rotate-secret`. Omit it entirely to " +
+            "auto-generate the new secret with the default overlap window.",
+          properties: {
+            secret: {
+              type: "string",
+              description: "The new primary secret. Omit to auto-generate a secure one (the common case).",
+            },
+            overlapMs: {
+              type: "integer",
+              minimum: 0,
+              description:
+                "How long (ms) the old secret keeps signing after the rotation, so receivers " +
+                "mid-migration still verify. Defaults to 24h. `0` is an instant hard swap (no overlap).",
+            },
           },
         },
         FanoutSummary: {

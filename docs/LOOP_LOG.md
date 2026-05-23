@@ -4,6 +4,70 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 23: P3 — zero-downtime endpoint secret rotation
+
+**Repo truth at start:** clean main @ `de12c10` (iter 22, bounded concurrency) — a real clean baseline,
+not an interrupted tick (git clean; iter-22 entry present + matches head). Baseline re-verified by the
+manual gate (`[[validation-gate-is-manual]]`): `tsc --noEmit` clean, vitest **591/591**, `npm run build`
+clean, integrity + local gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Ship **first-class zero-downtime secret rotation**. The
+decisive observation on reading the code: the *receiver* half of this Standard Webhooks capability was
+already built — `verify` (and the SDK's `verifyWebhook`) accept a multi-token `webhook-signature`
+header — but the *sender* half was missing: the worker only ever signed with one secret, and the lone
+rotation path (`PATCH …{secret}`) was a **hard swap** that breaks every receiver until it is
+reconfigured in lockstep. So this completes a named differentiator ("first-class Standard Webhooks")
+that was genuinely half-finished, sits in the loop's strongest regime (pure, deterministic,
+fake-clock/in-process testable), is a real security/compliance ask (a target segment), and needs **zero
+new deps**. Beat the standing-deferred alternatives (admin HTTP route, per-key `lastUsedAt`, attempt-log
+pagination, operator docs): every one is narrower or lower-value than closing a half-built spec feature.
+
+**Built this tick (a full vertical slice, bottom-up):**
+- **`endpoints/endpoint.ts`** — `Endpoint.previousSecrets: {secret, expiresAt}[]` (retirees still
+  signing until they expire); pure `rotateEndpointSecret(current, newSecret, now, overlapMs?)` (install
+  new primary, retire old with overlap, prune expired, cap at `MAX_PREVIOUS_SECRETS=8`), pure
+  `activeSigningSecrets(endpoint, now)` (the one shared "which secrets sign now" rule),
+  `DEFAULT_SECRET_ROTATION_OVERLAP_MS=24h`, `EndpointStore.rotateSecret(id, {secret?, overlapMs?})` +
+  `RotateSecretOptions`. `applyEndpointUpdate` carries `previousSecrets` through untouched (a direct
+  `secret` patch stays a deliberate hard swap; rotation owns the overlap).
+- **Both store backends** — `rotateSecret` (in-memory + SQLite, read-modify-write in `BEGIN IMMEDIATE`
+  for atomicity); SQLite gains a `previous_secrets` JSON column via a guarded `ALTER TABLE` migration
+  (`#migratePreviousSecretsColumn`), default `'[]'` so a pre-rotation DB upgrades seamlessly with no
+  re-delivery; both held to one expanded conformance suite.
+- **Multi-secret signing** — `DeliveryTarget.additionalSecrets`; `buildSignedRequest` signs with the
+  primary **plus** each additional, space-joining `v1,…` tokens; `endpointToDeliveryTarget(endpoint,
+  now)` + `storeBackedResolver(store, {now})` filter expired retirees via an injected clock.
+- **Surface** — tenant-scoped `POST /v1/endpoints/:id/rotate-secret` (reveals the **new** primary once
+  like create; **never** exposes the retired secrets; optional body; bad secret/overlap → 400; cross-
+  tenant → 404), added to the compile-checked `API_ROUTE_KEYS`; SDK `client.rotateEndpointSecret`; the
+  OpenAPI operation + `RotateSecretRequest` schema (the bidirectional drift test forced both); `index.ts`
+  re-exports.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **623/623** (was 591;
+**+32**: pure rotate/active-secrets unit tests, conformance ×2 backends incl. overlap→expiry + SQLite
+reopen + **pre-rotation-DB migration**, worker multi-sign verify-against-both, resolver overlap-with-
+clock, api handler 5 cases + cross-tenant 404, SDK round-trip, and the zero-downtime gateway e2e). `npm
+run build` clean. Integrity gate exit 0; local gate exit 0 (three hash-protected files untouched). One
+transient tinypool "worker exited unexpectedly" appeared on a first full run and did not reproduce
+(flaky Windows/node:sqlite worker exit, not a test failure — re-run was 32/32 clean, then 623/623).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway against
+a **file-backed** data dir (real `node:sqlite` `createRequire` path), created an endpoint, rotated over
+HTTP, sent a message; the single delivered webhook **verified against BOTH the old and the new secret**
+(2 signature tokens), the rotate response did not leak `previousSecrets`, and after `stop()` + reopen on
+the same files the new primary + retired secret **persisted** — proving the new column + migration work
+through production ESM, not just under Vitest's bundler. Exit 0; temp script + dir removed; git shows
+only the intended files.
+
+**State:** GREEN → committing to main as Iteration 23. Net: rotating a signing secret no longer drops a
+webhook — the old secret keeps verifying through a tunable overlap while receivers migrate, then
+expires; the sender now produces the multi-sig header the verifier always accepted, closing the loop on
+"first-class Standard Webhooks". **Standing deferred (next candidates):** admin/control-plane *HTTP*
+provisioning route (CLI covers local bootstrap); per-key `lastUsedAt`; attempt-log pagination/retention;
+an operator deploy/monitoring guide (last P4 doc item); and the larger P5 hosted control plane.
+
+---
+
 ## 2026-05-23 — Iteration 22: P2.5 — bounded worker concurrency (kill head-of-line blocking)
 
 **Repo truth at start:** clean main @ `436a0ad` (iter 21, audit log) — a real clean baseline, not an

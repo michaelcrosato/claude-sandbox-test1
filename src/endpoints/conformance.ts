@@ -14,6 +14,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  activeSigningSecrets,
+  DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   UnknownEndpointError,
   type EndpointStore,
   type NewEndpoint,
@@ -242,6 +244,72 @@ export function describeEndpointStoreContract(
         await expect(
           store.update("ep_nope", { disabled: true }),
         ).rejects.toBeInstanceOf(UnknownEndpointError);
+      });
+    });
+
+    describe("rotateSecret", () => {
+      it("installs a fresh primary, retires the old with the default overlap, and persists", async () => {
+        const e = await store.create({ ...NEW, description: "prod", eventTypes: ["a"] });
+        expect(e.secret).toBe("whsec_test_1");
+        expect(e.previousSecrets).toEqual([]);
+
+        clock.advance(5_000);
+        const rotated = await store.rotateSecret(e.id);
+        const expiresAt = clock.now() + DEFAULT_SECRET_ROTATION_OVERLAP_MS;
+        // The new primary is freshly generated; the old one is retained with overlap.
+        expect(rotated.secret).toBe("whsec_test_2");
+        expect(rotated.previousSecrets).toEqual([
+          { secret: "whsec_test_1", expiresAt },
+        ]);
+        // Identity + unrelated fields are preserved; updatedAt advanced.
+        expect(rotated.id).toBe(e.id);
+        expect(rotated.description).toBe("prod");
+        expect(rotated.eventTypes).toEqual(["a"]);
+        expect(rotated.createdAt).toBe(e.createdAt);
+        expect(rotated.updatedAt).toBe(clock.now());
+        // It survives the round-trip (the durable backends actually wrote it).
+        expect(await store.get(e.id)).toEqual(rotated);
+      });
+
+      it("signs with both secrets during the overlap, then only the new one", async () => {
+        const e = await store.create(NEW); // secret whsec_test_1
+        const rotated = await store.rotateSecret(e.id); // primary whsec_test_2
+        // During the overlap window, both the new and old secret are active.
+        expect(activeSigningSecrets(rotated, clock.now())).toEqual([
+          "whsec_test_2",
+          "whsec_test_1",
+        ]);
+        // Past the overlap, only the new primary signs (zero-downtime window closed).
+        const reloaded = (await store.get(e.id))!;
+        expect(
+          activeSigningSecrets(reloaded, clock.now() + DEFAULT_SECRET_ROTATION_OVERLAP_MS + 1),
+        ).toEqual(["whsec_test_2"]);
+      });
+
+      it("accepts an explicit secret and overlap window (overlapMs 0 = hard swap)", async () => {
+        const e = await store.create(NEW);
+        const rotated = await store.rotateSecret(e.id, {
+          secret: "whsec_chosen",
+          overlapMs: 0,
+        });
+        expect(rotated.secret).toBe("whsec_chosen");
+        // overlapMs 0 retains nothing — an instant swap.
+        expect(rotated.previousSecrets).toEqual([]);
+        expect(await store.get(e.id)).toEqual(rotated);
+      });
+
+      it("rejects a malformed secret or a negative overlap (TypeError)", async () => {
+        const e = await store.create(NEW);
+        await expect(store.rotateSecret(e.id, { secret: "" })).rejects.toThrow(TypeError);
+        await expect(
+          store.rotateSecret(e.id, { overlapMs: -1 }),
+        ).rejects.toThrow(TypeError);
+      });
+
+      it("throws UnknownEndpointError for an unknown id", async () => {
+        await expect(store.rotateSecret("ep_nope")).rejects.toBeInstanceOf(
+          UnknownEndpointError,
+        );
       });
     });
 

@@ -41,19 +41,49 @@ const FAKE_MESSAGE = {
 } as const;
 
 describe("endpointToDeliveryTarget", () => {
-  it("forwards the url and secret", () => {
-    const target = endpointToDeliveryTarget({
-      id: "ep_1",
-      appId: "app_1",
-      url: "https://x.test/hook",
-      secret: "whsec_abc",
-      description: "",
-      eventTypes: null,
-      disabled: false,
-      createdAt: 0,
-      updatedAt: 0,
-    });
+  it("forwards the url and secret (no overlap → no additionalSecrets)", () => {
+    const target = endpointToDeliveryTarget(
+      {
+        id: "ep_1",
+        appId: "app_1",
+        url: "https://x.test/hook",
+        secret: "whsec_abc",
+        previousSecrets: [],
+        description: "",
+        eventTypes: null,
+        disabled: false,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      1_000,
+    );
     expect(target).toEqual({ url: "https://x.test/hook", secret: "whsec_abc" });
+  });
+
+  it("forwards still-active rotation secrets, dropping expired ones", () => {
+    const target = endpointToDeliveryTarget(
+      {
+        id: "ep_1",
+        appId: "app_1",
+        url: "https://x.test/hook",
+        secret: "whsec_new",
+        previousSecrets: [
+          { secret: "whsec_active", expiresAt: 2_000 },
+          { secret: "whsec_expired", expiresAt: 500 },
+        ],
+        description: "",
+        eventTypes: null,
+        disabled: false,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      1_000,
+    );
+    expect(target).toEqual({
+      url: "https://x.test/hook",
+      secret: "whsec_new",
+      additionalSecrets: ["whsec_active"],
+    });
   });
 });
 
@@ -91,6 +121,32 @@ describe("storeBackedResolver", () => {
     });
     const resolver = storeBackedResolver(store);
     expect(await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE)).toBeNull();
+  });
+
+  it("forwards a rotation-overlap secret as additionalSecrets, honoring its clock", async () => {
+    let nowMs = 1_000;
+    const store = new InMemoryEndpointStore({ now: () => nowMs });
+    const ep = await store.create({
+      appId: "app_1",
+      url: "https://x.test/hook",
+      secret: "whsec_v1",
+    });
+    await store.rotateSecret(ep.id, { secret: "whsec_v2", overlapMs: 10_000 });
+    const resolver = storeBackedResolver(store, { now: () => nowMs });
+
+    // During the overlap, the retired secret rides along as additionalSecrets.
+    expect(await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE)).toEqual({
+      url: "https://x.test/hook",
+      secret: "whsec_v2",
+      additionalSecrets: ["whsec_v1"],
+    });
+
+    // Past the overlap, only the new primary is forwarded.
+    nowMs = 1_000 + 10_000 + 1;
+    expect(await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE)).toEqual({
+      url: "https://x.test/hook",
+      secret: "whsec_v2",
+    });
   });
 });
 

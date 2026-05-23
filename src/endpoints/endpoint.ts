@@ -25,6 +25,22 @@
 import { randomBytes } from "node:crypto";
 
 /**
+ * A signing secret that was retired by a rotation but is still used to sign
+ * deliveries until {@link ExpiringSecret.expiresAt}. This is what makes secret
+ * rotation *zero-downtime*: for the overlap window after a rotation, each delivery
+ * is signed with the new primary secret **and** every still-active retired one
+ * (multiple space-delimited tokens in the `webhook-signature` header, which the
+ * Standard Webhooks verifier already accepts), so a receiver that has not yet
+ * switched to the new secret keeps verifying. See {@link rotateEndpointSecret}.
+ */
+export interface ExpiringSecret {
+  /** The retired signing secret (`whsec_…` or bare base64). */
+  readonly secret: string;
+  /** Epoch ms after which this secret is no longer used to sign. */
+  readonly expiresAt: number;
+}
+
+/**
  * A delivery destination. Immutable snapshot; every mutation produces a new one
  * with a bumped `updatedAt`.
  */
@@ -35,8 +51,17 @@ export interface Endpoint {
   readonly appId: string;
   /** Absolute `http`/`https` URL the signed payload is POSTed to. */
   readonly url: string;
-  /** The signing secret (`whsec_…`), per Standard Webhooks. */
+  /** The current (primary) signing secret (`whsec_…`), per Standard Webhooks. */
   readonly secret: string;
+  /**
+   * Secrets retired by a rotation that are still used to sign until each one's
+   * `expiresAt` — the overlap window that makes rotation zero-downtime. Newest
+   * retirement first; empty for an endpoint that has never rotated. Populated only
+   * by {@link rotateEndpointSecret} (a direct `secret` patch via
+   * {@link applyEndpointUpdate} is a deliberate hard swap and leaves this list
+   * untouched). Never exposed over HTTP.
+   */
+  readonly previousSecrets: readonly ExpiringSecret[];
   /** Human-readable label. Empty string when none was given. */
   readonly description: string;
   /**
@@ -116,8 +141,32 @@ export interface EndpointStore {
    * {@link UnknownEndpointError} if the id is unknown.
    */
   update(id: string, patch: EndpointUpdate): Promise<Endpoint>;
+  /**
+   * Rotate the endpoint's signing secret with zero downtime: install a fresh
+   * primary secret while keeping the old one active for an overlap window (see
+   * {@link rotateEndpointSecret}). Returns the updated snapshot — whose `secret`
+   * is the **new** primary, to be revealed to the caller exactly once, like
+   * {@link create}'s. Throws {@link UnknownEndpointError} if the id is unknown.
+   */
+  rotateSecret(id: string, options?: RotateSecretOptions): Promise<Endpoint>;
   /** Delete an endpoint. Returns `true` if it existed, `false` otherwise. */
   delete(id: string): Promise<boolean>;
+}
+
+/** Options for {@link EndpointStore.rotateSecret}. */
+export interface RotateSecretOptions {
+  /**
+   * The new primary secret to install. Omit to have the backend generate a fresh,
+   * secure one (the common case). Must be a non-empty string when provided.
+   */
+  readonly secret?: string;
+  /**
+   * How long (ms) the *old* primary secret keeps being used to sign after the
+   * rotation, so receivers mid-migration still verify. Defaults to
+   * {@link DEFAULT_SECRET_ROTATION_OVERLAP_MS}. `0` retires the old secret
+   * immediately (an instant hard swap, no overlap).
+   */
+  readonly overlapMs?: number;
 }
 
 /** Thrown when an operation references an endpoint id the store does not hold. */
@@ -292,6 +341,9 @@ export function applyEndpointUpdate(
     appId: current.appId,
     url: "url" in patch ? normalizeUrl(patch.url) : current.url,
     secret: "secret" in patch ? normalizeSecret(patch.secret) : current.secret,
+    // A direct `secret` patch is a hard swap; the overlap-managed retirees are
+    // owned solely by rotateEndpointSecret and carried through untouched here.
+    previousSecrets: current.previousSecrets,
     description:
       "description" in patch
         ? normalizeDescription(patch.description)
@@ -303,6 +355,74 @@ export function applyEndpointUpdate(
     disabled:
       "disabled" in patch ? normalizeDisabled(patch.disabled) : current.disabled,
     createdAt: current.createdAt,
+    updatedAt: nowMs,
+  };
+}
+
+/**
+ * Default overlap window for {@link rotateEndpointSecret}: how long the previous
+ * secret keeps signing after a rotation. 24h gives receivers a generous, but
+ * bounded, window to switch to the new secret before it stops being used.
+ */
+export const DEFAULT_SECRET_ROTATION_OVERLAP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The most retired secrets an endpoint retains. Bounds the number of signatures
+ * on a single delivery (and so the header size and HMAC work) if an operator
+ * rotates several times within one overlap window; the oldest beyond this are
+ * dropped. The primary secret is always in addition to these.
+ */
+export const MAX_PREVIOUS_SECRETS = 8;
+
+/**
+ * The secrets a delivery should be signed with at `nowMs`: the current primary
+ * plus every retired secret still inside its overlap window (expired ones are
+ * filtered out). Pure and shared so the resolver/worker and any backend agree
+ * exactly on which secrets are active. The result is never empty (the primary is
+ * always present) and is ordered primary-first.
+ */
+export function activeSigningSecrets(
+  endpoint: Pick<Endpoint, "secret" | "previousSecrets">,
+  nowMs: number,
+): readonly string[] {
+  const stillActive = endpoint.previousSecrets
+    .filter((s) => s.expiresAt > nowMs)
+    .map((s) => s.secret);
+  return [endpoint.secret, ...stillActive];
+}
+
+/**
+ * Rotate an endpoint's signing secret with zero downtime, returning the next
+ * immutable snapshot. Pure (the new secret and clock are supplied, never sampled
+ * here, so backends stay deterministic): `newSecret` becomes the primary, the old
+ * primary is retained as an {@link ExpiringSecret} that keeps signing for
+ * `overlapMs`, already-expired retirees are pruned, and the list is capped at
+ * {@link MAX_PREVIOUS_SECRETS} (oldest dropped). `overlapMs` of `0` retires the
+ * old secret immediately (a hard swap with no overlap). Throws {@link TypeError}
+ * on a malformed secret or a negative/non-finite `overlapMs` — the same intake
+ * discipline as create/update, so a bad request surfaces as a `400`.
+ */
+export function rotateEndpointSecret(
+  current: Endpoint,
+  newSecret: string,
+  nowMs: number,
+  overlapMs: number = DEFAULT_SECRET_ROTATION_OVERLAP_MS,
+): Endpoint {
+  const secret = normalizeSecret(newSecret);
+  if (typeof overlapMs !== "number" || !Number.isFinite(overlapMs) || overlapMs < 0) {
+    throw new TypeError("overlapMs must be a non-negative finite number");
+  }
+  const expiresAt = nowMs + overlapMs;
+  const previousSecrets: ExpiringSecret[] = [
+    // Retain the just-retired primary only if the overlap keeps it active.
+    ...(overlapMs > 0 ? [{ secret: current.secret, expiresAt }] : []),
+    // Keep prior retirees that have not yet expired; drop the dead ones.
+    ...current.previousSecrets.filter((s) => s.expiresAt > nowMs),
+  ].slice(0, MAX_PREVIOUS_SECRETS);
+  return {
+    ...current,
+    secret,
+    previousSecrets,
     updatedAt: nowMs,
   };
 }

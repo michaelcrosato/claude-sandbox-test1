@@ -20,11 +20,13 @@ import {
   applyEndpointUpdate,
   createEndpointId,
   normalizeNewEndpoint,
+  rotateEndpointSecret,
   UnknownEndpointError,
   type Endpoint,
   type EndpointStore,
   type EndpointUpdate,
   type NewEndpoint,
+  type RotateSecretOptions,
 } from "./endpoint.js";
 
 /** Construction options for {@link InMemoryEndpointStore}. */
@@ -72,6 +74,7 @@ export class InMemoryEndpointStore implements EndpointStore {
       appId: normalized.appId,
       url: normalized.url,
       secret: normalized.secret ?? this.#generateSecret(),
+      previousSecrets: [],
       description: normalized.description,
       eventTypes: normalized.eventTypes,
       disabled: normalized.disabled,
@@ -101,6 +104,27 @@ export class InMemoryEndpointStore implements EndpointStore {
       throw new UnknownEndpointError(id);
     }
     const next = applyEndpointUpdate(current, patch, this.#now());
+    this.#endpoints.set(id, next); // same key → keeps insertion order
+    return next;
+  }
+
+  async rotateSecret(
+    id: string,
+    options: RotateSecretOptions = {},
+  ): Promise<Endpoint> {
+    const current = this.#endpoints.get(id);
+    if (current === undefined) {
+      throw new UnknownEndpointError(id);
+    }
+    // The new secret is supplied (validated by rotateEndpointSecret) or freshly
+    // generated; the pure helper installs it and retires the old one with overlap.
+    const newSecret = options.secret ?? this.#generateSecret();
+    const next = rotateEndpointSecret(
+      current,
+      newSecret,
+      this.#now(),
+      options.overlapMs,
+    );
     this.#endpoints.set(id, next); // same key → keeps insertion order
     return next;
   }
