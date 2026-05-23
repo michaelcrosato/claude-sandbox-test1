@@ -289,23 +289,31 @@ Configuration is environment-driven (all optional):
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when idle. |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime before an in-flight delivery is reclaimed. |
 
-Minting a tenant + API key is a privileged bootstrap with no HTTP route (there is no key yet to
-authenticate the call that creates the first key). Do it programmatically against the gateway's
-`AppStore` — from a seed script, an admin task, or by embedding `createGateway` directly:
+### Bootstrap the first tenant + API key
 
-```ts
-import { createGateway, loadConfig } from "posthorn";
+Every API route requires a Bearer key, but minting that first key has **no HTTP route** — there is
+no key yet to authenticate the call that creates it, and an open provisioning endpoint is a door we
+refuse to build. Provisioning lives behind the right boundary instead: **the shell on the host that
+owns the data directory.** The `posthorn admin` command operates directly on the same SQLite store
+the server reads (WAL-safe to run against a live gateway):
 
-const gateway = createGateway(loadConfig(process.env));
-const { host, port } = await gateway.start();
+```bash
+# 1. Create a tenant (app):
+posthorn admin create-app "Acme"
+#   Created app app_xxx ...
 
-// One-time: mint a tenant and its API key (save the plaintext — it is shown once).
-const app = await gateway.apps.create({ name: "Acme" });
-const { secret } = await gateway.apps.createApiKey(app.id);
-console.log(`provisioned ${app.id} on ${host}:${port}; key: ${secret}`);
-
-// Later, on shutdown: await gateway.stop();
+# 2. Mint its API key — the secret is printed ONCE and is not recoverable:
+posthorn admin create-key app_xxx
+#   secret: phk_...            ← save this; use it as: Authorization: Bearer <secret>
 ```
+
+`POSTHORN_DATA_DIR` selects the same store the server uses. Other subcommands: `list-apps`,
+`list-keys <appId>`, `revoke-key <keyId>` (a revoked key stops authenticating immediately, even on a
+running server). Run `posthorn admin help` for the full list.
+
+Embedding Posthorn as a library? Provision programmatically against the gateway's `AppStore`
+instead — `createGateway(loadConfig(process.env))`, then `gateway.apps.create(...)` /
+`gateway.apps.createApiKey(...)` (the same operations the CLI drives).
 
 Your customers then drive the API with that key:
 

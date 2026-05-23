@@ -215,11 +215,31 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     queue's existing at-least-once contract, covered by receiver-side dedup on the stable message id);
     the previous gap allowed *zero*-once. Proven through the compiled `dist` (orphan → dispatcher
     sweep → worker → **verify**) and a running-gateway end-to-end test.
+  - **Admin provisioning CLI ✅ (this tick):** the **bootstrap path** that makes a deployed gateway
+    actually usable — `src/runtime/admin.ts` + an `admin` dispatch in `src/main.ts`. The HTTP API
+    authenticates every route with a Bearer key, but minting the *first* key has no HTTP route (no key
+    exists yet to authenticate the call, and an open provisioning endpoint is the door we refuse to
+    build). Before this tick that left provisioning reachable *only* programmatically against
+    `AppStore` — so a freshly-booted `posthorn` could be started but had **no way to create a
+    credential against it**, leaving the entire authenticated API unreachable out of the box. The CLI
+    closes that gap behind the correct privilege boundary — **the shell on the host that owns the data
+    directory**, not the network. `posthorn admin <command>`: `create-app [name]`, `create-key
+    <appId>` (prints the one-time secret), `list-apps`, `list-keys <appId>`, `revoke-key <keyId>`,
+    `help`. Faithful to the pure-core/thin-I/O split: `runAdminCommand(args, {store, out, err})` is the
+    tested core (injected store + output sinks, returns a process exit code, no I/O of its own — 22
+    unit tests over an `InMemoryAppStore`), and `main.ts` is the thin shell that opens the
+    `SqliteAppStore` at the *same* location the gateway uses (a now-shared `resolveLocations`, so admin
+    and server can never disagree on the file). WAL makes it safe against a live gateway. Proven on the
+    compiled `dist` across processes: provision via the CLI, then a separately-spawned server
+    authenticates the minted key over real HTTP (401 without → 200 with), a CLI `revoke-key` is
+    honored by the running server (→ 401), and `list-keys` never echoes the full secret.
   - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface; an admin/
-    control-plane route for app/key provisioning; and per-key `lastUsedAt`.
+    control-plane *HTTP* route for app/key provisioning (the CLI now covers local bootstrap); and
+    per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
-  entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ landed with the
-  runnable gateway above. Remaining: a single **Dockerfile** image, a metrics endpoint, and operator
+  entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
+  provisioning CLI** ✅ (`posthorn admin …`, see P3) — so a deployed instance can be bootstrapped
+  without writing code. Remaining: a single **Dockerfile** image, a metrics endpoint, and operator
   docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

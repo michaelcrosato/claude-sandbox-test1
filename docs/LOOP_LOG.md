@@ -4,6 +4,78 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 13: P3/P4 — admin provisioning CLI (the deployed gateway becomes usable)
+
+**Repo truth at start:** clean main @ `e71de03`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **385/385**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 12: the gateway boots and serves an authenticated HTTP API, and the core delivery
+path is now crash-consistent — **but there was no way to create the first credential against a
+running deployment.** Every API route requires a Bearer key; minting that key existed *only* as the
+programmatic `AppStore` surface (`gateway.ts`'s own docstring: "provisioning is done programmatically
+… by an admin script" — a script that did not exist). So a freshly-deployed `posthorn` could be
+*started* but its entire authenticated API was **unreachable out of the box** unless the operator
+wrote and ran TypeScript. For a product whose standalone-gateway half is a headline wedge, "boots but
+cannot be used" is the dominant defect.
+
+**High-leverage move chosen:** Build the **`posthorn admin` provisioning CLI**. Highest-leverage
+(checklist #3) because it converts a startable-but-unusable service into an *operable* one — the
+single biggest systemic step available. Chosen over the **Dockerfile** (which without provisioning
+would `docker run` into the same unusable state — provisioning is strictly upstream) and over the
+**SDK/OpenAPI** (which describe an API you still can't authenticate against). It is also the regime
+this loop is strongest in: fully deterministic, in-process testable, **zero new dependencies**
+(node built-ins only). Security boundary chosen deliberately: provisioning lives behind **the shell
+on the host that owns the data directory**, *not* an open HTTP route — exactly the door Iter 10
+refused to build. The CLI naturally pairs with a future Dockerfile (`docker exec … posthorn admin …`),
+so it is not throwaway.
+
+**Built this tick:**
+- **`src/runtime/admin.ts`** — `runAdminCommand(args, {store, out, err})`: the tested core. Takes an
+  injected `AppStore` + output sinks, dispatches `create-app [name]` / `create-key <appId>` (prints
+  the one-time secret + a "shown ONCE" warning + the `Authorization: Bearer` hint) / `list-apps` /
+  `list-keys <appId>` / `revoke-key <keyId>` / `help`, and **returns a process exit code** (`0` ok,
+  `1` usage error or failed op). Performs no I/O of its own — every command's behaviour, exit code, and
+  exact output is unit-testable without a process/socket/fs. Expected failures (unknown app, nothing to
+  revoke) are reported via `err` and the exit code, never thrown. `list-keys` distinguishes
+  unknown-app (error) from app-with-no-keys (ok) via a `store.get` probe.
+- **`src/main.ts`** — gained an `admin` dispatch: `argv[0] === "admin"` runs a one-shot command (open
+  the `SqliteAppStore` at the configured `dataDir`, run, close, set `process.exitCode`) and exits; any
+  other invocation boots the server as before. The existing boot logic moved into `runServer()`; the
+  file stays the thin, untested process shell (the core it drives is tested).
+- **`src/runtime/gateway.ts`** — `resolveLocations` (+ its `StoreLocations` type) is now **exported**
+  and documented as the single source of truth for the on-disk store layout, so the admin path and the
+  running gateway open the *same* `apps.db` and can never drift. `src/index.ts` re-exports the admin
+  surface (`runAdminCommand`, `ADMIN_USAGE`, `AdminDeps`) + `resolveLocations`/`StoreLocations`.
+
+**Key decisions (honest tradeoffs):**
+- **CLI, not an HTTP route.** A control-plane HTTP route for provisioning is still deferred (it needs
+  its own admin-auth design); the filesystem-gated CLI is the correct, smaller bootstrap primitive and
+  the right privilege boundary for v1. Logged.
+- **WAL makes admin-vs-live-server safe.** The app store opens in WAL mode, so a separate admin
+  process writing while the server reads/runs is fine. A rare `SQLITE_BUSY` is possible if both write
+  the exact same instant (server app/key writes are rare — it mostly *reads* on authenticate); no
+  busy-retry added in v1, noted not hidden.
+- **Test-fixture pitfall hit + fixed (same class as Iter 9):** the first test secret (`phk_secret_1`)
+  was exactly 12 chars — equal to the display-prefix length — so the leak-check ("the full secret never
+  appears in `list-keys`") falsely failed because the prefix *was* the whole secret. Fixed by using a
+  realistically long test secret so the 12-char prefix is a strict truncation.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **407/407** (was 385; +22 admin: per-command
+success + failure paths, usage/exit-code semantics, no-secret-leak, and an end-to-end "a CLI-minted
+secret authenticates against the store / a revoked one does not"). `npm run build` clean.
+**Smoke-tested the compiled `dist` across processes**: `node dist/main.js admin create-app/create-key`
+in one process, then a separately-spawned `node dist/main.js` server authenticated the minted key over
+real HTTP (`401` without → `200` with), a CLI `revoke-key` was honored live (→ `401`), and `list-keys`
+never echoed the full secret — through production ESM incl. the `node:sqlite` `createRequire` path.
+Integrity + local gate: exit 0. The three hash-protected files were not touched.
+
+**State:** GREEN → committing to main. A deployed Posthorn can now be bootstrapped end-to-end without
+writing code: `npm start`, then `posthorn admin create-app` + `create-key`, and curl the API with the
+key. Next tick: the single **Dockerfile** (finishes the P4 single-container story, now that the bootstrap
+exists) + a **metrics endpoint**, or the **TS SDK** + **OpenAPI** over the HTTP surface.
+
+---
+
 ## 2026-05-22 — Iteration 12: P3 — transactional outbox (close the accept→fan-out crash window)
 
 **Repo truth at start:** clean main @ `4beaa66`. Baseline re-verified before any change:

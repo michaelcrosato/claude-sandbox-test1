@@ -80,7 +80,7 @@ export interface Gateway {
 }
 
 /** Per-store SQLite locations resolved from a `dataDir`. */
-interface StoreLocations {
+export interface StoreLocations {
   readonly apps: string;
   readonly endpoints: string;
   readonly messages: string;
@@ -92,8 +92,13 @@ interface StoreLocations {
  * ephemeral (each its own independent in-memory db, matching the per-store
  * architecture). For a directory, one file per store is created under it; the
  * directory is created if absent.
+ *
+ * Exported because it is the single source of truth for the on-disk store layout:
+ * the `posthorn admin` CLI (`admin.ts`) opens the *same* `apps.db` this resolves,
+ * so sharing the function guarantees the admin path and the running gateway can
+ * never disagree on where a tenant's credentials live.
  */
-function resolveLocations(dataDir: string): StoreLocations {
+export function resolveLocations(dataDir: string): StoreLocations {
   if (dataDir === MEMORY_DATA_DIR) {
     return {
       apps: MEMORY_DATA_DIR,

@@ -220,6 +220,14 @@ export {
 
 export {
   createGateway,
+  resolveLocations,
   type Gateway,
   type GatewayAddress,
+  type StoreLocations,
 } from "./runtime/gateway.js";
+
+export {
+  runAdminCommand,
+  ADMIN_USAGE,
+  type AdminDeps,
+} from "./runtime/admin.js";
