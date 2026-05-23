@@ -57,3 +57,27 @@ export {
   SqliteMessageStore,
   type SqliteStoreOptions,
 } from "./storage/sqlite-store.js";
+
+export {
+  UnknownDeliveryTaskError,
+  StaleLeaseError,
+  createTaskId,
+  createLeaseToken,
+  DEFAULT_VISIBILITY_TIMEOUT_MS,
+  DEFAULT_CLAIM_LIMIT,
+  type DeliveryQueue,
+  type DeliveryTask,
+  type EnqueueInput,
+  type ClaimOptions,
+  type FailInput,
+} from "./queue/delivery-queue.js";
+
+export {
+  InMemoryDeliveryQueue,
+  type InMemoryQueueOptions,
+} from "./queue/in-memory-queue.js";
+
+export {
+  SqliteDeliveryQueue,
+  type SqliteQueueOptions,
+} from "./queue/sqlite-queue.js";

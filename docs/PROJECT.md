@@ -92,11 +92,20 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
 - **P1 — Delivery core (complete):** retry/backoff schedule ✅, delivery state machine ✅,
   dead-letter ✅ (`src/delivery/`); idempotency/dedup keys ✅, in-memory store + `MessageStore`
   storage interface ✅ (`src/storage/`). All pure/deterministic, heavily tested.
-- **P2 — Persistence + queue (in progress):** durable, crash-safe SQLite `MessageStore` on
+- **P2 — Persistence + queue (complete):** durable, crash-safe SQLite `MessageStore` on
   built-in `node:sqlite` ✅ (`src/storage/sqlite-store.ts`), proven byte-for-byte equivalent to
-  the in-memory reference via a shared conformance suite ✅ (`src/storage/conformance.ts`). Still
-  open: delivery-attempt records persisted alongside messages, and a durable store-backed queue
-  with crash-safe replay of in-flight work.
+  the in-memory reference via a shared conformance suite ✅ (`src/storage/conformance.ts`); and the
+  reliable-delivery spine — a durable, store-backed **`DeliveryQueue`** ✅ (`src/queue/`) with
+  lease-based claiming + visibility timeouts and **crash-safe replay of in-flight work** (a lapsed
+  lease is reclaimed, never lost), in both in-memory and SQLite backends held to one shared
+  conformance suite. The queue persists delivery *state* (status/attempts/`lastError`) and reuses
+  the P1 pure FSM + retry policy for every transition. Deferred to a later tick: a full per-attempt
+  audit log (one record per HTTP attempt with response detail) — an observability add-on, distinct
+  from the load-bearing state the queue already persists.
+- **P2.5 — Delivery worker (next):** the runtime loop that ties the pieces together — claim due
+  tasks from the queue, load each message from the store, sign it, POST it, and `complete`/`fail`
+  the task. Pure decision logic stays in P1/P2; this adds the (injectable, fake-clock-testable)
+  I/O driver.
 - **P3 — HTTP API + SDK:** Fastify endpoints (apps, endpoints, messages), contract tests,
   TS SDK, OpenAPI.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.

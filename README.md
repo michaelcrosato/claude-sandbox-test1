@@ -30,6 +30,12 @@ Early foundation. Implemented so far:
     (Node 22.5+): no native compilation, no third-party dependency. Survives restarts, so a
     producer's retry after a crash still dedups. Both backends pass one shared behavioural
     conformance suite, so they are guaranteed to behave identically.
+- ✅ **Durable delivery queue** — the reliable-delivery spine. A store-backed `DeliveryQueue`
+  hands due deliveries to a worker, **leases** each one (so only one attempt is in flight) with a
+  visibility timeout, and — the heart of the **no-Redis** wedge — **replays in-flight work after a
+  crash**: if a worker dies mid-delivery, its lease lapses and the task is reclaimed rather than
+  lost. Failures reschedule through the retry policy or dead-letter once exhausted. Same two
+  backends (in-memory + SQLite), same one conformance suite.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -116,6 +122,36 @@ import { SqliteMessageStore } from "posthorn";
 const store = new SqliteMessageStore({ location: "./posthorn.sqlite" });
 // ...identical create / get / getByIdempotencyKey API as above...
 store.close(); // release the database handle on shutdown
+```
+
+## Quickstart (delivery queue)
+
+The durable queue schedules *what to deliver and when*, leasing each task so a worker can do the
+HTTP call safely. A crashed worker's lease lapses and the task is replayed — work is never lost.
+
+```ts
+import { SqliteDeliveryQueue } from "posthorn";
+
+const queue = new SqliteDeliveryQueue({ location: "./posthorn.sqlite" });
+
+// Producer side: enqueue a message for delivery.
+await queue.enqueue({ messageId: "msg_2k1..." });
+
+// Worker loop: claim due work, attempt it, then report the outcome.
+for (const task of await queue.claimDue({ nowMs: Date.now() })) {
+  try {
+    await deliverOverHttp(task.messageId); // your signed POST; throws on non-2xx
+    await queue.complete(task.id, task.leaseToken!); // -> succeeded
+  } catch (err) {
+    // Reschedules per the retry policy, or dead-letters once retries are spent:
+    await queue.fail(task.id, task.leaseToken!, {
+      error: String(err),
+      nowMs: Date.now(),
+    });
+  }
+}
+
+queue.close(); // release the database handle on shutdown
 ```
 
 ## Development

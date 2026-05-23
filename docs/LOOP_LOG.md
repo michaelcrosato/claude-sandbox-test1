@@ -4,6 +4,59 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 5: P2 finished — durable delivery queue (lease + crash-safe replay)
+
+**Repo truth at start:** clean main @ `542b0b0`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **100/100**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: the Posthorn decision (Iter 1) stands.
+The glaring gap: the retry policy + delivery FSM (P1) were **pure islands disconnected from
+storage** — nothing scheduled or persisted delivery work, so the product's headline "durable,
+no-Redis, crash-safe delivery" wedge was unrealized.
+
+**High-leverage move chosen:** Build the **durable, store-backed `DeliveryQueue`** — the spine that
+joins retry-policy + delivery-FSM + persistence into actual reliable delivery. Highest-leverage
+because (a) it *is* the differentiating "no Redis, single process, crash-safe" feature; (b) it
+connects three previously-disconnected cores; (c) without it P3's HTTP API would have nothing
+behind it. Followed the proven `MessageStore` architecture verbatim (interface + in-memory
+reference + SQLite + one shared conformance suite) to keep risk low and validation fully in-process.
+
+**Built this tick (`src/queue/`):**
+- `delivery-queue.ts` — `DeliveryTask` + `DeliveryQueue` contract (`enqueue`/`claimDue`/`complete`/
+  `fail`/`get`), `UnknownDeliveryTaskError` + `StaleLeaseError`, and **shared pure transition
+  helpers** (`applyClaim`/`applySuccess`/`applyFailure` + `claimableState`) that defer to the P1
+  delivery-state reducer — so the two backends cannot drift. Lease model: each claim mints a fresh
+  lease token + visibility timeout; only the token holder may resolve the task.
+- `in-memory-queue.ts` — `InMemoryDeliveryQueue`: insertion-ordered map of immutable task
+  snapshots; the reference semantics.
+- `sqlite-queue.ts` — `SqliteDeliveryQueue` on built-in `node:sqlite` (loaded via `createRequire`,
+  same Vite-5 workaround as the store), `STRICT` schema, `claimDue` in a `BEGIN IMMEDIATE` txn
+  ordered by `rowid` (atomic across connections; two workers never claim the same task).
+- `conformance.ts` — `describeDeliveryQueueContract` + deterministic clock/id/lease-token
+  generators; the single behavioural spec both backends run.
+- Tests: in-memory + sqlite each run the conformance suite; SQLite adds **crash-safe replay**
+  (enqueue→claim→close→reopen→lapsed lease reclaimed under a fresh token, old token rejected),
+  terminal-survives-reopen, and file-isolation tests. `src/index.ts` re-exports the queue surfaces.
+
+**Key design decision — at-least-once via lease + visibility timeout.** A lapsed lease (crashed/
+stalled worker) makes a `delivering` task claimable again, reclaimed *as pending* so a fresh
+attempt starts (the dead attempt still counts). This can double-deliver a stalled worker's task —
+which is exactly why every message carries a stable id for receiver-side dedup (Standard Webhooks).
+Logged honestly as the deliberate tradeoff. The full per-attempt audit log is deferred (an
+observability add-on, distinct from the load-bearing delivery *state* the queue now persists).
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **145/145** (was 100; +45: in-memory queue 21,
+sqlite queue 24). `npm run build` clean. **Smoke-tested the built `dist/index.js`** (Sqlite
+enqueue→claim→lease-lapse→replay→complete) to prove the `createRequire` path works in production
+ESM, not just under Vitest. Integrity + local gate: exit 0. (One tsc fix mid-build: `.all()` returns
+`Record<string,…>[]`, so its cast to `TaskRow[]` had to route through `unknown` — `.get()`'s direct
+cast does not need this.)
+
+**State:** GREEN → committing to main. P2 complete. Next tick: P2.5 — the delivery *worker* loop
+(claim → load message → sign → POST → complete/fail), the injectable, fake-clock-testable I/O driver
+that finally makes an end-to-end send real.
+
+---
+
 ## 2026-05-22 — Iteration 4: P2 begins — durable, crash-safe SQLite MessageStore + shared conformance
 
 **Repo truth at start:** clean main @ `6984197`. Baseline re-verified before any change:
