@@ -141,9 +141,28 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     idempotency isolation. **Honest limitation:** `ingest`'s create+fan-out is not one atomic unit —
     a crash between them leaves a message whose retry dedups and skips fan-out; the robust fix is a
     transactional outbox (enqueue inside the create txn), deferred.
-  - **Deferred (next ticks):** the **App/tenant** entity that mints/validates `appId`, the
-    **Fastify HTTP API** (apps/endpoints/messages CRUD + ingest), contract tests, TS SDK, OpenAPI,
-    and the **transactional outbox** that makes ingest's accept-and-fan-out atomic.
+  - **App/tenant entity + API-key auth ✅ (this tick):** the identity layer that turns `appId`
+    from a forgeable opaque string into an authenticated tenant — `src/apps/`. `App`
+    (`id`/`name`/timestamps) is the tenant a single instance serves; each app owns one or more
+    `ApiKey`s. The `AppStore` contract adds app CRUD (`create`/`get`/`list`/`update`/`delete`) plus
+    the credential surface (`createApiKey`/`listApiKeys`/`revokeApiKey`/`authenticate`).
+    **Security model:** a key secret is 256 bits of CSPRNG output, so the store keeps only
+    `sha256(secret)` (hex) — which doubles as the O(1) `authenticate` lookup index — and returns the
+    plaintext exactly once at creation (never recoverable); a deliberately fast hash, not a password
+    KDF, because the input is high-entropy (the same reasoning behind storing the P0 signer's
+    secrets). Constant-time hash compare on the auth path (defense-in-depth atop the indexed match);
+    revoked keys never re-authenticate; `authenticate` is a pure read (no hot-path write). Same proven
+    dual-backend + one-shared-conformance-suite pattern (in-memory reference + durable SQLite; the
+    SQLite backend ties keys to apps with `ON DELETE CASCADE` so deleting a tenant reaps its keys
+    atomically). A golden SHA-256 vector pins the on-disk hash format so a future change can't silently
+    invalidate every stored key. Proven end-to-end on the compiled `dist` (mint → authenticate →
+    revoke-denies → cross-tenant isolation → cascade-delete-denies). This is the exact plug-point the
+    HTTP API's auth middleware will call: `authenticate(presentedKey)` → `appId` → scope the existing
+    endpoint/message/ingest operations. **Deferred within auth:** per-key `lastUsedAt` (kept off the
+    hot read path as an observability add-on).
+  - **Deferred (next ticks):** the **Fastify HTTP API** (apps/endpoints/messages CRUD + ingest)
+    composing `AppStore.authenticate` for tenancy, contract tests, TS SDK, OpenAPI, and the
+    **transactional outbox** that makes ingest's accept-and-fan-out atomic.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

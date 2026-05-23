@@ -139,3 +139,33 @@ export {
   type IngestDeps,
   type IngestResult,
 } from "./fanout/fanout.js";
+
+export {
+  UnknownAppError,
+  createAppId,
+  createApiKeyId,
+  generateApiKeySecret,
+  hashApiKey,
+  apiKeyPrefix,
+  apiKeyHashesEqual,
+  normalizeNewApp,
+  applyAppUpdate,
+  API_KEY_SECRET_PREFIX,
+  type App,
+  type NewApp,
+  type AppUpdate,
+  type ApiKey,
+  type CreatedApiKey,
+  type AppStore,
+  type NormalizedNewApp,
+} from "./apps/app.js";
+
+export {
+  InMemoryAppStore,
+  type InMemoryAppStoreOptions,
+} from "./apps/in-memory-app-store.js";
+
+export {
+  SqliteAppStore,
+  type SqliteAppStoreOptions,
+} from "./apps/sqlite-app-store.js";

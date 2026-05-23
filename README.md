@@ -49,6 +49,13 @@ Early foundation. Implemented so far:
   delivery per match; `ingest` accepts a message and fans it out in one call, suppressing
   re-delivery on an idempotent (deduplicated) retry. Idempotency keys are **scoped per tenant**, so
   one app's key never dedups against — or leaks — another app's message.
+- ✅ **Apps + API-key authentication** — the tenancy/identity layer that turns `appId` from an
+  opaque string into an authenticated tenant. An `App` owns one or more API keys; presenting a key's
+  secret authenticates a request as that app (`authenticate` → the owning `App`). Secrets are stored
+  only as a SHA-256 hash (a fast hash is correct for a 256-bit random secret) that doubles as the
+  O(1) lookup index; the plaintext is returned exactly once at creation and is never recoverable.
+  Keys can be rotated and revoked; a revoked key never authenticates again. Same dual-backend +
+  one-conformance-suite pattern, with the SQLite backend cascade-deleting a tenant's keys.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -208,6 +215,33 @@ const { message, fanout } = await ingest(
 fanout.matched; // number of endpoints a delivery was enqueued for
 
 // ...then run a DeliveryWorker against the same queue/store/endpoints to deliver.
+```
+
+## Quickstart (apps + authentication)
+
+Each tenant is an `App` that owns API keys. Authenticate an incoming request by its key
+secret to get the owning app, then scope every other operation to `app.id`.
+
+```ts
+import { SqliteAppStore } from "posthorn";
+
+const apps = new SqliteAppStore({ location: "./posthorn.sqlite" });
+
+// Provision a tenant and mint its first key. The plaintext is shown ONCE —
+// only its hash is stored, so save it now; it can never be retrieved again.
+const app = await apps.create({ name: "Acme" });
+const { secret } = await apps.createApiKey(app.id); // -> "phk_..."
+
+// On each request, resolve the presented secret to its owning app (or null):
+const caller = await apps.authenticate(secret);
+if (caller === null) throw new Error("401 Unauthorized");
+caller.id === app.id; // scope endpoint/message/ingest operations to this appId
+
+// Rotate freely; revoke instantly. A revoked key never authenticates again.
+const { apiKey } = await apps.createApiKey(app.id); // a second, live key
+await apps.revokeApiKey(apiKey.id);
+
+apps.close(); // release the database handle on shutdown
 ```
 
 ## Development

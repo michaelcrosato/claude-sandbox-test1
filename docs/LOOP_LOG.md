@@ -4,6 +4,68 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 9: P3 — App/tenant entity + API-key authentication (identity layer)
+
+**Repo truth at start:** clean main @ `56a6f4a`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **239/239**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 8: every layer was built and connected (signer → store → queue → worker → endpoints →
+fan-out → ingest), but `appId` was an **opaque, unauthenticated string** — any caller could assert
+any tenant, and no entity minted or validated it. That identity gap blocks the HTTP API: without
+auth, the API would be wide open and `appId` forgeable.
+
+**High-leverage move chosen:** Build the **App/tenant entity + API-key auth** (`src/apps/`). Highest-
+leverage because (a) it is the load-bearing tenancy+auth foundation the deferred Fastify HTTP API must
+sit on (`authenticate(key)` → `appId` → scope existing ops); (b) it is security-critical yet fully
+deterministic — golden-vector-testable like the P0 signer — the regime this loop is strongest in; (c)
+**zero new dependencies** (only `node:crypto` + `node:sqlite`), preserving the zero-dep wedge, whereas
+Fastify still carries the sandbox install/network risk the loop has repeatedly and correctly deferred.
+Followed the proven `interface + in-memory reference + SQLite + one shared conformance suite` pattern
+verbatim to keep risk low.
+
+**Built this tick (`src/apps/`):**
+- `app.ts` — `App`/`NewApp`/`AppUpdate`, `ApiKey` (metadata; no secret) + `CreatedApiKey` (one-time
+  plaintext), the `AppStore` contract (app CRUD + `createApiKey`/`listApiKeys`/`revokeApiKey`/
+  `authenticate`), `UnknownAppError`, and the shared **pure** crypto/validation helpers so backends
+  can't drift: `createAppId`/`createApiKeyId`/`generateApiKeySecret`, `hashApiKey` (sha256 hex —
+  storage *and* lookup index), `apiKeyPrefix` (12-char non-secret display prefix), `apiKeyHashesEqual`
+  (constant-time), `normalizeNewApp`/`applyAppUpdate`.
+- `in-memory-app-store.ts` — insertion-ordered reference; a `keyHash → keyId` index makes
+  `authenticate` O(1), mirroring the SQLite hash index; cascade-drops a deleted app's keys.
+- `sqlite-app-store.ts` — durable backend on built-in `node:sqlite` (same `createRequire` workaround),
+  two `STRICT` tables (`apps`, `api_keys`), `api_keys.app_id REFERENCES apps(id) ON DELETE CASCADE`
+  with `PRAGMA foreign_keys = ON`, UNIQUE indexed `key_hash`, `revoke` guarded by `revoked_at IS NULL`.
+- `conformance.ts` + `app.test.ts` (pure helpers incl. **golden SHA-256 vectors**) + per-backend tests;
+  SQLite adds crash-safe replay (app + live key + revocation survive reopen), cascade-survives-reopen,
+  UNIQUE-hash-collision, and file isolation. `src/index.ts` re-exports the apps surface.
+
+**Security model (decided, not hand-waved):** key secret = 256 bits CSPRNG, so store only its SHA-256
+(fast hash is correct for high-entropy input — bcrypt/argon2 defend low-entropy passwords); plaintext
+returned exactly once; constant-time compare as defense-in-depth atop the indexed exact-hash match;
+revoked keys denied; `authenticate` is a pure read (no hot-path write-amplification). The golden vector
+pins the hash format so a future change can't silently invalidate every stored key.
+
+**Key decisions (honest tradeoffs):**
+- **Per-key `lastUsedAt` deferred.** Bumping it on every auth would put a write on the hot read path;
+  it's an observability add-on (like the deferred per-attempt audit log), logged not hidden.
+- **App deletion cascades keys but not endpoints/messages.** Those are independent stores; cross-store
+  reaping is a service-level concern, not a store coupling. Logged.
+- **One test-fixture bug found + fixed mid-tick:** the conformance leak-check asserted the listed
+  metadata omits the secret, but the *injected* test secret (`phk_test_1`) is shorter than the 12-char
+  display prefix, so the prefix legitimately equals it. Moved the no-leak assertion to a test using the
+  realistic (long) default generator, where the property actually holds.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **295/295** (was 239; +56: apps pure helpers 14,
+in-mem 20, sqlite 22). `npm run build` clean. **Smoke-tested the built `dist/index.js`** end-to-end on
+the SQLite backend (mint → authenticate → isolated revoke-denies → wrong/empty denied → cross-tenant
+isolation → cascade-delete-denies → metadata carries no full secret). Integrity + local gate: exit 0.
+
+**State:** GREEN → committing to main. `appId` is now an authenticated identity. Next tick: the
+**Fastify HTTP API** (composing `AppStore.authenticate`) — or the **transactional outbox** to make
+ingest atomic if the Fastify install risk warrants staying dependency-free one more tick.
+
+---
+
 ## 2026-05-22 — Iteration 8: P3 — message fan-out (the parts become a service)
 
 **Repo truth at start:** clean main @ `b9c4cfa`. Baseline re-verified before any change:
