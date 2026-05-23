@@ -22,6 +22,7 @@ import type {
 import {
   applyClaim,
   applyFailure,
+  applyManualRetry,
   applySuccess,
   assertValidVisibilityTimeout,
   createLeaseToken,
@@ -271,6 +272,20 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     return this.#transaction(() => {
       const task = this.#requireLeaseHolder(taskId, leaseToken);
       const next = applyFailure(this.#policy, task, error, nowMs, this.#jitter);
+      this.#persist(next);
+      return next;
+    });
+  }
+
+  async retry(taskId: string): Promise<DeliveryTask> {
+    return this.#transaction(() => {
+      const row = this.#selectTask.get(taskId) as TaskRow | undefined;
+      if (row === undefined) {
+        throw new UnknownDeliveryTaskError(taskId);
+      }
+      // applyManualRetry throws DeliveryStateError on a non-terminal task; the
+      // transaction then rolls back and re-throws, leaving the row untouched.
+      const next = applyManualRetry(this.#policy, rowToTask(row), this.#now());
       this.#persist(next);
       return next;
     });

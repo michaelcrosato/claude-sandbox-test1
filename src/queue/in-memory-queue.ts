@@ -17,6 +17,7 @@
 import {
   applyClaim,
   applyFailure,
+  applyManualRetry,
   applySuccess,
   claimableState,
   createLeaseToken,
@@ -154,6 +155,17 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     const task = this.#requireLeaseHolder(taskId, leaseToken);
     const next = applyFailure(this.#policy, task, error, nowMs, this.#jitter);
     this.#tasks.set(next.id, next);
+    return next;
+  }
+
+  async retry(taskId: string): Promise<DeliveryTask> {
+    const task = this.#tasks.get(taskId);
+    if (task === undefined) {
+      throw new UnknownDeliveryTaskError(taskId);
+    }
+    // applyManualRetry throws DeliveryStateError if the task is not terminal.
+    const next = applyManualRetry(this.#policy, task, this.#now());
+    this.#tasks.set(next.id, next); // same key → keeps insertion order
     return next;
   }
 

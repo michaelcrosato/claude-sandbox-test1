@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 17: P3 — manual retry / replay (`POST /v1/messages/:id/retry`)
+
+**Repo truth at start:** clean main @ `fe2ca77`. Baseline re-verified before any change: `tsc --noEmit`
+clean, vitest **479/479**, `npm run build` clean, integrity + local gate both exit 0. Node 24.15 /
+Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands; repo is far past the GOAL's "decide a
+project" stage. The glaring gap after iter 16: the send→fan-out→deliver→observe→list loop is complete,
+but `dead_letter` was a **terminal dead end** — once a receiver outage exhausted the retry schedule,
+nothing could make Posthorn try again. The delivery FSM had *no* transition out of a terminal state, the
+queue *no* re-drive primitive, and the API *no* route. "Replay"/"retry" is a feature every incumbent
+(Svix/Convoy/Hookdeck) exposes; it is the unaddressed half of the tagline's "**retried**".
+
+**High-leverage move chosen:** Build **manual retry** end-to-end — FSM `manualRetry` → queue `retry` →
+`retryMessageDeliveries` service → `POST /v1/messages/:id/retry` → SDK `client.retryMessage`. Highest-
+leverage (checklist #3): it closes a *functional capability* gap (not docs), turns `dead_letter` from a
+permanent loss into a recoverable state (a real product limitation), and completes the operability story
+the prior two ticks began (status read → listing → **recovery**). Chosen over **OpenAPI** (interop/docs,
+smaller user value than recovering lost deliveries), the **per-attempt audit log** (larger, touches the
+worker hot path → higher landing risk), and the **Dockerfile** (still un-validatable green here — needs
+network egress this sandbox blocks). Stayed in the loop's strongest regime: fully deterministic, in-process
+testable, **zero new deps**, on the proven pure-core / interface+two-backends+one-conformance-suite pattern.
+
+**Built this tick:**
+- **FSM `manualRetry` (`src/delivery/delivery-state.ts`).** The lone transition *out* of a terminal state:
+  legal only from `succeeded`/`dead_letter` (illegal from `pending`/`delivering` — those are already being
+  driven), reviving the delivery as brand-new: `pending`, `nextAttemptAt:null` (deliverable now),
+  **`attempts:0`** (a fresh budget — keeping the exhausted count would re-dead-letter on the first new
+  attempt), `lastError:null`. The exhaustive switch forced the case (no fallthrough), so the FSM stays the
+  single source of transition truth.
+- **Queue `retry` primitive + `applyManualRetry` (`src/queue/`).** Pure `applyManualRetry` defers to the
+  reducer (terminal→pending can't drift) and clears the lease overlay; `DeliveryQueue.retry(taskId)` added
+  to the contract + both backends (in-memory; SQLite in a `BEGIN IMMEDIATE` txn that rolls back a non-
+  terminal retry). +4 shared conformance cases × 2 backends: revives dead_letter (claimable, budget reset),
+  revives succeeded (a resend), `UnknownDeliveryTaskError` (unknown id), `DeliveryStateError` (non-terminal,
+  task left untouched).
+- **`retryMessageDeliveries` service (`src/queue/retry-message.ts`).** The structural twin of `fanOut`:
+  lists a message's tasks, re-drives only the **dead-lettered** ones (succeeded/in-flight/pending untouched
+  — replaying healthy deliveries is not "retry the failures"), returns `{messageId, retried, tasks}` (the
+  refreshed snapshots). Absorbs the concurrent double-retry race (`DeliveryStateError`/`UnknownDeliveryTaskError`
+  ⇒ "already revived", the same expected-catchable pattern as a lapsed lease). 5 tests incl. a worker-driven
+  **full recovery loop** (ingest → fail → dead_letter → retry → delivered).
+- **HTTP route + SDK.** `POST /v1/messages/:id/retry` (`src/http/api.ts`): tenant from the key, another
+  tenant's/absent message is `404` (existence never revealed, identical to the read route); returns the
+  refreshed per-endpoint statuses (replayed ones back to `pending`); internal `leaseToken` never exposed.
+  `client.retryMessage(id)` (`src/sdk/client.ts`) + the `RetryMessageResponse` wire view. New public symbols
+  re-exported from `src/index.ts`. Fixed two inline `DeliveryQueue` stubs in the worker test for the new
+  contract method.
+
+**Key decisions (honest tradeoffs):** reset the attempt budget on retry (the feature's whole point — a full
+fresh schedule after the receiver is fixed) at the cost of losing the prior count, which a future per-attempt
+audit log would preserve. Target **dead_letter only** (the unambiguous "needs human intervention" state),
+not pending/delivering/succeeded — crisp semantics, no surprise re-sends to healthy receivers; "force-retry
+pending" / "resend succeeded" noted as possible later options (the FSM/queue primitive already permits
+reviving `succeeded`, the route just doesn't expose it). Modeled the transition in the FSM (not ad-hoc in the
+queue) so it can't drift. Extracted a tested `retryMessageDeliveries` rather than inlining in the route, for
+symmetry with `fanOut`/`ingest` and reuse (a future `posthorn admin retry-message`).
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **503/503** (was 479; +24: FSM 3, conformance 4×2=8,
+service 5, api route 5, SDK 3). `npm run build` clean. **Smoke-tested the compiled `dist`** (SQLite backends,
+production ESM): ingest → worker dead-letters → `retryMessageDeliveries` → worker delivers a request that
+**verifies** against the endpoint secret → status `succeeded` (exercised the `node:sqlite` `createRequire`
+path in `SqliteDeliveryQueue.retry`). Integrity + local gate: exit 0. The three hash-protected files were not
+touched.
+
+**State:** GREEN → committing to main. `dead_letter` is no longer a dead end — a sustained-outage delivery is
+recoverable on demand, end-to-end. Next tick: the **OpenAPI** spec over this surface (other-language clients +
+interactive docs); the **per-attempt audit log** (richer than the latest-state-per-endpoint view, and would
+restore full attempt history across a manual retry); or the single **Dockerfile** to finish P4 (still blocked
+on validatable network egress here).
+
+---
+
 ## 2026-05-23 — Iteration 16: P3 — message listing (`GET /v1/messages`, keyset-paginated)
 
 **Repo truth at start:** clean main @ `f6030ba`. Baseline re-verified before any change:

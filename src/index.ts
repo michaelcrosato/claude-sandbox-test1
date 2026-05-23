@@ -82,6 +82,12 @@ export {
 } from "./queue/delivery-queue.js";
 
 export {
+  retryMessageDeliveries,
+  type RetryMessageDeps,
+  type RetryMessageResult,
+} from "./queue/retry-message.js";
+
+export {
   InMemoryDeliveryQueue,
   type InMemoryQueueOptions,
 } from "./queue/in-memory-queue.js";
@@ -256,6 +262,7 @@ export {
   type ListMessagesParams,
   type MessageListPage,
   type MessageWithDeliveries,
+  type RetryMessageResponse,
   type DeliveryView,
   type EndpointView,
   type CreatedEndpoint,

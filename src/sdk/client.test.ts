@@ -258,6 +258,30 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect((err as PosthornApiError).status).toBe(404);
   });
 
+  it("retryMessage round-trips against the server (no-op when nothing dead-lettered)", async () => {
+    const { client } = await startServer();
+    await client.createEndpoint({ url: "https://acme.example/hook" });
+    const sent = await client.sendMessage({ eventType: "user.created", payload: { id: 1 } });
+
+    const res = await client.retryMessage(sent.message.id);
+    expect(res.id).toBe(sent.message.id);
+    // No worker runs in this harness, so the delivery is still pending — nothing
+    // has dead-lettered, so the replay is a no-op that reports the live status.
+    expect(res.retried).toBe(0);
+    expect(res.deliveries).toHaveLength(1);
+    expect(res.deliveries[0]!.status).toBe("pending");
+  });
+
+  it("surfaces retrying an unknown message id as a 404 PosthornApiError", async () => {
+    const { client } = await startServer();
+    const err = await client.retryMessage("msg_does_not_exist").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(PosthornApiError);
+    expect((err as PosthornApiError).status).toBe(404);
+  });
+
   it("lists messages newest-first and pages through with the cursor", async () => {
     const { client } = await startServer();
     const refs: { id: string; createdAt: number }[] = [];
@@ -388,6 +412,22 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     });
     await client.listMessages();
     expect(seenUrl.endsWith("/v1/messages")).toBe(true);
+  });
+
+  it("posts retryMessage to the right path with the id url-encoded", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ id: "m/1", retried: 2, deliveries: [] })),
+      );
+    });
+    const res = await client.retryMessage("m/1");
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toBe("http://example.test/v1/messages/m%2F1/retry");
+    expect(res.retried).toBe(2);
   });
 
   it("raises PosthornTimeoutError when a request exceeds the timeout", async () => {

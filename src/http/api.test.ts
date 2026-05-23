@@ -7,6 +7,7 @@ import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { DeliveryWorker, type HttpDeliveryRequest } from "../worker/delivery-worker.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { verify } from "../signing/webhook-signature.js";
+import { fixedSchedule } from "../delivery/retry-policy.js";
 
 interface Fixture {
   readonly apps: InMemoryAppStore;
@@ -622,6 +623,148 @@ describe("createApi — GET /v1/messages/:id (delivery status)", () => {
     );
     expect(bRead.status).toBe(200);
     expect(body(bRead).id).toBe(bMessageId);
+  });
+});
+
+describe("createApi — POST /v1/messages/:id/retry (replay)", () => {
+  /** Like setup(), but the queue dead-letters on the first failed attempt. */
+  async function setupNoRetry(): Promise<Fixture> {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const api = createApi({ apps, endpoints, messages, queue });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    return { apps, endpoints, messages, queue, api, appId: app.id, secret };
+  }
+
+  it("rejects an unauthenticated retry with 401", async () => {
+    const { api } = await setupNoRetry();
+    const res = await api(request({ method: "POST", path: "/v1/messages/msg_1/retry" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown message id", async () => {
+    const { api, secret } = await setupNoRetry();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/messages/msg_missing/retry",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("hides another tenant's message behind 404", async () => {
+    const { api, apps } = await setupNoRetry();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+    const ing = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, aKey),
+    );
+    const id = body(ing).message.id;
+
+    // B cannot replay A's message — 404, not 403.
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/messages/${id}/retry`,
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("is a no-op (retried 0) when nothing has dead-lettered", async () => {
+    const { api, secret } = await setupNoRetry();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ing = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    const id = body(ing).message.id;
+
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/messages/${id}/retry`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).id).toBe(id);
+    expect(body(res).retried).toBe(0);
+    expect(body(res).deliveries).toHaveLength(1);
+    expect(body(res).deliveries[0].status).toBe("pending"); // still being delivered automatically
+  });
+
+  it("replays a dead-lettered delivery, then the worker delivers it", async () => {
+    const { api, secret, endpoints, messages, queue } = await setupNoRetry();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ing = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: { ok: true } },
+        secret,
+      ),
+    );
+    const id = body(ing).message.id;
+
+    let receiverUp = false;
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: receiverUp ? 200 : 500 }),
+    });
+
+    // Receiver down: the single attempt dead-letters.
+    expect((await worker.processOnce()).deadLettered).toBe(1);
+    const before = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(body(before).deliveries[0].status).toBe("dead_letter");
+
+    // Replay it.
+    const retry = await api(
+      request({
+        method: "POST",
+        path: `/v1/messages/${id}/retry`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(retry.status).toBe(200);
+    expect(body(retry).id).toBe(id);
+    expect(body(retry).retried).toBe(1);
+    expect(body(retry).deliveries[0].status).toBe("pending");
+    expect(body(retry).deliveries[0].attempts).toBe(0);
+    // Internal queue plumbing is never exposed, just like the read route.
+    expect(body(retry).deliveries[0]).not.toHaveProperty("leaseToken");
+
+    // Receiver fixed: the worker now delivers the replayed message.
+    receiverUp = true;
+    expect((await worker.processOnce()).succeeded).toBe(1);
+    const after = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(body(after).deliveries[0].status).toBe("succeeded");
   });
 });
 

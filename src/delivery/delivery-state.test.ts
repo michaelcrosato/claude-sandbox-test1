@@ -141,6 +141,56 @@ describe("reduce — illegal transitions", () => {
   });
 });
 
+describe("reduce — manualRetry (operator recovery)", () => {
+  /** Drive a fresh delivery to dead_letter under a no-retry policy. */
+  function deadLettered(): DeliveryState {
+    const noRetry = fixedSchedule([]);
+    let s = initialDeliveryState();
+    s = reduce(noRetry, s, { type: "attemptStarted" });
+    return reduce(noRetry, s, { type: "attemptFailed", error: "boom", nowMs: now });
+  }
+
+  it("revives a dead-lettered delivery as a fresh, immediately-deliverable one", () => {
+    const dead = deadLettered();
+    expect(dead.status).toBe("dead_letter");
+
+    const revived = reduce(policy, dead, { type: "manualRetry" });
+    expect(revived.status).toBe("pending");
+    expect(revived.attempts).toBe(0); // fresh budget — the full schedule applies again
+    expect(revived.nextAttemptAt).toBeNull(); // deliverable now
+    expect(revived.lastError).toBeNull(); // clean slate
+    expect(isTerminal(revived)).toBe(false);
+    expect(isDeliverable(revived, now)).toBe(true);
+  });
+
+  it("also revives a succeeded delivery (a resend), resetting it", () => {
+    let s = initialDeliveryState();
+    s = reduce(policy, s, { type: "attemptStarted" });
+    s = reduce(policy, s, { type: "attemptSucceeded" });
+    expect(s.status).toBe("succeeded");
+
+    const revived = reduce(policy, s, { type: "manualRetry" });
+    expect(revived).toEqual({
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
+  it("rejects manualRetry on a non-terminal (pending/delivering) delivery", () => {
+    const pending = initialDeliveryState();
+    expect(() => reduce(policy, pending, { type: "manualRetry" })).toThrow(
+      DeliveryStateError,
+    );
+
+    const delivering = reduce(policy, pending, { type: "attemptStarted" });
+    expect(() => reduce(policy, delivering, { type: "manualRetry" })).toThrow(
+      DeliveryStateError,
+    );
+  });
+});
+
 describe("isDeliverable", () => {
   it("is true for a pending message with no scheduled time", () => {
     expect(isDeliverable(initialDeliveryState(), now)).toBe(true);

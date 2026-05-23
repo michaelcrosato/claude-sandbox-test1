@@ -294,6 +294,31 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     handler suite (auth/empty/order/paging/400s/tenant-isolation), a real-socket query-parsing test, an
     in-process SDK paging test, and a compiled-`dist` smoke run (send 5 → page through 3× via the SDK →
     full list lean + `nextCursor:null`).
+  - **Manual retry / replay — `POST /v1/messages/:id/retry` ✅ (this tick):** the operator's
+    recovery path, and the last unaddressed word in the tagline ("signed, **retried**, observable").
+    Automatic retries (the P1 policy + FSM) absorb transient receiver blips, but a *sustained* outage
+    exhausts the schedule and the delivery lands in the terminal `dead_letter` state — which until now
+    was a permanent dead end: once a receiver was fixed, nothing could make Posthorn try again. Every
+    incumbent (Svix/Convoy/Hookdeck) exposes exactly this as "replay"/"retry". Built faithful to the
+    pure-core discipline: a new **`manualRetry`** event on the delivery FSM (`src/delivery/delivery-state.ts`)
+    — the *only* transition out of a terminal state — revives a finished delivery as a brand-new one
+    (`pending`, deliverable now, **attempt budget reset** so the full schedule applies again — keeping
+    the exhausted count would re-dead-letter on the first new attempt — and `lastError` cleared).
+    The queue gains a pure `applyManualRetry` helper (defers to the reducer, so terminal→pending can't
+    drift) and a **`DeliveryQueue.retry(taskId)`** primitive (both backends, +4 shared conformance cases
+    × 2: revives dead_letter→claimable with budget reset, revives succeeded, `UnknownDeliveryTaskError`
+    on unknown id, `DeliveryStateError` on a non-terminal task). A thin **`retryMessageDeliveries`**
+    orchestration (`src/queue/retry-message.ts`, the structural twin of `fanOut`) lists a message's
+    tasks and re-drives only the **dead-lettered** ones — succeeded/in-flight/pending are left untouched
+    (replaying healthy deliveries is not what "retry the failures" means) — absorbing the concurrent
+    double-retry race (`DeliveryStateError` ⇒ "already revived", like a lapsed lease). The route is
+    tenant-scoped (another tenant's/absent message is `404`, never revealed, identical to the read
+    route), returns the refreshed per-endpoint statuses, and the SDK gains `client.retryMessage(id)`.
+    Proven by FSM unit tests, the expanded conformance suite, a service suite incl. a **worker-driven
+    full recovery loop** (ingest → dead_letter → retry → delivered), pure handler + SDK tests, and a
+    compiled-`dist` SQLite smoke (dead_letter → retry → delivered+**verified** through production ESM).
+    Net: a dead-lettered delivery is recoverable instead of lost — `dead_letter` is no longer terminal
+    for an operator.
   - **Deferred (next ticks):** an **OpenAPI** spec over this surface (the SDK now covers typed TS
     consumers; OpenAPI would serve other-language clients + interactive docs); an admin/control-plane
     *HTTP* route for app/key provisioning (the CLI now covers local bootstrap); a full per-attempt audit

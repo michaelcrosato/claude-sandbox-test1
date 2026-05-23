@@ -102,6 +102,16 @@ Early foundation. Implemented so far:
   the Standard Webhooks headers out of a raw HTTP header bag (case-insensitive) and verifies the
   signature, so a consumer's whole integration — send and receive — is one import.
 
+- ✅ **Manual retry / replay** — the operator's recovery path, and the last word in "signed,
+  **retried**, observable". Automatic retries handle transient blips, but a *sustained* receiver
+  outage eventually exhausts the schedule and a delivery lands in the terminal `dead_letter` state —
+  previously a dead end. `POST /v1/messages/:id/retry` (and `client.retryMessage(id)`) re-drives a
+  message's dead-lettered deliveries: each is reset to a fresh, immediately-deliverable `pending`
+  state with its attempt budget restored, so the worker tries again under the full schedule. This is
+  the "replay"/"retry" feature every incumbent exposes. It is the lone transition *out* of a terminal
+  state in the delivery FSM, scoped to the authenticated tenant (another tenant's message is `404`),
+  and targets only dead-lettered deliveries — succeeded/in-flight ones are left untouched.
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)
@@ -356,6 +366,10 @@ curl -sX POST localhost:3000/v1/messages \
 curl -s localhost:3000/v1/messages/$MESSAGE_ID -H "authorization: Bearer $SECRET"
 #   { "id": "...", "deliveries": [ { "endpointId": "...", "status": "succeeded", "attempts": 1, ... } ] }
 
+# If a delivery dead-lettered (receiver was down), fix the receiver and replay it:
+curl -sX POST localhost:3000/v1/messages/$MESSAGE_ID/retry -H "authorization: Bearer $SECRET"
+#   { "id": "...", "retried": 1, "deliveries": [ { "endpointId": "...", "status": "pending", "attempts": 0, ... } ] }
+
 # Browse what you've sent — newest-first, paginated. Feed nextCursor back as ?cursor= for the next page:
 curl -s "localhost:3000/v1/messages?limit=50" -H "authorization: Bearer $SECRET"
 #   { "data": [ { "id": "...", "eventType": "user.created", "createdAt": 169... } ], "nextCursor": "..." }
@@ -367,6 +381,7 @@ curl -s "localhost:3000/v1/messages?limit=50" -H "authorization: Bearer $SECRET"
 | POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
 | GET    | `/v1/messages`      | Bearer | List the tenant's messages (paginated).|
 | GET    | `/v1/messages/:id`  | Bearer | Read a message + its delivery statuses.|
+| POST   | `/v1/messages/:id/retry` | Bearer | Replay a message's dead-lettered deliveries.|
 | GET    | `/v1/endpoints`     | Bearer | List the tenant's endpoints.           |
 | POST   | `/v1/endpoints`     | Bearer | Create an endpoint (`201`, secret once).|
 | GET    | `/v1/endpoints/:id` | Bearer | Fetch one endpoint.                    |
@@ -404,6 +419,10 @@ fanout?.matched; // endpoints a delivery was enqueued for
 // Ask what happened to it — per-endpoint delivery status:
 const status = await client.getMessage(message.id);
 status.deliveries[0]?.status; // "pending" | "delivering" | "succeeded" | "dead_letter"
+
+// Receiver was down and a delivery dead-lettered? Fix it, then replay:
+const replay = await client.retryMessage(message.id);
+replay.retried; // how many dead-lettered deliveries were re-driven (now "pending")
 
 // Browse what you've sent, newest-first. Page forward with the returned cursor:
 let page = await client.listMessages({ limit: 50 });

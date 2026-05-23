@@ -18,6 +18,7 @@ import {
   UnknownDeliveryTaskError,
   type DeliveryQueue,
 } from "./delivery-queue.js";
+import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
   fixedSchedule,
   type JitterOptions,
@@ -329,6 +330,78 @@ export function describeDeliveryQueueContract(
         await expect(
           queue.fail(task!.id, "wrong", { error: "e", nowMs: clock.now() }),
         ).rejects.toBeInstanceOf(StaleLeaseError);
+      });
+    });
+
+    describe("retry (manual recovery)", () => {
+      /** Enqueue a task and drive it to dead_letter (3 failed attempts). */
+      async function deadLetter(messageId = "m"): Promise<string> {
+        const enq = await queue.enqueue({ messageId, endpointId: "ep_1" });
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, {
+            error: "down",
+            nowMs: clock.now(),
+          });
+        }
+        expect((await queue.get(enq.id))?.status).toBe("dead_letter");
+        return enq.id;
+      }
+
+      it("revives a dead-lettered task: fresh, immediately claimable, budget reset", async () => {
+        const id = await deadLetter();
+
+        const revived = await queue.retry(id);
+        expect(revived.id).toBe(id);
+        expect(revived.status).toBe("pending");
+        expect(revived.attempts).toBe(0); // budget reset
+        expect(revived.nextAttemptAt).toBeNull(); // deliverable now
+        expect(revived.lastError).toBeNull(); // clean slate
+        expect(revived.leaseToken).toBeNull();
+        expect(revived.endpointId).toBe("ep_1"); // opaque reference preserved
+        expect(revived.updatedAt).toBe(clock.now());
+        expect(await queue.get(id)).toEqual(revived);
+
+        // It is claimable again, as a fresh first attempt.
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        expect(claimed!.id).toBe(id);
+        expect(claimed!.attempts).toBe(1);
+        expect(claimed!.status).toBe("delivering");
+      });
+
+      it("revives a succeeded task too (a resend)", async () => {
+        await queue.enqueue({ messageId: "m" });
+        const [task] = await queue.claimDue({ nowMs: clock.now() });
+        const done = await queue.complete(task!.id, task!.leaseToken!);
+        expect(done.status).toBe("succeeded");
+
+        const revived = await queue.retry(done.id);
+        expect(revived.status).toBe("pending");
+        expect(revived.attempts).toBe(0);
+        expect(await queue.claimDue({ nowMs: clock.now() })).toHaveLength(1);
+      });
+
+      it("throws UnknownDeliveryTaskError for an unknown id", async () => {
+        await expect(queue.retry("dtask_nope")).rejects.toBeInstanceOf(
+          UnknownDeliveryTaskError,
+        );
+      });
+
+      it("rejects retrying a non-terminal (pending / delivering) task", async () => {
+        const pending = await queue.enqueue({ messageId: "m" });
+        await expect(queue.retry(pending.id)).rejects.toBeInstanceOf(
+          DeliveryStateError,
+        );
+
+        const [delivering] = await queue.claimDue({ nowMs: clock.now() });
+        await expect(queue.retry(delivering!.id)).rejects.toBeInstanceOf(
+          DeliveryStateError,
+        );
+        // The rejected retry left the task untouched (still leased + delivering).
+        const after = await queue.get(delivering!.id);
+        expect(after?.status).toBe("delivering");
+        expect(after?.leaseToken).toBe(delivering!.leaseToken);
       });
     });
 

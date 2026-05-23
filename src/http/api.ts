@@ -18,6 +18,7 @@
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
  * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
+ * | POST   | /v1/messages/:id/retry | Bearer | Replay a message's dead-lettered deliveries. |
  * | GET    | /v1/endpoints        | Bearer | List the tenant's endpoints.             |
  * | POST   | /v1/endpoints        | Bearer | Create an endpoint (201, secret once).   |
  * | GET    | /v1/endpoints/:id    | Bearer | Fetch one endpoint (tenant-scoped).      |
@@ -59,6 +60,7 @@ import {
   type NewEndpoint,
 } from "../endpoints/endpoint.js";
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
+import { retryMessageDeliveries } from "../queue/retry-message.js";
 import type { App, AppStore } from "../apps/app.js";
 import { ingest } from "../fanout/fanout.js";
 import {
@@ -417,6 +419,25 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, messageView(message, deliveries));
   };
 
+  const retryMessage: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const message = await deps.messages.get(id);
+    // Tenancy from the key; another tenant's (or an absent) message is 404 —
+    // existence is never revealed, identical to the read route above.
+    if (message === null || message.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no message with id "${id}"`);
+    }
+    // Re-drive the dead-lettered deliveries; returns the refreshed per-endpoint
+    // statuses (the replayed ones now back to `pending`) so the caller sees the
+    // effect immediately — the same shape as GET /v1/messages/:id's deliveries.
+    const result = await retryMessageDeliveries(id, { queue: deps.queue });
+    return json(200, {
+      id: message.id,
+      retried: result.retried,
+      deliveries: result.tasks.map(deliveryView),
+    });
+  };
+
   const listEndpoints: AuthedHandler = async (ctx) => {
     const all = await deps.endpoints.listByApp(ctx.app.id);
     return json(200, { data: all.map(endpointView) });
@@ -477,6 +498,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     { method: "POST", pattern: "/v1/messages", handler: authed(createMessage) },
     { method: "GET", pattern: "/v1/messages", handler: authed(listMessages) },
     { method: "GET", pattern: "/v1/messages/:id", handler: authed(getMessage) },
+    { method: "POST", pattern: "/v1/messages/:id/retry", handler: authed(retryMessage) },
     { method: "GET", pattern: "/v1/endpoints", handler: authed(listEndpoints) },
     { method: "POST", pattern: "/v1/endpoints", handler: authed(createEndpoint) },
     { method: "GET", pattern: "/v1/endpoints/:id", handler: authed(getEndpoint) },

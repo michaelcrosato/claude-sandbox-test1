@@ -151,6 +151,23 @@ export interface DeliveryQueue {
   /** Fetch a task by id, or `null` if unknown. */
   get(taskId: string): Promise<DeliveryTask | null>;
   /**
+   * Manually re-drive a finished delivery — the operator's recovery path. Resets
+   * a **terminal** task (`succeeded` or `dead_letter`) to a fresh `pending`
+   * state, deliverable immediately and with its attempt budget reset, so a worker
+   * re-attempts it under the full retry schedule. The canonical use is replaying
+   * a `dead_letter` delivery after its receiver has been fixed (the only escape
+   * from that otherwise-permanent terminal state).
+   *
+   * Throws {@link UnknownDeliveryTaskError} if the id is unknown, or
+   * `DeliveryStateError` if the task is not terminal — a `pending`/`delivering`
+   * task is already being driven, so there is nothing to revive. That makes a
+   * second `retry` of an already-revived (now `pending`) task throw, which a bulk
+   * caller treats as an expected, catchable "already revived" condition (see
+   * `retryMessageDeliveries`), mirroring how a lapsed lease surfaces as
+   * {@link StaleLeaseError}.
+   */
+  retry(taskId: string): Promise<DeliveryTask>;
+  /**
    * List every delivery task for `messageId`, oldest-first (enqueue order).
    * Returns an empty array when the message has no tasks — because fan-out
    * matched no endpoint, or the id is unknown/empty. A pure read projection: it
@@ -386,6 +403,34 @@ export function applySuccess(
     status: next.status,
     attempts: next.attempts,
     nextAttemptAt: null,
+    leaseExpiresAt: null,
+    leaseToken: null,
+    lastError: next.lastError,
+    updatedAt: nowMs,
+  };
+}
+
+/**
+ * Manually re-drive a finished delivery: reset a **terminal** task to a fresh
+ * `pending` state, deliverable immediately and with its attempt budget reset.
+ * Pure — the terminal→pending revival comes from the delivery-state reducer
+ * (the `manualRetry` event), so it cannot drift from the rest of the FSM; the
+ * lease overlay is cleared here. Backends call this then persist the result.
+ *
+ * @throws `DeliveryStateError` if `task` is not terminal (a `pending`/
+ *         `delivering` task is already being driven — nothing to revive).
+ */
+export function applyManualRetry(
+  policy: RetryPolicy,
+  task: DeliveryTask,
+  nowMs: number,
+): DeliveryTask {
+  const next = reduce(policy, taskToDeliveryState(task), { type: "manualRetry" });
+  return {
+    ...task,
+    status: next.status,
+    attempts: next.attempts,
+    nextAttemptAt: next.nextAttemptAt,
     leaseExpiresAt: null,
     leaseToken: null,
     lastError: next.lastError,

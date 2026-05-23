@@ -11,8 +11,14 @@
  *   pending ──attemptStarted──▶ delivering ──attemptSucceeded──▶ succeeded (terminal)
  *      ▲                            │
  *      └──── retry scheduled ◀──────┤
- *                                   └──attemptFailed──▶ dead_letter (terminal, exhausted)
+ *      ▲                            └──attemptFailed──▶ dead_letter (terminal, exhausted)
+ *      └──────────── manualRetry ◀──────────── (from either terminal state)
  * ```
+ *
+ * `manualRetry` is the lone transition *out* of a terminal state — the operator's
+ * recovery path. It revives a finished delivery as a brand-new one (a fresh
+ * attempt budget, deliverable now), so a `dead_letter` whose receiver has since
+ * been fixed can be replayed instead of being a permanent dead end.
  *
  * The reducer is deterministic: every transition is a pure function of the
  * current state, the event, the policy, and an injected clock/RNG. Illegal
@@ -57,7 +63,8 @@ export interface DeliveryState {
 export type DeliveryEvent =
   | { readonly type: "attemptStarted" }
   | { readonly type: "attemptSucceeded" }
-  | { readonly type: "attemptFailed"; readonly error: string; readonly nowMs: number };
+  | { readonly type: "attemptFailed"; readonly error: string; readonly nowMs: number }
+  | { readonly type: "manualRetry" };
 
 /** Thrown when an event is applied to a state that does not permit it. */
 export class DeliveryStateError extends Error {
@@ -162,6 +169,27 @@ export function reduce(
         attempts: state.attempts,
         nextAttemptAt: null,
         lastError: event.error,
+      };
+    }
+
+    case "manualRetry": {
+      // The only transition out of a terminal state. A non-terminal delivery is
+      // already being driven (a pending retry is scheduled; a delivering attempt
+      // is in flight), so there is nothing to manually revive — reject it.
+      if (!isTerminal(state)) {
+        illegal(event, state);
+      }
+      // Revive as a brand-new delivery: deliverable immediately and with the
+      // attempt budget reset, so the *full* retry schedule applies again (a
+      // dead-lettered delivery whose count was exhausted would otherwise re-fail
+      // and re-dead-letter on its first new attempt). The prior `lastError` is
+      // cleared — a clean slate. (Full per-attempt history is a later audit-log
+      // add-on; this counter only feeds the retry policy.)
+      return {
+        status: "pending",
+        attempts: 0,
+        nextAttemptAt: null,
+        lastError: null,
       };
     }
   }

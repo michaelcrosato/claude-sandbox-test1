@@ -472,6 +472,7 @@ describe("DeliveryWorker.processOnce", () => {
       fail: async () => {
         throw boom;
       },
+      retry: async () => claimedTask,
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
     };
@@ -561,6 +562,9 @@ describe("DeliveryWorker.run", () => {
         throw boom;
       },
       fail: async () => {
+        throw boom;
+      },
+      retry: async () => {
         throw boom;
       },
       get: async () => null,

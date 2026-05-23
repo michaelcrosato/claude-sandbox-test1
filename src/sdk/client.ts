@@ -190,6 +190,16 @@ export interface MessageListPage {
   readonly nextCursor: string | null;
 }
 
+/** The result of {@link PosthornClient.retryMessage}. */
+export interface RetryMessageResponse {
+  /** The message whose deliveries were replayed. */
+  readonly id: string;
+  /** How many dead-lettered deliveries were re-driven back to `pending`. */
+  readonly retried: number;
+  /** The refreshed per-endpoint delivery statuses (replayed ones now `pending`). */
+  readonly deliveries: readonly DeliveryView[];
+}
+
 /** A message plus its per-endpoint delivery statuses ({@link PosthornClient.getMessage}). */
 export interface MessageWithDeliveries {
   readonly id: string;
@@ -326,6 +336,20 @@ export class PosthornClient {
     return this.#request<MessageWithDeliveries>(
       "GET",
       `/v1/messages/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * Replay a message's **dead-lettered** deliveries — `POST /v1/messages/:id/retry`.
+   * Each delivery that exhausted its automatic retries is reset to `pending` and
+   * re-attempted by the gateway's worker (use this after fixing a broken receiver).
+   * Resolves with the count re-driven and the refreshed per-endpoint statuses;
+   * deliveries still pending/in-flight/succeeded are left untouched.
+   */
+  async retryMessage(id: string): Promise<RetryMessageResponse> {
+    return this.#request<RetryMessageResponse>(
+      "POST",
+      `/v1/messages/${encodeURIComponent(id)}/retry`,
     );
   }
 
