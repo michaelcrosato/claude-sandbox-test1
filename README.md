@@ -111,7 +111,9 @@ Early foundation. Implemented so far:
   code) and a configurable per-request timeout — over the platform `fetch`, **zero dependencies**.
   It ships the matching **receiver-side** helper too: `verifyWebhook(secret, headers, rawBody)` pulls
   the Standard Webhooks headers out of a raw HTTP header bag (case-insensitive) and verifies the
-  signature, so a consumer's whole integration — send and receive — is one import.
+  signature, so a consumer's whole integration — send and receive — is one import. For operators,
+  `PosthornAdminClient` is the typed **control-plane** counterpart — provision tenants, mint/revoke
+  API keys, change plan quotas, and read per-tenant usage over the admin-token-gated `/v1/admin/*`.
 
 - ✅ **Manual retry / replay** — the operator's recovery path, and the last word in "signed,
   **retried**, observable". Automatic retries handle transient blips, but a *sustained* receiver
@@ -554,6 +556,36 @@ try {
 } catch {
   // reject: missing header, replayed timestamp, or bad signature
 }
+```
+
+### Operators: the admin / control-plane SDK
+
+Running Posthorn as a service (or building a dashboard)? `PosthornAdminClient` is the typed client
+for the admin API. It authenticates with the operator **admin token** (`POSTHORN_ADMIN_TOKEN`) — a
+credential distinct from any tenant key — and provisions tenants and keys over HTTP. The admin API is
+**disabled by default**: until `POSTHORN_ADMIN_TOKEN` is set, every `/v1/admin/*` route (and so every
+call below) returns `404`.
+
+```ts
+import { PosthornAdminClient } from "posthorn";
+
+const admin = new PosthornAdminClient({
+  baseUrl: "https://posthorn.acme.example",
+  adminToken: process.env.POSTHORN_ADMIN_TOKEN!,
+});
+
+// Provision a tenant on a capped plan, then mint its first key:
+const app = await admin.createApp({ name: "Acme", monthlyMessageQuota: 100_000 });
+const { secret } = await admin.createApiKey(app.id); // hand `secret` to the tenant — shown ONCE
+
+// Change the plan later (null removes the limit); meter usage for billing:
+await admin.updateApp(app.id, { monthlyMessageQuota: 500_000 });
+const usage = await admin.getAppUsage(app.id, { from: "2026-05-01", to: "2026-05-31" });
+usage.total; // messages accepted in the (inclusive, required) UTC-day range
+
+// Off-board: revoke a key, or delete the tenant (cascades its keys):
+await admin.revokeApiKey(/* keyId */ "ak_…");
+await admin.deleteApp(app.id);
 ```
 
 ## Development

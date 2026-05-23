@@ -20,33 +20,23 @@
  */
 
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
+import { DEFAULT_TIMEOUT_MS, HttpTransport, type PosthornFetch } from "./http.js";
 
-/** Default per-request timeout (ms). Override via {@link PosthornClientOptions.timeoutMs}. */
-export const DEFAULT_TIMEOUT_MS = 30_000;
-
-/**
- * The minimal `fetch` contract the client depends on — a structural subset of the
- * platform `fetch` so the global satisfies it, while remaining trivial to fake in
- * tests. The client only ever issues string URLs with an explicit init.
- */
-export type PosthornFetch = (
-  url: string,
-  init: PosthornRequestInit,
-) => Promise<PosthornResponse>;
-
-/** The request shape the client passes to {@link PosthornFetch}. */
-export interface PosthornRequestInit {
-  readonly method: string;
-  readonly headers: Record<string, string>;
-  readonly body?: string;
-  readonly signal?: AbortSignal;
-}
-
-/** The minimal response shape the client reads back from {@link PosthornFetch}. */
-export interface PosthornResponse {
-  readonly status: number;
-  text(): Promise<string>;
-}
+// The transport mechanics (the `fetch` contract, the error model, the request/timeout
+// logic) live in `./http.js`, shared with the admin client so the two cannot drift.
+// Re-export the public surface here so existing import paths (`from "posthorn"` / the
+// package barrel, which re-exports these from `./client.js`) stay stable.
+export {
+  DEFAULT_TIMEOUT_MS,
+  PosthornError,
+  PosthornApiError,
+  PosthornTimeoutError,
+} from "./http.js";
+export type {
+  PosthornFetch,
+  PosthornRequestInit,
+  PosthornResponse,
+} from "./http.js";
 
 /** Configuration for a {@link PosthornClient}. */
 export interface PosthornClientOptions {
@@ -71,38 +61,6 @@ export interface PosthornClientOptions {
    * `fetch`). Defaults to the platform `fetch`.
    */
   readonly fetch?: PosthornFetch;
-}
-
-/** Base class for every error the SDK throws, for a single `instanceof` check. */
-export class PosthornError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "PosthornError";
-  }
-}
-
-/**
- * Thrown when the gateway returns a non-2xx response. Carries the HTTP `status`
- * and the machine-readable `code` from the API's `{ error: { code, message } }`
- * envelope (falling back to `http_<status>` when the body is not that envelope).
- */
-export class PosthornApiError extends PosthornError {
-  readonly status: number;
-  readonly code: string;
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.name = "PosthornApiError";
-    this.status = status;
-    this.code = code;
-  }
-}
-
-/** Thrown when a request exceeds {@link PosthornClientOptions.timeoutMs}. */
-export class PosthornTimeoutError extends PosthornError {
-  constructor(message: string) {
-    super(message);
-    this.name = "PosthornTimeoutError";
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -345,18 +303,12 @@ export interface GetUsageParams {
   readonly to?: string;
 }
 
-/** Default `fetch`, bound to the platform global, adapting it to {@link PosthornFetch}. */
-const defaultFetch: PosthornFetch = (url, init) => fetch(url, init);
-
 /**
  * A typed client for a Posthorn gateway. Construct one per `(baseUrl, apiKey)`
  * pair and reuse it; it holds no per-request mutable state.
  */
 export class PosthornClient {
-  readonly #baseUrl: string;
-  readonly #apiKey: string;
-  readonly #timeoutMs: number;
-  readonly #fetch: PosthornFetch;
+  readonly #transport: HttpTransport;
 
   constructor(options: PosthornClientOptions) {
     if (typeof options.baseUrl !== "string" || options.baseUrl.trim().length === 0) {
@@ -369,16 +321,17 @@ export class PosthornClient {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new TypeError("PosthornClient: timeoutMs must be a non-negative finite number");
     }
-    // Strip trailing slashes so `${base}${path}` never doubles a separator.
-    this.#baseUrl = options.baseUrl.replace(/\/+$/, "");
-    this.#apiKey = options.apiKey;
-    this.#timeoutMs = timeoutMs;
-    this.#fetch = options.fetch ?? defaultFetch;
+    this.#transport = new HttpTransport({
+      baseUrl: options.baseUrl,
+      bearerToken: options.apiKey,
+      timeoutMs,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+    });
   }
 
   /** Liveness probe — `GET /healthz`. Resolves with `{ status: "ok" }`. */
   async health(): Promise<{ status: string }> {
-    return this.#request<{ status: string }>("GET", "/healthz");
+    return this.#transport.request<{ status: string }>("GET", "/healthz");
   }
 
   /** Accept an event and fan it out to the tenant's subscribed endpoints — `POST /v1/messages`. */
@@ -390,7 +343,7 @@ export class PosthornClient {
     if (input.idempotencyKey !== undefined) {
       body["idempotencyKey"] = input.idempotencyKey;
     }
-    return this.#request<SendMessageResult>("POST", "/v1/messages", body);
+    return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
   }
 
   /**
@@ -408,7 +361,7 @@ export class PosthornClient {
       query.set("cursor", params.cursor);
     }
     const qs = query.toString();
-    return this.#request<MessageListPage>(
+    return this.#transport.request<MessageListPage>(
       "GET",
       `/v1/messages${qs.length > 0 ? `?${qs}` : ""}`,
     );
@@ -416,7 +369,7 @@ export class PosthornClient {
 
   /** Read a message and its per-endpoint delivery statuses — `GET /v1/messages/:id`. */
   async getMessage(id: string): Promise<MessageWithDeliveries> {
-    return this.#request<MessageWithDeliveries>(
+    return this.#transport.request<MessageWithDeliveries>(
       "GET",
       `/v1/messages/${encodeURIComponent(id)}`,
     );
@@ -429,7 +382,7 @@ export class PosthornClient {
    * *history* behind {@link PosthornClient.getMessage}'s current-state view.
    */
   async listMessageAttempts(id: string): Promise<readonly DeliveryAttemptView[]> {
-    const res = await this.#request<{ data: readonly DeliveryAttemptView[] }>(
+    const res = await this.#transport.request<{ data: readonly DeliveryAttemptView[] }>(
       "GET",
       `/v1/messages/${encodeURIComponent(id)}/attempts`,
     );
@@ -444,7 +397,7 @@ export class PosthornClient {
    * deliveries still pending/in-flight/succeeded are left untouched.
    */
   async retryMessage(id: string): Promise<RetryMessageResponse> {
-    return this.#request<RetryMessageResponse>(
+    return this.#transport.request<RetryMessageResponse>(
       "POST",
       `/v1/messages/${encodeURIComponent(id)}/retry`,
     );
@@ -452,7 +405,7 @@ export class PosthornClient {
 
   /** List the tenant's endpoints — `GET /v1/endpoints`. */
   async listEndpoints(): Promise<readonly EndpointView[]> {
-    const res = await this.#request<{ data: readonly EndpointView[] }>(
+    const res = await this.#transport.request<{ data: readonly EndpointView[] }>(
       "GET",
       "/v1/endpoints",
     );
@@ -469,12 +422,12 @@ export class PosthornClient {
     if (input.description !== undefined) body["description"] = input.description;
     if (input.eventTypes !== undefined) body["eventTypes"] = input.eventTypes;
     if (input.disabled !== undefined) body["disabled"] = input.disabled;
-    return this.#request<CreatedEndpoint>("POST", "/v1/endpoints", body);
+    return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
   /** Fetch one endpoint — `GET /v1/endpoints/:id`. */
   async getEndpoint(id: string): Promise<EndpointView> {
-    return this.#request<EndpointView>(
+    return this.#transport.request<EndpointView>(
       "GET",
       `/v1/endpoints/${encodeURIComponent(id)}`,
     );
@@ -488,7 +441,7 @@ export class PosthornClient {
     if (patch.description !== undefined) body["description"] = patch.description;
     if (patch.eventTypes !== undefined) body["eventTypes"] = patch.eventTypes;
     if (patch.disabled !== undefined) body["disabled"] = patch.disabled;
-    return this.#request<EndpointView>(
+    return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,
       body,
@@ -497,7 +450,7 @@ export class PosthornClient {
 
   /** Delete an endpoint — `DELETE /v1/endpoints/:id`. */
   async deleteEndpoint(id: string): Promise<void> {
-    await this.#request<void>(
+    await this.#transport.request<void>(
       "DELETE",
       `/v1/endpoints/${encodeURIComponent(id)}`,
     );
@@ -519,7 +472,7 @@ export class PosthornClient {
     const body: Record<string, unknown> = {};
     if (input.secret !== undefined) body["secret"] = input.secret;
     if (input.overlapMs !== undefined) body["overlapMs"] = input.overlapMs;
-    return this.#request<CreatedEndpoint>(
+    return this.#transport.request<CreatedEndpoint>(
       "POST",
       `/v1/endpoints/${encodeURIComponent(id)}/rotate-secret`,
       body,
@@ -539,100 +492,9 @@ export class PosthornClient {
     if (params.from !== undefined) query.set("from", params.from);
     if (params.to !== undefined) query.set("to", params.to);
     const qs = query.toString();
-    return this.#request<TenantUsage>(
+    return this.#transport.request<TenantUsage>(
       "GET",
       `/v1/usage${qs.length > 0 ? `?${qs}` : ""}`,
     );
   }
-
-  /**
-   * Issue one request: build headers, apply the timeout, dispatch via the injected
-   * `fetch`, then map the response — JSON-parse a 2xx body (or `undefined` for an
-   * empty/`204`), and turn a non-2xx into a {@link PosthornApiError}.
-   */
-  async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${this.#apiKey}`,
-      accept: "application/json",
-    };
-    const init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal } = {
-      method,
-      headers,
-    };
-    if (body !== undefined) {
-      headers["content-type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-
-    const controller = this.#timeoutMs > 0 ? new AbortController() : null;
-    const timer =
-      controller !== null
-        ? setTimeout(() => controller.abort(), this.#timeoutMs)
-        : null;
-    if (controller !== null) {
-      init.signal = controller.signal;
-    }
-
-    let res: PosthornResponse;
-    try {
-      res = await this.#fetch(this.#baseUrl + path, init);
-    } catch (err) {
-      if (controller?.signal.aborted === true) {
-        throw new PosthornTimeoutError(
-          `request ${method} ${path} timed out after ${this.#timeoutMs}ms`,
-        );
-      }
-      throw new PosthornError(
-        `network error issuing ${method} ${path}: ${errorMessage(err)}`,
-        { cause: err },
-      );
-    } finally {
-      if (timer !== null) {
-        clearTimeout(timer);
-      }
-    }
-
-    const text = await res.text();
-    if (res.status >= 200 && res.status < 300) {
-      if (res.status === 204 || text.length === 0) {
-        return undefined as T;
-      }
-      try {
-        return JSON.parse(text) as T;
-      } catch (err) {
-        throw new PosthornError(
-          `failed to parse ${method} ${path} response as JSON: ${errorMessage(err)}`,
-          { cause: err },
-        );
-      }
-    }
-    throw toApiError(res.status, text);
-  }
-}
-
-/** Best-effort message extraction from an unknown thrown value. */
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/** Map a non-2xx response into a {@link PosthornApiError}, reading the standard envelope. */
-function toApiError(status: number, text: string): PosthornApiError {
-  let code = `http_${status}`;
-  let message = text.length > 0 ? text : `request failed with status ${status}`;
-  if (text.length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(text);
-      if (parsed !== null && typeof parsed === "object" && "error" in parsed) {
-        const error = (parsed as { error: unknown }).error;
-        if (error !== null && typeof error === "object") {
-          const e = error as { code?: unknown; message?: unknown };
-          if (typeof e.code === "string") code = e.code;
-          if (typeof e.message === "string") message = e.message;
-        }
-      }
-    } catch {
-      // Not the JSON envelope (e.g. a proxy's HTML 502); keep the fallbacks.
-    }
-  }
-  return new PosthornApiError(status, code, message);
 }

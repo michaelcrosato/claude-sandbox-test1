@@ -4,6 +4,84 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 28: admin / control-plane SDK (`PosthornAdminClient`)
+
+**Repo truth at start:** clean main @ `569fce5` (iter 27, tenant self-service `GET /v1/usage`) — a real clean
+baseline, not an interrupted tick (git clean; the iter-27 LOOP_LOG entry is present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **698/698, 32 files**, `npm run build` clean,
+integrity + local gate exit 0. Node 24.15. The GOAL→PROJECT reconciliation stands (Posthorn; the GitHub
+check is settled in PROJECT §1 — re-searching for a new project 28 ticks in would be anti-leverage).
+
+**High-leverage move chosen (checklist #3):** Build the typed **admin / control-plane SDK**
+(`PosthornAdminClient`), the explicitly-deferred next item across iters. Reasoning, consistent with the
+iters-24–27 strategy (the sending core is mature and exhaustively tested → its marginal polish is low value;
+advancing the *profit phase* P5 is high value, the GOAL's prime filter): the control plane (`/v1/admin/*`,
+9 routes) was **HTTP-only** — the tenant `PosthornClient` covers tenant routes, but a hosted operator (and
+the eventual P5 **dashboard**, the largest remaining piece) had to hand-roll `fetch` to provision tenants.
+A first-class SDK is a *named* differentiator in the wedge; the admin half completes it and is the typed
+client the dashboard will be built on (so this maximizes *systemic* leverage, not just local value). It beat
+the alternatives on the loop's hard constraint — full local validatability: Stripe billing needs an external
+account (ungateable); a pricing engine risks inventing pricing *policy* (a human business decision) + larger
+scope; per-tenant *delivery* usage needs a riskier recording rollup; `lastUsedAt` / attempt-pagination are
+narrow polish. This is a clean, deterministic, fully-gate-validatable unit on a proven pattern.
+
+**Decisive design calls.**
+- **No-drift refactor first.** Rather than duplicate ~60 lines of request mechanics across two clients
+  (a real drift hazard — the very thing the project's conformance discipline fights), extracted the shared
+  transport — the `fetch` contract types, the three error classes (`PosthornError`/`PosthornApiError`/
+  `PosthornTimeoutError`), `DEFAULT_TIMEOUT_MS`, and the `request` mechanic (Bearer envelope, timeout/abort,
+  2xx-JSON / 204-void parsing, `{error:{code,message}}` mapping) — into a new `src/sdk/http.ts`
+  `HttpTransport` that **both** clients delegate to. `client.ts` re-exports the moved public symbols, so every
+  existing import path (`from "posthorn"` / the barrel) and the 29 existing client tests stay green unchanged
+  — they *are* the regression net for the refactor.
+- **`getAppUsage`'s range is required** (`{from,to}` inclusive `YYYY-MM-DD`), encoded in the type — because
+  the admin metering route *mandates* an explicit window (omitting either → `400`), a genuine wire-contract
+  difference from the tenant `GET /v1/usage` (which defaults to the current month). Faithful-to-the-wire, not
+  copy-paste.
+- **SDK-owned wire views** (`AdminApp`/`AdminApiKey`/`AdminUsage`/…), never the server's domain types — an
+  app/key carries no secret except the one-time `secret` from `createApiKey`, exactly as the wire returns.
+
+**Built this tick (`src/sdk/`):**
+- **`http.ts`** (new) — the shared `HttpTransport` + the relocated error/fetch surface.
+- **`client.ts`** (refactor) — `PosthornClient` now holds an `HttpTransport`; constructor validation
+  (TypeError on empty `baseUrl`/`apiKey`/negative timeout) preserved; shared symbols re-exported.
+- **`admin-client.ts`** (new) — `PosthornAdminClient` over the same transport, covering all 9 admin routes:
+  `createApp`/`listApps`/`getApp`/`updateApp`/`deleteApp`, `createApiKey`/`listApiKeys`/`revokeApiKey`,
+  `getAppUsage`. Disabled surface → `404` `PosthornApiError`; wrong/tenant-key token → `401`.
+- **`index.ts`** — barrel exports `PosthornAdminClient` + its wire types.
+- **Docs:** PROJECT.md (admin-SDK bullet ✅, removed from deferred), README (feature line + an operator
+  admin-SDK quickstart). No OpenAPI change — routes are unchanged; the doc already covers non-TS admin
+  consumers, and this completes the typed-TS path.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **719/719, 33 files**
+(was 698; **+21** in the new `admin-client.test.ts`: in-process `node:http` CRUD incl. **a minted key
+authenticates a tenant `PosthornClient`, revoke locks it out, delete cascades its keys**, metered usage over
+a required range, inverted-range→400; surface gating — disabled→404, wrong-token→401, **tenant-key-as-admin
+→401**; injected-`fetch` transport — Bearer header, trailing-slash, path-encoding, error-envelope mapping,
+204→void, timeout; a running-gateway e2e). The 29 pre-existing `client.test.ts` tests passed unchanged,
+confirming the transport extraction was behavior-preserving. `npm run build` clean. Integrity gate exit 0
+(three hash-protected files untouched); local gate exit 0. First full run hit the known one-off
+"Worker exited unexpectedly" tinypool flake ([[vitest-tinypool-flaky-worker-exit]]) — 0 assertion failures;
+a clean re-run was **719/719**.
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway on a
+**file-backed** dir with an admin token; **provisioned a tenant (quota 100) + minted a key entirely over
+HTTP via the built `PosthornAdminClient`**, then drove the data plane with the built `PosthornClient`
+(create endpoint → send) — the running worker delivered and the webhook **verified** against the
+admin-minted endpoint's secret through production ESM; `admin.getAppUsage` read `total:1` over HTTP; then
+**restarted on the same `node:sqlite` files** and saw the tenant, its quota, and its usage all persist
+(durable, no Redis). Exit 0; temp script removed; git shows only the 5 intended source/doc files (+ README).
+
+**State:** GREEN → committing to main as Iteration 28. Net: Posthorn's first-class TS SDK now spans **both**
+planes — tenants send/observe via `PosthornClient`, operators provision/meter via `PosthornAdminClient` —
+over one shared, non-drifting transport; the typed foundation the P5 dashboard renders on. **Standing
+deferred (next candidates):** usage-based billing integration (Stripe; needs an external account — ungateable);
+per-tenant *delivery* usage (needs a recording rollup — attempts aren't tenant-indexed); per-key `lastUsedAt`;
+attempt-log pagination; an operator deploy/monitoring guide; and the rest of P5 (dashboard UI).
+
+---
+
 ## 2026-05-23 — Iteration 27: P5 — tenant self-service usage & quota (`GET /v1/usage`)
 
 **Repo truth at start:** clean main @ `38fed27` (iter 26, monthly quota enforcement) — a real clean

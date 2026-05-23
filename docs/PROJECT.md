@@ -425,11 +425,35 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     key authenticates a tenant route, revoke denies, delete cascades**), config parse/validate tests, a
     running-gateway e2e (provision → mint → deliver+**verify** → revoke→401), and a **compiled-`dist`** smoke
     (provision-over-HTTP on the real `node:sqlite` file path; delivery verifies through production ESM; the
-    tenant persists across a restart). The keyless CLI remains the local-shell bootstrap path; an *admin*
-    SDK client is deferred (the OpenAPI doc already covers cross-language admin consumers).
-  - **Deferred (next ticks):** an *admin* SDK client (`PosthornAdminClient`); per-key `lastUsedAt`; and
-    pagination/retention for the attempt log once a single message's attempt count can grow large (today it
-    is bounded by endpoints × the retry budget).
+    tenant persists across a restart). The keyless CLI remains the local-shell bootstrap path; the typed
+    *admin* SDK client landed the next tick (below).
+  - **Admin / control-plane SDK — `PosthornAdminClient` ✅ (this tick):** the typed control-plane
+    counterpart to the tenant `PosthornClient` — `src/sdk/admin-client.ts`. A hosted operator (and the
+    eventual P5 dashboard) can now *provision* a deployment from typed TS instead of hand-rolling `fetch`
+    against `/v1/admin/*`: `createApp`/`listApps`/`getApp`/`updateApp`/`deleteApp`,
+    `createApiKey`/`listApiKeys`/`revokeApiKey`, and `getAppUsage` — the full 9-route admin surface,
+    authenticated by the operator **admin token** (a distinct credential from a tenant key, sent as the same
+    `Authorization: Bearer …` envelope). Faithful to the SDK's wedge: **zero runtime dependencies** (platform
+    `fetch`, injectable), **SDK-owned wire views** (an app/key carries no secret material except the one-time
+    `secret` from `createApiKey`), and the same error model. **`getAppUsage`'s range is required** (`from`/`to`
+    inclusive `YYYY-MM-DD`) because the admin metering route mandates an explicit window — unlike the tenant
+    `GET /v1/usage`, which defaults to the current month (a real wire-contract difference the types now
+    encode). The disabled-by-default admin surface surfaces as a `404` `PosthornApiError` (hidden, not merely
+    forbidden), a wrong/tenant-key token as `401`. **No-drift refactor:** the request mechanics (the `fetch`
+    contract, the three error classes, timeout/abort, the `{error:{code,message}}` mapping) were extracted
+    from `client.ts` into a shared `src/sdk/http.ts` `HttpTransport` that **both** clients delegate to, so a
+    fix to one lands in both — the same one-shared-rule discipline the store backends get from conformance
+    suites; the public symbols are re-exported from `client.ts` so every existing import path stays stable.
+    Proven by an in-process `node:http` suite (full CRUD; **a minted key authenticates a tenant
+    `PosthornClient`, revoke locks it out, delete cascades**; disabled→404; wrong/tenant-key token→401;
+    metered usage), injected-`fetch` transport tests (Bearer header, trailing-slash, path-encoding, error
+    envelope, 204→void, timeout), a **running-gateway e2e** (provision over the admin SDK → the minted key
+    delivers a **verified** webhook → admin SDK reads usage → revoke→401), and a **compiled-`dist` smoke**
+    (provision-over-HTTP through production ESM on the real `node:sqlite` file path; tenant + quota + usage
+    persist across a restart). The OpenAPI doc already covers *non-TS* admin consumers; this completes the
+    typed-TS path.
+  - **Deferred (next ticks):** per-key `lastUsedAt`; and pagination/retention for the attempt log once a
+    single message's attempt count can grow large (today it is bounded by endpoints × the retry budget).
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a

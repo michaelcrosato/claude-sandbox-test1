@@ -322,6 +322,19 @@ export {
 } from "./sdk/client.js";
 
 export {
+  PosthornAdminClient,
+  type PosthornAdminClientOptions,
+  type AdminApp,
+  type CreateAppInput,
+  type UpdateAppInput,
+  type AdminApiKey,
+  type CreatedAdminApiKey,
+  type AdminUsage,
+  type AdminUsageDay,
+  type GetAppUsageParams,
+} from "./sdk/admin-client.js";
+
+export {
   verifyWebhook,
   isValidWebhook,
   type IncomingHeaders,
