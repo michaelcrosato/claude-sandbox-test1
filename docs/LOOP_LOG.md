@@ -4,6 +4,81 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 30: endpoint health + automatic disabling of dead endpoints
+
+**Repo truth at start:** clean main @ `a5930ea` (iter 29, per-tenant delivery usage) — a real clean
+baseline, not an interrupted tick (git clean; the iter-29 LOOP_LOG entry is present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **734/734, 33 files**, `npm run build` clean,
+integrity + local gate exit 0. Node 24.15. GOAL→PROJECT reconciliation stands (Posthorn; the GitHub check
+is settled in PROJECT §1 — re-searching 30 ticks in is anti-leverage).
+
+**High-leverage move chosen (checklist #3):** Build **endpoint health tracking + automatic disabling**.
+The reasoning: the two biggest *pure*-P5 items are blocked or oversized — Stripe billing needs an external
+account (ungateable in the loop), and the dashboard requires secure browser **session auth**, a
+security-sensitive, multi-tick subsystem I will not rush into one green tick *in a security product*. Among
+moves I can land as a complete, fully-validated green unit, auto-disable is the highest leverage and is
+**not** mere core polish: iter-29 made delivery **operations** a metered/billed unit, and a permanently-dead
+endpoint silently burns the full ~28h retry budget on *every* future message forever — inflating wasted
+operations (provider cost) and the tenant's bill (churn). Auto-disable caps that bleed; it is a named
+market-parity feature (Svix), exceeded here on transparency (health is API/SDK-observable, the window is
+operator-configurable, re-enable resets cleanly). It builds on the proven store+worker+FSM pattern → confident
+green. Beat the alternatives on the loop's hard constraint, full local validatability.
+
+**Decisive design calls.**
+- **Time-based, not count-based.** The default retry schedule is 8 attempts over ~28h, so a single
+  dead-letter already ≈ a day of failure; a *count* threshold would disable a high-volume endpoint during a
+  *recoverable* outage (its burst of in-flight messages all dead-letter together). A continuous-failure
+  *window* is traffic-independent and matches the market. A single isolated failure can never trip it (streak
+  duration 0); a success resets the streak; a window of `0` turns the feature off (health still tracked).
+- **One atomic, no-drift store rule.** A new `EndpointStore.recordDeliveryOutcome(id, outcome, now,
+  autoDisableAfterMs?)` applies the pure `evaluateEndpointHealth` inside the store, both backends + one shared
+  conformance suite — the same anti-drift discipline as every other store op. The **success hot path takes no
+  write**: a success on an already-healthy endpoint is a no-op (returns the same reference); the SQLite backend
+  reads lock-free first and opens a write txn only when state actually changes.
+- **Worker reports, store decides.** The worker gained a best-effort `onDeliveryOutcome` seam (the structural
+  twin of `recordAttempt`/`onTick`), fired only on **terminal** outcomes (a 2xx `succeeded` or a
+  retries-exhausted `failed`) with a non-null `endpointId` — *not* on a retryable failure (not yet evidence)
+  or a `stale` settle. A thrown report routes to `onError` and never blocks/fails a delivery (health is an
+  add-on; delivery is the core). The gateway wires it with the window from config.
+
+**Built this tick:** health fields on `Endpoint` (`consecutiveFailures`/`firstFailureAt`/`lastFailureAt`) +
+`DEFAULT_AUTO_DISABLE_AFTER_MS` (5 days) + the pure `evaluateEndpointHealth` + `applyEndpointUpdate` clearing
+the streak on re-enable; `recordDeliveryOutcome` on both backends (SQLite: 3 columns via a seamless
+`ALTER TABLE` migration backfilling healthy, a health-only UPDATE stmt, lock-free success path); the worker
+`onDeliveryOutcome` seam + best-effort `#reportEndpointOutcome`; gateway wiring +
+`POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` config (default 5d, `0`=off); health on `endpointView`, the OpenAPI
+`Endpoint` schema (3 fields, forced into `required`+`properties`), and the SDK `EndpointView`; barrel exports.
+Docs: README feature bullet, PROJECT.md (P3 ✅ + deferred `endpoint.disabled` event), this entry.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **769/769, 33 files**
+(was 734; **+35**: endpoint pure-policy `evaluateEndpointHealth` + re-enable 11; endpoint conformance ×2
+backends +14 (7 cases each: unknown-id no-op / success-no-write / failure-opens-streak / success-resets /
+window-auto-disable / window-0-off / re-enable-clears) + a SQLite **migration** test; worker +7
+(succeeded→succeeded, dead-letter→failed, retryable-not-reported, no-endpointId-skip, best-effort-absorb, +
+the worker→store→resolver end-to-end auto-disable); config +3; HTTP-view +1). `npm run build` clean. Integrity
+gate exit 0 (three hash-protected files untouched); local gate exit 0. No tinypool flake this run
+([[vitest-tinypool-flaky-worker-exit]]).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** ran a script importing the **built**
+`dist`: (A) a fresh `SqliteEndpointStore` on a real file — a sustained-failure streak auto-disables and
+**persists across a reopen** (durable, no Redis); (A2) a hand-built **pre-health** (rotation-era) DB opens,
+backfills the row to healthy, and then auto-disables — proving the `ALTER TABLE` migration through production
+ESM (incl. the `node:sqlite` `createRequire` path); (B) a **running gateway** over a real socket exposes the
+endpoint health fields via `GET /v1/endpoints/:id` (and still omits the secret), with the configured window
+parsed. 9/9 PASS, exit 0; temp script removed; git shows only the 18 intended source/test files (dist
+gitignored).
+
+**State:** GREEN → committing to main as Iteration 30. Net: a permanently-dead endpoint is now automatically
+taken out of rotation after sustained failure — capping wasted, billed delivery operations — with the health
+state fully observable and the policy operator-tunable, all without a single new runtime dependency. **Standing
+deferred (next candidates):** usage-based billing integration (Stripe; needs an external account — ungateable);
+the P5 dashboard UI (largest remaining; needs secure session auth — a deliberate multi-tick effort); an
+`endpoint.disabled` notification event; per-key `lastUsedAt`; attempt-log pagination/retention; an operator
+deploy/monitoring guide.
+
+---
+
 ## 2026-05-23 — Iteration 29: P5 — per-tenant delivery (operations) usage metering
 
 **Repo truth at start:** clean main @ `a29a6b5` (iter 28, admin SDK) — a real clean baseline, not an

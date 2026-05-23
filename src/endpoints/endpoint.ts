@@ -76,6 +76,23 @@ export interface Endpoint {
    * delivers — see `endpoint-resolver.ts`).
    */
   readonly disabled: boolean;
+  /**
+   * Number of consecutive *dead-lettered* deliveries to this endpoint since its last
+   * successful delivery (or since creation). Reset to `0` by any success. Surfaced
+   * for observability ("why is this endpoint unhealthy?") and, together with
+   * {@link Endpoint.firstFailureAt}, the basis for automatic disabling — see
+   * {@link evaluateEndpointHealth}.
+   */
+  readonly consecutiveFailures: number;
+  /**
+   * Epoch ms when the current run of consecutive failures began, or `null` when the
+   * endpoint is healthy (no active failure streak). Once a delivery has been failing
+   * continuously for at least the configured window measured from this instant, the
+   * endpoint is auto-disabled.
+   */
+  readonly firstFailureAt: number | null;
+  /** Epoch ms of the most recent dead-lettered delivery, or `null` when healthy. */
+  readonly lastFailureAt: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
   /** Time of the last mutation, epoch ms. */
@@ -149,6 +166,24 @@ export interface EndpointStore {
    * {@link create}'s. Throws {@link UnknownEndpointError} if the id is unknown.
    */
   rotateSecret(id: string, options?: RotateSecretOptions): Promise<Endpoint>;
+  /**
+   * Record a *terminal* delivery outcome against an endpoint's health (see
+   * {@link evaluateEndpointHealth}) and persist any resulting change — including an
+   * **automatic disable** once the endpoint has been failing continuously for
+   * `autoDisableAfterMs` (default {@link DEFAULT_AUTO_DISABLE_AFTER_MS}; `0` turns
+   * auto-disabling off, health still tracked).
+   *
+   * Returns the resulting snapshot — the *unchanged* one when a healthy endpoint
+   * succeeds (the no-write hot path, since most deliveries succeed) — or `null` if
+   * the id is unknown (e.g. the endpoint was deleted), which is a no-op. Callers
+   * (the delivery worker) report best-effort and ignore the result.
+   */
+  recordDeliveryOutcome(
+    id: string,
+    outcome: DeliveryHealthOutcome,
+    nowMs: number,
+    autoDisableAfterMs?: number,
+  ): Promise<Endpoint | null>;
   /** Delete an endpoint. Returns `true` if it existed, `false` otherwise. */
   delete(id: string): Promise<boolean>;
 }
@@ -336,6 +371,12 @@ export function applyEndpointUpdate(
   patch: EndpointUpdate,
   nowMs: number,
 ): Endpoint {
+  const nextDisabled =
+    "disabled" in patch ? normalizeDisabled(patch.disabled) : current.disabled;
+  // Re-enabling a (possibly auto-)disabled endpoint clears its failure streak so it
+  // resumes from a clean slate — otherwise a stale streak would immediately re-trip
+  // auto-disable on the next failure. Recovery is a deliberate operator action.
+  const reEnabled = current.disabled && !nextDisabled;
   return {
     id: current.id,
     appId: current.appId,
@@ -352,8 +393,10 @@ export function applyEndpointUpdate(
       "eventTypes" in patch
         ? normalizeEventTypes(patch.eventTypes)
         : current.eventTypes,
-    disabled:
-      "disabled" in patch ? normalizeDisabled(patch.disabled) : current.disabled,
+    disabled: nextDisabled,
+    consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
+    firstFailureAt: reEnabled ? null : current.firstFailureAt,
+    lastFailureAt: reEnabled ? null : current.lastFailureAt,
     createdAt: current.createdAt,
     updatedAt: nowMs,
   };
@@ -424,5 +467,104 @@ export function rotateEndpointSecret(
     secret,
     previousSecrets,
     updatedAt: nowMs,
+  };
+}
+
+/**
+ * Default window before an endpoint that is failing continuously is automatically
+ * disabled: **5 days**. Long enough that a sustained-but-recoverable receiver outage
+ * (which the multi-attempt, ~28h retry schedule already absorbs *per message*) does
+ * not trip it, yet short enough to stop indefinitely wasting delivery attempts — and
+ * the tenant's metered delivery operations — on a permanently-dead endpoint.
+ * Configurable via `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS`; `0` turns auto-disabling
+ * off entirely (health is still tracked and surfaced over the API).
+ */
+export const DEFAULT_AUTO_DISABLE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
+
+/** A *terminal* delivery outcome, as reported to endpoint-health tracking. */
+export type DeliveryHealthOutcome = "succeeded" | "failed";
+
+/** The result of folding one delivery outcome into an endpoint's health. */
+export interface EndpointHealthEvaluation {
+  /**
+   * The next endpoint snapshot. The **same reference** as the input `current` when
+   * nothing changed, so a backend can cheaply skip the persist (`changed === false`).
+   */
+  readonly endpoint: Endpoint;
+  /** Whether any field changed — i.e. whether a backend should persist. */
+  readonly changed: boolean;
+  /** Whether this evaluation flipped `disabled` from `false` to `true` (auto-disable). */
+  readonly autoDisabled: boolean;
+}
+
+/**
+ * Pure endpoint-health state machine: fold one *terminal* delivery outcome into an
+ * endpoint's health and return the next snapshot.
+ *
+ * - A `succeeded` outcome clears any failure streak (the endpoint is demonstrably
+ *   alive). It is a **no-op** when the endpoint was already healthy — so the steady
+ *   state (success after success) writes nothing.
+ * - A `failed` (dead-lettered) outcome opens or extends the streak. Once the streak
+ *   has lasted at least `autoDisableAfterMs`, measured from {@link Endpoint.firstFailureAt},
+ *   the endpoint is auto-disabled so fan-out stops sending it new work. A single
+ *   isolated failure can never disable (its streak duration is `0`); *sustained*
+ *   failure is required. `autoDisableAfterMs` of `0` disables auto-disabling entirely.
+ *
+ * A success never *re*-enables a disabled endpoint — recovery is a deliberate operator
+ * action ({@link applyEndpointUpdate} with `disabled: false`, which also clears the
+ * streak). Pure and shared so every backend agrees exactly; `updatedAt` advances to
+ * `nowMs` only when something changed. Throws {@link TypeError} on non-finite inputs.
+ */
+export function evaluateEndpointHealth(
+  current: Endpoint,
+  outcome: DeliveryHealthOutcome,
+  nowMs: number,
+  autoDisableAfterMs: number = DEFAULT_AUTO_DISABLE_AFTER_MS,
+): EndpointHealthEvaluation {
+  if (!Number.isFinite(nowMs)) {
+    throw new TypeError("nowMs must be a finite number");
+  }
+  if (!Number.isFinite(autoDisableAfterMs) || autoDisableAfterMs < 0) {
+    throw new TypeError("autoDisableAfterMs must be a non-negative finite number");
+  }
+
+  if (outcome === "succeeded") {
+    const alreadyHealthy =
+      current.consecutiveFailures === 0 &&
+      current.firstFailureAt === null &&
+      current.lastFailureAt === null;
+    if (alreadyHealthy) {
+      return { endpoint: current, changed: false, autoDisabled: false };
+    }
+    return {
+      endpoint: {
+        ...current,
+        consecutiveFailures: 0,
+        firstFailureAt: null,
+        lastFailureAt: null,
+        updatedAt: nowMs,
+      },
+      changed: true,
+      autoDisabled: false,
+    };
+  }
+
+  // `failed`: open the streak (first failure) or extend it.
+  const firstFailureAt = current.firstFailureAt ?? nowMs;
+  const shouldDisable =
+    autoDisableAfterMs > 0 &&
+    !current.disabled &&
+    nowMs - firstFailureAt >= autoDisableAfterMs;
+  return {
+    endpoint: {
+      ...current,
+      consecutiveFailures: current.consecutiveFailures + 1,
+      firstFailureAt,
+      lastFailureAt: nowMs,
+      disabled: current.disabled || shouldDisable,
+      updatedAt: nowMs,
+    },
+    changed: true,
+    autoDisabled: shouldDisable,
   };
 }

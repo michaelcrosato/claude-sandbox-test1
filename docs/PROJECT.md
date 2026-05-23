@@ -452,8 +452,37 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     (provision-over-HTTP through production ESM on the real `node:sqlite` file path; tenant + quota + usage
     persist across a restart). The OpenAPI doc already covers *non-TS* admin consumers; this completes the
     typed-TS path.
-  - **Deferred (next ticks):** per-key `lastUsedAt`; and pagination/retention for the attempt log once a
-    single message's attempt count can grow large (today it is bounded by endpoints × the retry budget).
+  - **Endpoint health + automatic disabling ✅ (this tick):** the self-protection that stops Posthorn
+    wasting deliveries — and the tenant's now-metered **operations** — on a permanently-dead endpoint, a
+    named market-parity feature (Svix auto-disables consistently-failing endpoints). The `Endpoint` gains
+    a health sub-record (`consecutiveFailures` + the `firstFailureAt`/`lastFailureAt` streak, all
+    surfaced over the API/SDK/OpenAPI for transparency); a pure `evaluateEndpointHealth(current, outcome,
+    now, autoDisableAfterMs)` folds one **terminal** delivery outcome into that state — a `succeeded`
+    clears the streak (and is a **no-op on an already-healthy endpoint**, so the success hot path takes no
+    write), a dead-lettered `failed` opens/extends it, and once the streak has lasted ≥ the configured
+    window the endpoint is auto-disabled so fan-out (and the resolver) stop sending it new work. The
+    policy is **time-based, not count-based** (deliberate: the ~28h, 8-attempt retry schedule means a
+    single dead-letter already represents ~a day of failure, so a count threshold would disable a
+    high-volume endpoint during a *recoverable* outage; a window is traffic-independent). A single
+    isolated failure can never disable (its streak duration is 0 — sustained failure is required); a
+    manual re-enable (`PATCH …{disabled:false}`) clears the streak for a clean restart. Applied as one
+    atomic, no-drift store rule — a new **`EndpointStore.recordDeliveryOutcome`** (both backends, one
+    shared conformance suite; the SQLite backend adds three columns via a seamless `ALTER TABLE` migration
+    that backfills existing rows as healthy, and uses a **lock-free read on the success hot path**, taking
+    a write txn only when state actually changes). The worker reports the terminal verdict through a new
+    best-effort `onDeliveryOutcome` seam (the structural twin of `recordAttempt`/`onTick` — the worker
+    holds no health logic; a failed health write is routed to `onError` and never blocks a delivery),
+    wired in the gateway with the window from `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (default 5 days;
+    `0` = off, health still tracked). Proven by pure-policy tests, the expanded endpoint conformance suite
+    (×2 backends), a SQLite **migration** test, worker seam tests + a **worker→store→resolver end-to-end**
+    auto-disable test (the dead endpoint is disabled and the resolver then declines it — runaway delivery
+    stops), config tests, an HTTP-view test, and a **compiled-`dist` smoke** (migration backfill +
+    auto-disable + restart persistence on the real `node:sqlite` file, and the HTTP health view over a
+    running gateway, all through production ESM).
+  - **Deferred (next ticks):** per-key `lastUsedAt`; pagination/retention for the attempt log once a
+    single message's attempt count can grow large (today it is bounded by endpoints × the retry budget);
+    and an `endpoint.disabled` notification event when an endpoint is auto-disabled (Svix emits one; today
+    the disabled state is observable via the API/SDK, which a tenant polls or sees on next use).
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a

@@ -3,8 +3,10 @@ import {
   activeSigningSecrets,
   applyEndpointUpdate,
   createEndpointId,
+  DEFAULT_AUTO_DISABLE_AFTER_MS,
   DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   endpointSubscribesTo,
+  evaluateEndpointHealth,
   MAX_PREVIOUS_SECRETS,
   normalizeNewEndpoint,
   rotateEndpointSecret,
@@ -73,6 +75,9 @@ describe("applyEndpointUpdate", () => {
     description: "d",
     eventTypes: ["a"],
     disabled: false,
+    consecutiveFailures: 0,
+    firstFailureAt: null,
+    lastFailureAt: null,
     createdAt: 1_000,
     updatedAt: 1_000,
   };
@@ -108,6 +113,133 @@ describe("applyEndpointUpdate", () => {
     const swapped = applyEndpointUpdate(withRetired, { secret: "whsec_hard" }, 2_000);
     expect(swapped.secret).toBe("whsec_hard");
     expect(swapped.previousSecrets).toEqual([{ secret: "whsec_old", expiresAt: 9_000 }]);
+  });
+
+  it("clears the failure streak when a disabled endpoint is re-enabled", () => {
+    const unhealthy: Endpoint = {
+      ...base,
+      disabled: true,
+      consecutiveFailures: 7,
+      firstFailureAt: 100,
+      lastFailureAt: 800,
+    };
+    const reEnabled = applyEndpointUpdate(unhealthy, { disabled: false }, 2_000);
+    expect(reEnabled.disabled).toBe(false);
+    expect(reEnabled.consecutiveFailures).toBe(0);
+    expect(reEnabled.firstFailureAt).toBeNull();
+    expect(reEnabled.lastFailureAt).toBeNull();
+  });
+
+  it("preserves health on an unrelated patch (no re-enable)", () => {
+    const unhealthy: Endpoint = {
+      ...base,
+      consecutiveFailures: 3,
+      firstFailureAt: 100,
+      lastFailureAt: 800,
+    };
+    const patched = applyEndpointUpdate(unhealthy, { description: "x" }, 2_000);
+    expect(patched.consecutiveFailures).toBe(3);
+    expect(patched.firstFailureAt).toBe(100);
+    expect(patched.lastFailureAt).toBe(800);
+  });
+});
+
+describe("evaluateEndpointHealth", () => {
+  const healthy: Endpoint = {
+    id: "ep_1",
+    appId: "app_1",
+    url: "https://x.test/a",
+    secret: "whsec_a",
+    previousSecrets: [],
+    description: "",
+    eventTypes: null,
+    disabled: false,
+    consecutiveFailures: 0,
+    firstFailureAt: null,
+    lastFailureAt: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+
+  it("treats a success on a healthy endpoint as a no-op (no write, same reference)", () => {
+    const r = evaluateEndpointHealth(healthy, "succeeded", 5_000);
+    expect(r.changed).toBe(false);
+    expect(r.autoDisabled).toBe(false);
+    expect(r.endpoint).toBe(healthy); // unchanged reference → backend skips persist
+  });
+
+  it("a single failure opens the streak but never disables", () => {
+    const r = evaluateEndpointHealth(healthy, "failed", 5_000, 100_000);
+    expect(r.changed).toBe(true);
+    expect(r.autoDisabled).toBe(false);
+    expect(r.endpoint.consecutiveFailures).toBe(1);
+    expect(r.endpoint.firstFailureAt).toBe(5_000);
+    expect(r.endpoint.lastFailureAt).toBe(5_000);
+    expect(r.endpoint.disabled).toBe(false);
+    expect(r.endpoint.updatedAt).toBe(5_000);
+  });
+
+  it("a success after failures resets the streak (and advances updatedAt)", () => {
+    const failing: Endpoint = {
+      ...healthy,
+      consecutiveFailures: 4,
+      firstFailureAt: 1_000,
+      lastFailureAt: 4_000,
+    };
+    const r = evaluateEndpointHealth(failing, "succeeded", 9_000);
+    expect(r.changed).toBe(true);
+    expect(r.endpoint.consecutiveFailures).toBe(0);
+    expect(r.endpoint.firstFailureAt).toBeNull();
+    expect(r.endpoint.lastFailureAt).toBeNull();
+    expect(r.endpoint.updatedAt).toBe(9_000);
+  });
+
+  it("auto-disables once the streak has lasted at least the window", () => {
+    const opened = evaluateEndpointHealth(healthy, "failed", 1_000, 100_000);
+    expect(opened.endpoint.disabled).toBe(false);
+    // A later failure, once first→now spans the window, flips disabled.
+    const tripped = evaluateEndpointHealth(opened.endpoint, "failed", 1_000 + 100_000, 100_000);
+    expect(tripped.autoDisabled).toBe(true);
+    expect(tripped.endpoint.disabled).toBe(true);
+    expect(tripped.endpoint.consecutiveFailures).toBe(2);
+  });
+
+  it("a window of 0 disables auto-disabling but still tracks failures", () => {
+    const opened = evaluateEndpointHealth(healthy, "failed", 1_000, 0);
+    const later = evaluateEndpointHealth(opened.endpoint, "failed", 1_000 + 10 * 86_400_000, 0);
+    expect(later.autoDisabled).toBe(false);
+    expect(later.endpoint.disabled).toBe(false);
+    expect(later.endpoint.consecutiveFailures).toBe(2);
+  });
+
+  it("never re-flips an already-disabled endpoint (autoDisabled is false), but keeps counting", () => {
+    const disabled: Endpoint = {
+      ...healthy,
+      disabled: true,
+      consecutiveFailures: 9,
+      firstFailureAt: 0,
+      lastFailureAt: 9_000,
+    };
+    const r = evaluateEndpointHealth(disabled, "failed", 1_000_000, 1);
+    expect(r.autoDisabled).toBe(false); // it was already disabled
+    expect(r.endpoint.disabled).toBe(true);
+    expect(r.endpoint.consecutiveFailures).toBe(10);
+  });
+
+  it("defaults the window to DEFAULT_AUTO_DISABLE_AFTER_MS", () => {
+    const opened = evaluateEndpointHealth(healthy, "failed", 0);
+    // Just under the default window → still enabled.
+    const justUnder = evaluateEndpointHealth(opened.endpoint, "failed", DEFAULT_AUTO_DISABLE_AFTER_MS - 1);
+    expect(justUnder.endpoint.disabled).toBe(false);
+    // At the default window → disabled.
+    const at = evaluateEndpointHealth(opened.endpoint, "failed", DEFAULT_AUTO_DISABLE_AFTER_MS);
+    expect(at.endpoint.disabled).toBe(true);
+  });
+
+  it("rejects non-finite inputs", () => {
+    expect(() => evaluateEndpointHealth(healthy, "failed", Number.NaN)).toThrow(TypeError);
+    expect(() => evaluateEndpointHealth(healthy, "failed", 1_000, -1)).toThrow(TypeError);
+    expect(() => evaluateEndpointHealth(healthy, "failed", 1_000, Number.POSITIVE_INFINITY)).toThrow(TypeError);
   });
 });
 
@@ -149,6 +281,9 @@ describe("rotateEndpointSecret", () => {
     description: "",
     eventTypes: null,
     disabled: false,
+    consecutiveFailures: 0,
+    firstFailureAt: null,
+    lastFailureAt: null,
     createdAt: 1_000,
     updatedAt: 1_000,
   };

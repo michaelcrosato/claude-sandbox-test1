@@ -283,6 +283,27 @@ export interface DeliveryWorkerOptions {
    * delivery is the core). Omit to record nothing (the default).
    */
   readonly recordAttempt?: (attempt: NewDeliveryAttempt) => void | Promise<void>;
+  /**
+   * Endpoint-health seam: called once per *terminal* delivery outcome — a 2xx
+   * `succeeded` or a retries-exhausted `failed` (dead-letter) — with the target
+   * `endpointId`, the outcome, and the tick instant. The gateway wires this to
+   * {@link import("../endpoints/endpoint.js").EndpointStore.recordDeliveryOutcome},
+   * which folds the outcome into the endpoint's health and **auto-disables** an
+   * endpoint that has been failing continuously — capping the delivery attempts (and
+   * the tenant's metered operations) wasted on a permanently-dead endpoint. The worker
+   * holds no health logic of its own; it only reports the terminal verdict.
+   *
+   * *Not* called for a retryable failed attempt (not yet terminal — the endpoint may
+   * recover on retry), a `stale` settle (another worker's concern), or a task with no
+   * `endpointId`. Best-effort, exactly like {@link recordAttempt}: a thrown/rejected
+   * report is routed to `onError` and never blocks or fails the delivery (health is an
+   * add-on; delivery is the core). Omit to track nothing (the default).
+   */
+  readonly onDeliveryOutcome?: (
+    endpointId: string,
+    outcome: "succeeded" | "failed",
+    nowMs: number,
+  ) => void | Promise<void>;
 }
 
 function describeError(error: unknown): string {
@@ -315,6 +336,13 @@ export class DeliveryWorker {
   readonly #onTick: ((result: TickResult) => void) | undefined;
   readonly #recordAttempt:
     | ((attempt: NewDeliveryAttempt) => void | Promise<void>)
+    | undefined;
+  readonly #onDeliveryOutcome:
+    | ((
+        endpointId: string,
+        outcome: "succeeded" | "failed",
+        nowMs: number,
+      ) => void | Promise<void>)
     | undefined;
 
   #stopped = false;
@@ -358,6 +386,7 @@ export class DeliveryWorker {
     this.#onError = options.onError;
     this.#onTick = options.onTick;
     this.#recordAttempt = options.recordAttempt;
+    this.#onDeliveryOutcome = options.onDeliveryOutcome;
   }
 
   /** Whether {@link run} is currently looping. */
@@ -553,15 +582,51 @@ export class DeliveryWorker {
       durationMs,
     });
 
-    if (succeeded) {
-      return this.#settleSuccess(task, leaseToken);
+    const outcome = succeeded
+      ? await this.#settleSuccess(task, leaseToken)
+      : await this.#settleFailure(
+          task,
+          leaseToken,
+          error ?? "unknown delivery error",
+          nowMs,
+        );
+    // Report the terminal verdict to endpoint-health tracking (best-effort).
+    await this.#reportEndpointOutcome(task, outcome, nowMs);
+    return outcome;
+  }
+
+  /**
+   * Report a *terminal* delivery outcome to the endpoint-health seam, if wired — the
+   * basis for automatically disabling an endpoint that has been failing continuously
+   * (see {@link import("../endpoints/endpoint.js").evaluateEndpointHealth}). Only
+   * `succeeded` (a 2xx) and `deadLettered` (retries exhausted) are terminal signals;
+   * a `failed` attempt that will be retried is not yet evidence the endpoint is
+   * unhealthy, and a `stale` settle belongs to whichever worker reclaimed the lease.
+   * Skipped when the task carries no `endpointId`. Best-effort, exactly like
+   * {@link #recordDeliveryAttempt}: a thrown/rejected report is routed to `onError`
+   * and never changes the delivery outcome.
+   */
+  async #reportEndpointOutcome(
+    task: DeliveryTask,
+    outcome: TaskOutcome,
+    nowMs: number,
+  ): Promise<void> {
+    const report = this.#onDeliveryOutcome;
+    if (report === undefined || task.endpointId === null) {
+      return;
     }
-    return this.#settleFailure(
-      task,
-      leaseToken,
-      error ?? "unknown delivery error",
-      nowMs,
-    );
+    if (outcome !== "succeeded" && outcome !== "deadLettered") {
+      return;
+    }
+    try {
+      await report(
+        task.endpointId,
+        outcome === "succeeded" ? "succeeded" : "failed",
+        nowMs,
+      );
+    } catch (err) {
+      this.#onError?.(err);
+    }
   }
 
   /**

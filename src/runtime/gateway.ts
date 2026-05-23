@@ -166,6 +166,18 @@ export function createGateway(config: GatewayConfig): Gateway {
     recordAttempt: async (attempt) => {
       await attempts.record(attempt);
     },
+    // Fold each terminal delivery outcome into the target endpoint's health, so an
+    // endpoint that fails continuously is automatically disabled (capping wasted
+    // attempts/operations). Best-effort: a failed health write is routed to the
+    // worker's onError and never blocks a delivery.
+    onDeliveryOutcome: async (endpointId, outcome, nowMs) => {
+      await endpoints.recordDeliveryOutcome(
+        endpointId,
+        outcome,
+        nowMs,
+        config.endpointAutoDisableAfterMs,
+      );
+    },
   });
 
   const dispatcher = new FanoutDispatcher({

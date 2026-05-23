@@ -761,7 +761,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
         Endpoint: {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
-          required: ["id", "appId", "url", "description", "eventTypes", "disabled", "createdAt", "updatedAt"],
+          required: [
+            "id", "appId", "url", "description", "eventTypes", "disabled",
+            "consecutiveFailures", "firstFailureAt", "lastFailureAt",
+            "createdAt", "updatedAt",
+          ],
           properties: {
             id: { type: "string", examples: ["ep_3Kp1..."] },
             appId: { type: "string" },
@@ -772,7 +776,25 @@ export function buildOpenApiDocument(): OpenApiDocument {
               items: { type: "string" },
               description: "Subscription filter. `null` means all events; an array means exactly those types.",
             },
-            disabled: { type: "boolean", description: "When true, the endpoint is paused and skipped by fan-out." },
+            disabled: {
+              type: "boolean",
+              description:
+                "When true, the endpoint is paused and skipped by fan-out — set manually, " +
+                "or automatically after the endpoint fails continuously (see consecutiveFailures).",
+            },
+            consecutiveFailures: {
+              type: "integer",
+              minimum: 0,
+              description: "Consecutive dead-lettered deliveries since the last success; 0 when healthy.",
+            },
+            firstFailureAt: {
+              type: ["integer", "null"],
+              description: "Epoch ms the current failure streak began; null when healthy. Basis for auto-disabling.",
+            },
+            lastFailureAt: {
+              type: ["integer", "null"],
+              description: "Epoch ms of the most recent dead-lettered delivery; null when healthy.",
+            },
             createdAt: epochMs("Creation time, epoch ms."),
             updatedAt: epochMs("Last mutation time, epoch ms."),
           },

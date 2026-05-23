@@ -393,6 +393,11 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     description: endpoint.description,
     eventTypes: endpoint.eventTypes,
     disabled: endpoint.disabled,
+    // Endpoint health (observability): a tenant can see how/why an endpoint became
+    // unhealthy, and whether it was auto-disabled after sustained failure.
+    consecutiveFailures: endpoint.consecutiveFailures,
+    firstFailureAt: endpoint.firstFailureAt,
+    lastFailureAt: endpoint.lastFailureAt,
     createdAt: endpoint.createdAt,
     updatedAt: endpoint.updatedAt,
   };

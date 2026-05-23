@@ -19,9 +19,11 @@ import { generateSecret } from "../signing/webhook-signature.js";
 import {
   applyEndpointUpdate,
   createEndpointId,
+  evaluateEndpointHealth,
   normalizeNewEndpoint,
   rotateEndpointSecret,
   UnknownEndpointError,
+  type DeliveryHealthOutcome,
   type Endpoint,
   type EndpointStore,
   type EndpointUpdate,
@@ -78,6 +80,9 @@ export class InMemoryEndpointStore implements EndpointStore {
       description: normalized.description,
       eventTypes: normalized.eventTypes,
       disabled: normalized.disabled,
+      consecutiveFailures: 0,
+      firstFailureAt: null,
+      lastFailureAt: null,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
@@ -127,6 +132,23 @@ export class InMemoryEndpointStore implements EndpointStore {
     );
     this.#endpoints.set(id, next); // same key → keeps insertion order
     return next;
+  }
+
+  async recordDeliveryOutcome(
+    id: string,
+    outcome: DeliveryHealthOutcome,
+    nowMs: number,
+    autoDisableAfterMs?: number,
+  ): Promise<Endpoint | null> {
+    const current = this.#endpoints.get(id);
+    if (current === undefined) {
+      return null; // deleted/unknown endpoint → no-op
+    }
+    const result = evaluateEndpointHealth(current, outcome, nowMs, autoDisableAfterMs);
+    if (result.changed) {
+      this.#endpoints.set(id, result.endpoint); // same key → keeps insertion order
+    }
+    return result.endpoint;
   }
 
   async delete(id: string): Promise<boolean> {

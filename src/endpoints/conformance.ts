@@ -113,6 +113,10 @@ export function describeEndpointStoreContract(
         expect(endpoint.description).toBe("");
         expect(endpoint.eventTypes).toBeNull(); // subscribe-to-all
         expect(endpoint.disabled).toBe(false);
+        // A fresh endpoint starts healthy: no failure streak.
+        expect(endpoint.consecutiveFailures).toBe(0);
+        expect(endpoint.firstFailureAt).toBeNull();
+        expect(endpoint.lastFailureAt).toBeNull();
         expect(endpoint.createdAt).toBe(clock.now());
         expect(endpoint.updatedAt).toBe(clock.now());
         expect(await store.get(endpoint.id)).toEqual(endpoint);
@@ -328,6 +332,82 @@ export function describeEndpointStoreContract(
         const b = await store.create({ ...NEW, secret: "s2" });
         expect(await store.delete(a.id)).toBe(true);
         expect((await store.listByApp("app_1")).map((e) => e.id)).toEqual([b.id]);
+      });
+    });
+
+    describe("recordDeliveryOutcome (endpoint health + auto-disable)", () => {
+      it("is a no-op (returns null) for an unknown/deleted endpoint", async () => {
+        expect(
+          await store.recordDeliveryOutcome("ep_nope", "failed", clock.now()),
+        ).toBeNull();
+      });
+
+      it("a success on a healthy endpoint changes nothing and does not bump updatedAt", async () => {
+        const e = await store.create(NEW);
+        clock.advance(5_000);
+        const after = await store.recordDeliveryOutcome(e.id, "succeeded", clock.now());
+        expect(after).toEqual(e); // unchanged
+        // The hot path skips the write: updatedAt is the create time, not now.
+        expect((await store.get(e.id))!.updatedAt).toBe(e.updatedAt);
+      });
+
+      it("a failure opens the streak, persists count + timestamps, and never disables on its own", async () => {
+        const e = await store.create(NEW);
+        clock.advance(5_000);
+        const t = clock.now();
+        const after = await store.recordDeliveryOutcome(e.id, "failed", t);
+        expect(after!.consecutiveFailures).toBe(1);
+        expect(after!.firstFailureAt).toBe(t);
+        expect(after!.lastFailureAt).toBe(t);
+        expect(after!.disabled).toBe(false);
+        expect(after!.updatedAt).toBe(t);
+        expect(await store.get(e.id)).toEqual(after); // durably persisted
+      });
+
+      it("a success after failures resets the streak (persisted)", async () => {
+        const e = await store.create(NEW);
+        await store.recordDeliveryOutcome(e.id, "failed", clock.now());
+        clock.advance(5_000);
+        const recovered = await store.recordDeliveryOutcome(e.id, "succeeded", clock.now());
+        expect(recovered!.consecutiveFailures).toBe(0);
+        expect(recovered!.firstFailureAt).toBeNull();
+        expect(recovered!.lastFailureAt).toBeNull();
+        expect(await store.get(e.id)).toEqual(recovered);
+      });
+
+      it("auto-disables once failures span the configured window (persisted)", async () => {
+        const e = await store.create(NEW);
+        const window = 100_000;
+        const first = await store.recordDeliveryOutcome(e.id, "failed", clock.now(), window);
+        expect(first!.disabled).toBe(false);
+        clock.advance(window);
+        const tripped = await store.recordDeliveryOutcome(e.id, "failed", clock.now(), window);
+        expect(tripped!.disabled).toBe(true);
+        expect(tripped!.consecutiveFailures).toBe(2);
+        expect((await store.get(e.id))!.disabled).toBe(true);
+      });
+
+      it("a window of 0 never auto-disables but still tracks the streak", async () => {
+        const e = await store.create(NEW);
+        await store.recordDeliveryOutcome(e.id, "failed", clock.now(), 0);
+        clock.advance(10 * 24 * 60 * 60 * 1000);
+        const after = await store.recordDeliveryOutcome(e.id, "failed", clock.now(), 0);
+        expect(after!.disabled).toBe(false);
+        expect(after!.consecutiveFailures).toBe(2);
+      });
+
+      it("re-enabling an auto-disabled endpoint via update clears the streak", async () => {
+        const e = await store.create(NEW);
+        const window = 100;
+        await store.recordDeliveryOutcome(e.id, "failed", clock.now(), window);
+        clock.advance(window);
+        const disabled = await store.recordDeliveryOutcome(e.id, "failed", clock.now(), window);
+        expect(disabled!.disabled).toBe(true);
+        const reEnabled = await store.update(e.id, { disabled: false });
+        expect(reEnabled.disabled).toBe(false);
+        expect(reEnabled.consecutiveFailures).toBe(0);
+        expect(reEnabled.firstFailureAt).toBeNull();
+        expect(reEnabled.lastFailureAt).toBeNull();
       });
     });
   });

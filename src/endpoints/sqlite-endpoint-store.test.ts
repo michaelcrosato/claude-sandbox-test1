@@ -179,4 +179,56 @@ describe("SqliteEndpointStore — durability", () => {
       store.close();
     }
   });
+
+  it("migrates a pre-health database: existing rows backfill to healthy and can then auto-disable", async () => {
+    // A rotation-era schema: has previous_secrets but none of the health columns,
+    // exactly as a build from before automatic disabling would have left it.
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE endpoints (
+        id               TEXT    PRIMARY KEY,
+        app_id           TEXT    NOT NULL,
+        url              TEXT    NOT NULL,
+        secret           TEXT    NOT NULL,
+        previous_secrets TEXT    NOT NULL DEFAULT '[]',
+        description      TEXT    NOT NULL,
+        event_types      TEXT,
+        disabled         INTEGER NOT NULL,
+        created_at       INTEGER NOT NULL,
+        updated_at       INTEGER NOT NULL
+      ) STRICT;
+    `);
+    legacy.prepare(
+      `INSERT INTO endpoints
+         (id, app_id, url, secret, previous_secrets, description, event_types, disabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("ep_old", "app_1", "https://old.test/h", "whsec_old", "[]", "", null, 0, 1_000, 1_000);
+    legacy.close();
+
+    const clock = makeEndpointConformanceClock(2_000);
+    const store = new SqliteEndpointStore({
+      location: dbPath,
+      now: clock.now,
+      generateId: clock.generateId,
+      generateSecret: clock.generateSecret,
+    });
+    try {
+      // The existing row backfills to healthy (no behaviour change on upgrade).
+      const migrated = (await store.get("ep_old"))!;
+      expect(migrated.consecutiveFailures).toBe(0);
+      expect(migrated.firstFailureAt).toBeNull();
+      expect(migrated.lastFailureAt).toBeNull();
+      expect(migrated.disabled).toBe(false);
+
+      // And health tracking works against the migrated row: sustained failure disables.
+      const window = 50_000;
+      await store.recordDeliveryOutcome("ep_old", "failed", clock.now(), window);
+      clock.advance(window);
+      const tripped = await store.recordDeliveryOutcome("ep_old", "failed", clock.now(), window);
+      expect(tripped!.disabled).toBe(true);
+      expect((await store.get("ep_old"))!.disabled).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
 });

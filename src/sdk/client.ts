@@ -204,7 +204,19 @@ export interface EndpointView {
   readonly description: string;
   /** Subscribed event types; `null` means *all* events. */
   readonly eventTypes: readonly string[] | null;
+  /**
+   * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
+   * automatically once it has been failing continuously (see
+   * {@link EndpointView.consecutiveFailures}). Re-enable with
+   * `updateEndpoint(id, { disabled: false })`, which also clears the failure streak.
+   */
   readonly disabled: boolean;
+  /** Consecutive dead-lettered deliveries since the last success; `0` when healthy. */
+  readonly consecutiveFailures: number;
+  /** Epoch ms the current failure streak began; `null` when healthy. */
+  readonly firstFailureAt: number | null;
+  /** Epoch ms of the most recent dead-lettered delivery; `null` when healthy. */
+  readonly lastFailureAt: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }

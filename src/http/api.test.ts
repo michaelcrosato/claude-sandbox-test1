@@ -550,6 +550,17 @@ describe("createApi — endpoints CRUD", () => {
     expect(body(res).appId).toBe(appId);
   });
 
+  it("exposes endpoint health in the view (starts healthy)", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/h" }, secret),
+    );
+    const b = body(created);
+    expect(b.consecutiveFailures).toBe(0);
+    expect(b.firstFailureAt).toBeNull();
+    expect(b.lastFailureAt).toBeNull();
+  });
+
   it("rejects a non-http(s) URL with 400", async () => {
     const { api, secret } = await setup();
     const res = await api(

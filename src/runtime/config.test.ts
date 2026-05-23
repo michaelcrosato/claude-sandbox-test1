@@ -22,6 +22,7 @@ import {
   DEFAULT_FANOUT_IDLE_POLL_MS,
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
+import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
 
 describe("loadConfig", () => {
   it("applies defaults for an empty environment", () => {
@@ -32,6 +33,7 @@ describe("loadConfig", () => {
       dataDir: DEFAULT_DATA_DIR,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
       adminToken: null,
+      endpointAutoDisableAfterMs: DEFAULT_AUTO_DISABLE_AFTER_MS,
       worker: {
         batchSize: DEFAULT_WORKER_BATCH_SIZE,
         concurrency: DEFAULT_WORKER_CONCURRENCY,
@@ -181,6 +183,30 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_ADMIN_TOKEN: tooShort })).toThrow(
         /POSTHORN_ADMIN_TOKEN must be at least/,
       );
+    });
+  });
+
+  describe("POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS", () => {
+    it("defaults to DEFAULT_AUTO_DISABLE_AFTER_MS", () => {
+      expect(loadConfig({}).endpointAutoDisableAfterMs).toBe(DEFAULT_AUTO_DISABLE_AFTER_MS);
+    });
+
+    it("reads an override and accepts 0 (auto-disabling off)", () => {
+      expect(
+        loadConfig({ POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: "3600000" }).endpointAutoDisableAfterMs,
+      ).toBe(3_600_000);
+      expect(
+        loadConfig({ POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: "0" }).endpointAutoDisableAfterMs,
+      ).toBe(0);
+    });
+
+    it("rejects a negative or non-integer value", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: "-1" }),
+      ).toThrow(ConfigError);
+      expect(() =>
+        loadConfig({ POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: "1.5" }),
+      ).toThrow(ConfigError);
     });
   });
 });

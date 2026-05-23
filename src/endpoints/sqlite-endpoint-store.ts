@@ -20,9 +20,11 @@ import { generateSecret } from "../signing/webhook-signature.js";
 import {
   applyEndpointUpdate,
   createEndpointId,
+  evaluateEndpointHealth,
   normalizeNewEndpoint,
   rotateEndpointSecret,
   UnknownEndpointError,
+  type DeliveryHealthOutcome,
   type Endpoint,
   type EndpointStore,
   type EndpointUpdate,
@@ -65,6 +67,9 @@ interface EndpointRow {
   readonly description: string;
   readonly event_types: string | null;
   readonly disabled: number;
+  readonly consecutive_failures: number;
+  readonly first_failure_at: number | null;
+  readonly last_failure_at: number | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -84,6 +89,9 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
         ? null
         : (JSON.parse(row.event_types) as string[]),
     disabled: row.disabled !== 0,
+    consecutiveFailures: Number(row.consecutive_failures),
+    firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
+    lastFailureAt: row.last_failure_at === null ? null : Number(row.last_failure_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -106,6 +114,7 @@ export class SqliteEndpointStore implements EndpointStore {
   readonly #insertEndpoint: StatementSync;
   readonly #updateEndpoint: StatementSync;
   readonly #rotateSecretStmt: StatementSync;
+  readonly #recordHealthStmt: StatementSync;
   readonly #deleteEndpoint: StatementSync;
   readonly #countEndpoints: StatementSync;
 
@@ -129,6 +138,9 @@ export class SqliteEndpointStore implements EndpointStore {
     // Bring a database created by a pre-rotation version up to schema. For a fresh
     // database the column is in SCHEMA and this is a no-op.
     this.#migratePreviousSecretsColumn();
+    // Likewise for the endpoint-health columns added with auto-disable. Existing rows
+    // default to healthy (0 failures, no streak). No-op on a fresh database.
+    this.#migrateHealthColumns();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -140,13 +152,15 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
          (id, app_id, url, secret, previous_secrets, description, event_types,
-          disabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          disabled, consecutive_failures, first_failure_at, last_failure_at,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
          SET url = ?, secret = ?, description = ?, event_types = ?,
-             disabled = ?, updated_at = ?
+             disabled = ?, consecutive_failures = ?, first_failure_at = ?,
+             last_failure_at = ?, updated_at = ?
        WHERE id = ?`,
     );
     // Rotation is the only path that writes previous_secrets after creation; it is
@@ -154,6 +168,14 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#rotateSecretStmt = this.#db.prepare(
       `UPDATE endpoints
          SET secret = ?, previous_secrets = ?, updated_at = ?
+       WHERE id = ?`,
+    );
+    // Health-only write (recordDeliveryOutcome): touches just the health columns,
+    // disabled (an auto-disable can flip it), and updated_at.
+    this.#recordHealthStmt = this.#db.prepare(
+      `UPDATE endpoints
+         SET consecutive_failures = ?, first_failure_at = ?, last_failure_at = ?,
+             disabled = ?, updated_at = ?
        WHERE id = ?`,
     );
     this.#deleteEndpoint = this.#db.prepare("DELETE FROM endpoints WHERE id = ?");
@@ -180,6 +202,27 @@ export class SqliteEndpointStore implements EndpointStore {
     );
   }
 
+  /**
+   * Add the endpoint-health columns to a database created before automatic
+   * disabling existed. Existing rows backfill to healthy (`0` consecutive failures,
+   * no failure streak), so an upgrade is seamless and changes no behaviour. For a
+   * fresh database the columns are in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateHealthColumns(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "consecutive_failures")) {
+      return;
+    }
+    this.#db.exec(
+      "ALTER TABLE endpoints ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+    );
+    // Nullable: NULL is the healthy "no active streak" state.
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN first_failure_at INTEGER");
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN last_failure_at INTEGER");
+  }
+
   /** Number of endpoints currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countEndpoints.get() as { n: number }).n);
@@ -198,6 +241,9 @@ export class SqliteEndpointStore implements EndpointStore {
       description: normalized.description,
       eventTypes: normalized.eventTypes,
       disabled: normalized.disabled,
+      consecutiveFailures: 0,
+      firstFailureAt: null,
+      lastFailureAt: null,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
@@ -211,6 +257,9 @@ export class SqliteEndpointStore implements EndpointStore {
       endpoint.description,
       eventTypesToColumn(endpoint.eventTypes),
       endpoint.disabled ? 1 : 0,
+      endpoint.consecutiveFailures,
+      endpoint.firstFailureAt,
+      endpoint.lastFailureAt,
       endpoint.createdAt,
       endpoint.updatedAt,
     );
@@ -240,6 +289,9 @@ export class SqliteEndpointStore implements EndpointStore {
         next.description,
         eventTypesToColumn(next.eventTypes),
         next.disabled ? 1 : 0,
+        next.consecutiveFailures,
+        next.firstFailureAt,
+        next.lastFailureAt,
         next.updatedAt,
         next.id,
       );
@@ -272,6 +324,55 @@ export class SqliteEndpointStore implements EndpointStore {
         next.id,
       );
       return next;
+    });
+  }
+
+  async recordDeliveryOutcome(
+    id: string,
+    outcome: DeliveryHealthOutcome,
+    nowMs: number,
+    autoDisableAfterMs?: number,
+  ): Promise<Endpoint | null> {
+    // Fast path: a successful delivery to a healthy endpoint changes nothing, so read
+    // without taking a write lock and skip the transaction entirely. This is the
+    // steady state (most deliveries succeed), so the hot path stays a single read.
+    const row = this.#selectEndpoint.get(id) as EndpointRow | undefined;
+    if (row === undefined) {
+      return null; // deleted/unknown endpoint → no-op
+    }
+    const firstEval = evaluateEndpointHealth(
+      rowToEndpoint(row),
+      outcome,
+      nowMs,
+      autoDisableAfterMs,
+    );
+    if (!firstEval.changed) {
+      return firstEval.endpoint;
+    }
+    // A write is needed: re-evaluate inside a transaction so the read-modify-write is
+    // atomic against a concurrent outcome for the same endpoint (no lost update).
+    return this.#transaction(() => {
+      const current = this.#selectEndpoint.get(id) as EndpointRow | undefined;
+      if (current === undefined) {
+        return null;
+      }
+      const result = evaluateEndpointHealth(
+        rowToEndpoint(current),
+        outcome,
+        nowMs,
+        autoDisableAfterMs,
+      );
+      if (result.changed) {
+        this.#recordHealthStmt.run(
+          result.endpoint.consecutiveFailures,
+          result.endpoint.firstFailureAt,
+          result.endpoint.lastFailureAt,
+          result.endpoint.disabled ? 1 : 0,
+          result.endpoint.updatedAt,
+          id,
+        );
+      }
+      return result.endpoint;
     });
   }
 
@@ -310,7 +411,10 @@ export class SqliteEndpointStore implements EndpointStore {
  * (or `NULL` = subscribe-to-all); `disabled` is a 0/1 integer. `previous_secrets`
  * is a JSON array of `{ secret, expiresAt }` retired during rotation (`'[]'` when
  * never rotated); a pre-rotation database gains it via
- * {@link SqliteEndpointStore.#migratePreviousSecretsColumn}.
+ * {@link SqliteEndpointStore.#migratePreviousSecretsColumn}. The health columns
+ * (`consecutive_failures` + the nullable `first_failure_at`/`last_failure_at`) track
+ * the streak that drives auto-disabling; a pre-health database gains them via
+ * {@link SqliteEndpointStore.#migrateHealthColumns}, backfilled as healthy.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS endpoints (
@@ -322,6 +426,9 @@ CREATE TABLE IF NOT EXISTS endpoints (
   description      TEXT    NOT NULL,
   event_types      TEXT,
   disabled         INTEGER NOT NULL,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  first_failure_at     INTEGER,
+  last_failure_at      INTEGER,
   created_at       INTEGER NOT NULL,
   updated_at       INTEGER NOT NULL
 ) STRICT;

@@ -152,8 +152,10 @@ export {
   applyEndpointUpdate,
   activeSigningSecrets,
   rotateEndpointSecret,
+  evaluateEndpointHealth,
   DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   MAX_PREVIOUS_SECRETS,
+  DEFAULT_AUTO_DISABLE_AFTER_MS,
   type Endpoint,
   type ExpiringSecret,
   type NewEndpoint,
@@ -161,6 +163,8 @@ export {
   type RotateSecretOptions,
   type EndpointStore,
   type NormalizedNewEndpoint,
+  type DeliveryHealthOutcome,
+  type EndpointHealthEvaluation,
 } from "./endpoints/endpoint.js";
 
 export {

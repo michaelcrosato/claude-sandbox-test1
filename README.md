@@ -174,6 +174,17 @@ Early foundation. Implemented so far:
   from the messages and append-only delivery-attempt logs (the sources of truth), each riding its own
   index, rather than separate rollups that could drift — and a deduplicated retry is never
   double-counted. The span is capped (≤ 366 days) so a query stays bounded.
+- ✅ **Endpoint health + auto-disable** — Posthorn stops wasting deliveries on a permanently-dead
+  endpoint. Each endpoint tracks its delivery health (`consecutiveFailures` + the `firstFailureAt`/
+  `lastFailureAt` streak, all surfaced over the API/SDK); once a delivery has been *failing
+  continuously* for a configurable window (`POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS`, default 5 days;
+  `0` = off), the endpoint is **automatically disabled** so fan-out stops sending it new work —
+  capping the retry attempts (and the tenant's metered operations) burned on a receiver that is gone.
+  A single outage that recovers never trips it (sustained failure is required, and any success resets
+  the streak); re-enabling (`updateEndpoint(id, { disabled: false })`) starts it clean. The verdict is
+  reported by the worker through a best-effort seam and applied as one atomic, no-drift store rule
+  (pure `evaluateEndpointHealth`, both backends, one conformance suite) — health writes never block or
+  fail a delivery, and the success hot path takes no write.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 

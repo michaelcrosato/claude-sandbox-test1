@@ -25,6 +25,7 @@ import {
   DEFAULT_FANOUT_IDLE_POLL_MS,
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
+import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
 
 /**
  * Default bind host. `0.0.0.0` is the right default for the headline deployment
@@ -96,6 +97,12 @@ export interface GatewayConfig {
    * rejected at boot rather than left as an open door.
    */
   readonly adminToken: string | null;
+  /**
+   * How long (ms) an endpoint must be failing continuously before it is
+   * automatically disabled. `0` turns auto-disabling off (health is still tracked).
+   * See {@link DEFAULT_AUTO_DISABLE_AFTER_MS}.
+   */
+  readonly endpointAutoDisableAfterMs: number;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -195,6 +202,7 @@ function readAdminToken(env: Env): string | null {
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
+ * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
  * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_CONCURRENCY`,
  * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
@@ -213,6 +221,12 @@ export function loadConfig(env: Env): GatewayConfig {
       min: 1,
     }),
     adminToken: readAdminToken(env),
+    endpointAutoDisableAfterMs: readInt(
+      env,
+      "POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS",
+      DEFAULT_AUTO_DISABLE_AFTER_MS,
+      { min: 0 },
+    ),
     worker: Object.freeze<WorkerConfig>({
       batchSize: readInt(env, "POSTHORN_WORKER_BATCH_SIZE", DEFAULT_WORKER_BATCH_SIZE, {
         min: 1,

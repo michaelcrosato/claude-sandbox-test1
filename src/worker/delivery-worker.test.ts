@@ -12,6 +12,8 @@ import {
 } from "./delivery-worker.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
+import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
+import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import {
   StaleLeaseError,
   type DeliveryQueue,
@@ -935,6 +937,151 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
       transport: recordingTransport(200).transport,
     }).processOnce();
     expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
+  });
+});
+
+describe("DeliveryWorker — onDeliveryOutcome (endpoint health)", () => {
+  /** A sink capturing every terminal outcome the worker reports. */
+  function collector(): {
+    onDeliveryOutcome: (id: string, outcome: "succeeded" | "failed", now: number) => void;
+    reports: { id: string; outcome: "succeeded" | "failed"; now: number }[];
+  } {
+    const reports: { id: string; outcome: "succeeded" | "failed"; now: number }[] = [];
+    return {
+      onDeliveryOutcome: (id, outcome, now) => {
+        reports.push({ id, outcome, now });
+      },
+      reports,
+    };
+  }
+
+  async function enqueueFor(env: ReturnType<typeof setup>, endpointId: string | null): Promise<void> {
+    const { message } = await env.store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+    await env.queue.enqueue({ messageId: message.id, endpointId });
+  }
+
+  it("reports a 2xx delivery as a succeeded terminal outcome (with endpoint + tick instant)", async () => {
+    const env = setup({ startMs: 1_700_000_000_000 });
+    await enqueueFor(env, "ep_1");
+    const { onDeliveryOutcome, reports } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      onDeliveryOutcome,
+    }).processOnce();
+
+    expect(reports).toEqual([
+      { id: "ep_1", outcome: "succeeded", now: 1_700_000_000_000 },
+    ]);
+  });
+
+  it("reports a dead-letter as a failed terminal outcome", async () => {
+    const env = setup({ startMs: 5_000, retryPolicy: fixedSchedule([]) }); // 1 attempt → dead-letter
+    await enqueueFor(env, "ep_1");
+    const { onDeliveryOutcome, reports } = collector();
+
+    const result = await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      onDeliveryOutcome,
+    }).processOnce();
+
+    expect(result).toMatchObject({ deadLettered: 1 });
+    expect(reports).toEqual([{ id: "ep_1", outcome: "failed", now: 5_000 }]);
+  });
+
+  it("does NOT report a failed attempt that will be retried (not yet terminal)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) }); // a retry is scheduled
+    await enqueueFor(env, "ep_1");
+    const { onDeliveryOutcome, reports } = collector();
+
+    const result = await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      onDeliveryOutcome,
+    }).processOnce();
+
+    expect(result).toMatchObject({ failed: 1, deadLettered: 0 });
+    expect(reports).toEqual([]); // nothing terminal happened
+  });
+
+  it("does NOT report when the task carries no endpointId", async () => {
+    const env = setup();
+    await enqueueFor(env, null);
+    const { onDeliveryOutcome, reports } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      onDeliveryOutcome,
+    }).processOnce();
+
+    expect(reports).toEqual([]);
+  });
+
+  it("is best-effort: a thrown report never breaks the delivery", async () => {
+    const env = setup();
+    await enqueueFor(env, "ep_1");
+    const errors: unknown[] = [];
+    const boom = new Error("endpoint store down");
+
+    const result = await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      onDeliveryOutcome: () => {
+        throw boom;
+      },
+      onError: (e) => errors.push(e),
+    }).processOnce();
+
+    expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(await env.queue.get("dtask_0")).toMatchObject({ status: "succeeded" });
+    expect(errors).toEqual([boom]);
+  });
+
+  it("auto-disables a continuously-failing endpoint end-to-end (worker → store → resolver declines)", async () => {
+    // Wire a real endpoint store + the store-backed resolver, sharing the worker's clock,
+    // so the whole loop (deliver → dead-letter → record health → auto-disable → resolver
+    // then declines) runs through the production seams.
+    const env = setup({ startMs: 0, retryPolicy: fixedSchedule([]) }); // each delivery dead-letters in one attempt
+    const endpoints = new InMemoryEndpointStore({ now: env.now });
+    const ep = await endpoints.create({ appId: "app_1", url: "https://dead.test/hook" });
+    const window = 100_000;
+
+    const worker = makeWorker(env, {
+      transport: recordingTransport(500).transport, // the receiver is dead
+      resolveEndpoint: storeBackedResolver(endpoints, { now: env.now }),
+      onDeliveryOutcome: async (id, outcome, now) => {
+        await endpoints.recordDeliveryOutcome(id, outcome, now, window);
+      },
+    });
+
+    // Helper: enqueue a fresh message to this endpoint and run one tick.
+    const sendOne = async (): Promise<void> => {
+      const { message } = await env.store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+      await env.queue.enqueue({ messageId: message.id, endpointId: ep.id });
+      await worker.processOnce();
+    };
+
+    // First failed delivery opens the streak; not yet disabled.
+    await sendOne();
+    expect((await endpoints.get(ep.id))!.disabled).toBe(false);
+    expect((await endpoints.get(ep.id))!.consecutiveFailures).toBe(1);
+
+    // After the window has elapsed, the next dead-letter auto-disables the endpoint.
+    env.setClock(window);
+    await sendOne();
+    const disabled = (await endpoints.get(ep.id))!;
+    expect(disabled.disabled).toBe(true);
+    expect(disabled.consecutiveFailures).toBe(2);
+
+    // The store-backed resolver now declines the disabled endpoint, so a subsequent
+    // delivery makes no HTTP attempt — runaway delivery to the dead endpoint has stopped.
+    const { message } = await env.store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+    await env.queue.enqueue({ messageId: message.id, endpointId: ep.id });
+    const { transport, requests } = recordingTransport(500);
+    env.setClock(window + 1);
+    await makeWorker(env, {
+      transport,
+      resolveEndpoint: storeBackedResolver(endpoints, { now: env.now }),
+    }).processOnce();
+    expect(requests).toHaveLength(0); // resolver declined → no POST sent
   });
 });
 
