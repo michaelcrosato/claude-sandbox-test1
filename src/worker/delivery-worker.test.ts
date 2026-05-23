@@ -473,6 +473,7 @@ describe("DeliveryWorker.processOnce", () => {
         throw boom;
       },
       get: async () => claimedTask,
+      listByMessage: async () => [claimedTask],
     };
     const worker = new DeliveryWorker({
       queue: stubQueue,
@@ -563,6 +564,7 @@ describe("DeliveryWorker.run", () => {
         throw boom;
       },
       get: async () => null,
+      listByMessage: async () => [],
     };
     const errors: unknown[] = [];
     let worker!: DeliveryWorker;

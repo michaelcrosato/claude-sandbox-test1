@@ -163,6 +163,70 @@ describe("createGateway", () => {
   );
 
   it(
+    "exposes delivery status over HTTP after the worker delivers (GET /v1/messages/:id)",
+    async () => {
+      const gateway = createGateway(memoryConfig());
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const app = await gateway.apps.create({ name: "Acme" });
+      const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+      const authHeaders = {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      };
+
+      const receiver = await startReceiver();
+      receivers.push(receiver);
+
+      await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["user.created"] }),
+      });
+
+      const ingestRes = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ eventType: "user.created", payload: { n: 7 } }),
+      });
+      expect(ingestRes.status).toBe(202);
+      const { message } = (await ingestRes.json()) as { message: { id: string } };
+
+      // Wait until the receiver has the POST, then poll the status endpoint until
+      // the running worker has settled the task (a tiny window after delivery).
+      await receiver.received;
+      const deadline = Date.now() + 10_000;
+      let status: {
+        id: string;
+        eventType: string;
+        deliveries: { status: string; attempts: number }[];
+      };
+      for (;;) {
+        const res = await fetch(`${base}/v1/messages/${message.id}`, {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        expect(res.status).toBe(200);
+        status = (await res.json()) as typeof status;
+        const d = status.deliveries[0];
+        if (d && (d.status === "succeeded" || d.status === "dead_letter")) break;
+        if (Date.now() > deadline) {
+          throw new Error(`timed out waiting for settle: ${JSON.stringify(status)}`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      expect(status.id).toBe(message.id);
+      expect(status.eventType).toBe("user.created");
+      expect(status.deliveries).toHaveLength(1);
+      expect(status.deliveries[0]!.status).toBe("succeeded");
+      expect(status.deliveries[0]!.attempts).toBe(1);
+    },
+    15_000,
+  );
+
+  it(
     "recovers an orphaned (accepted-but-unfanned) message via the dispatcher, end-to-end",
     async () => {
       // grace 0 so the running dispatcher sweeps the orphan immediately (no

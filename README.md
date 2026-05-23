@@ -77,6 +77,13 @@ Early foundation. Implemented so far:
   data directory (one file per store, or `:memory:`), wires the HTTP API and the delivery worker
   together, and serves — then shuts down gracefully on `SIGINT`/`SIGTERM`. No Redis, no Postgres, no
   framework. `createGateway(config)` exposes the same wiring as a library for embedding/tests.
+- ✅ **Delivery-status read API** — the *observable* half of the tagline. After a producer sends a
+  message it can ask `GET /v1/messages/:id` and get the message plus **one delivery record per
+  subscribed endpoint** — current `status` (pending / delivering / succeeded / dead_letter), attempt
+  count, next-retry time, and the last error — so "what happened to my webhook?" has an answer instead
+  of a void. Backed by a new `DeliveryQueue.listByMessage`, scoped to the authenticated tenant
+  (another tenant's message is `404`, never revealed), and proven end-to-end (ingest → worker delivers
+  → the status flips to `succeeded`).
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -327,12 +334,17 @@ curl -sX POST localhost:3000/v1/endpoints \
 curl -sX POST localhost:3000/v1/messages \
   -H "authorization: Bearer $SECRET" -H 'content-type: application/json' \
   -d '{"eventType":"user.created","payload":{"id":42}}'
+
+# Then check what happened to it — its per-endpoint delivery status:
+curl -s localhost:3000/v1/messages/$MESSAGE_ID -H "authorization: Bearer $SECRET"
+#   { "id": "...", "deliveries": [ { "endpointId": "...", "status": "succeeded", "attempts": 1, ... } ] }
 ```
 
 | Method | Path                | Auth   | Purpose                                |
 | ------ | ------------------- | ------ | -------------------------------------- |
 | GET    | `/healthz`          | none   | Liveness probe.                        |
 | POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
+| GET    | `/v1/messages/:id`  | Bearer | Read a message + its delivery statuses.|
 | GET    | `/v1/endpoints`     | Bearer | List the tenant's endpoints.           |
 | POST   | `/v1/endpoints`     | Bearer | Create an endpoint (`201`, secret once).|
 | GET    | `/v1/endpoints/:id` | Bearer | Fetch one endpoint.                    |

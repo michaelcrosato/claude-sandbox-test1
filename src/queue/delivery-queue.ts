@@ -150,6 +150,16 @@ export interface DeliveryQueue {
   ): Promise<DeliveryTask>;
   /** Fetch a task by id, or `null` if unknown. */
   get(taskId: string): Promise<DeliveryTask | null>;
+  /**
+   * List every delivery task for `messageId`, oldest-first (enqueue order).
+   * Returns an empty array when the message has no tasks — because fan-out
+   * matched no endpoint, or the id is unknown/empty. A pure read projection: it
+   * never mutates and never throws on an unknown id (an absent message is simply
+   * zero deliveries). This is the data primitive behind the delivery-status read
+   * surface ("what happened to my message?") — the worker persists per-task
+   * `status`/`attempts`/`lastError` here, and this exposes them per message.
+   */
+  listByMessage(messageId: string): Promise<readonly DeliveryTask[]>;
 }
 
 /** Thrown when an operation references a task id the queue does not hold. */

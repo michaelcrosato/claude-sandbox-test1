@@ -363,6 +363,39 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("listByMessage", () => {
+      it("returns an empty array for a message with no tasks", async () => {
+        expect(await queue.listByMessage("msg-unknown")).toEqual([]);
+      });
+
+      it("lists a message's tasks oldest-first, scoped to that message", async () => {
+        // Two messages interleaved; fan-out enqueues one task per endpoint.
+        const a1 = await queue.enqueue({ messageId: "m-a", endpointId: "ep_1" });
+        const b1 = await queue.enqueue({ messageId: "m-b", endpointId: "ep_1" });
+        const a2 = await queue.enqueue({ messageId: "m-a", endpointId: "ep_2" });
+
+        const aTasks = await queue.listByMessage("m-a");
+        expect(aTasks.map((t) => t.id)).toEqual([a1.id, a2.id]);
+        expect(aTasks.every((t) => t.messageId === "m-a")).toBe(true);
+        expect(aTasks.map((t) => t.endpointId)).toEqual(["ep_1", "ep_2"]);
+
+        // The other message's tasks are not mixed in.
+        const bTasks = await queue.listByMessage("m-b");
+        expect(bTasks.map((t) => t.id)).toEqual([b1.id]);
+      });
+
+      it("reflects a task's current state after a transition", async () => {
+        await queue.enqueue({ messageId: "m" });
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        const done = await queue.complete(claimed!.id, claimed!.leaseToken!);
+
+        const listed = await queue.listByMessage("m");
+        expect(listed).toHaveLength(1);
+        expect(listed[0]).toEqual(done);
+        expect(listed[0]!.status).toBe("succeeded");
+      });
+    });
+
     describe("full lifecycle", () => {
       it("enqueue → claim → fail → reclaim → complete, counting attempts", async () => {
         const enq = await queue.enqueue({ messageId: "m" });

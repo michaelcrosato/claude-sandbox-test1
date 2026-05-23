@@ -233,9 +233,27 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     compiled `dist` across processes: provision via the CLI, then a separately-spawned server
     authenticates the minted key over real HTTP (401 without → 200 with), a CLI `revoke-key` is
     honored by the running server (→ 401), and `list-keys` never echoes the full secret.
-  - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface; an admin/
-    control-plane *HTTP* route for app/key provisioning (the CLI now covers local bootstrap); and
-    per-key `lastUsedAt`.
+  - **Delivery-status read API ✅ (this tick):** the *observable* half of the product's
+    one-line promise ("signed, retried, **observable** webhooks"), which until now had no surface at
+    all — a producer could `POST /v1/messages`, get a `202`, and then never learn the fate of the
+    delivery. `GET /v1/messages/:id` (`src/http/api.ts`) returns the message plus **one delivery
+    record per subscribed endpoint** — `status` (pending/delivering/succeeded/dead_letter), `attempts`,
+    `nextAttemptAt`, and `lastError` — answering "what happened to my webhook?", the single
+    most-used feature of every incumbent (Svix/Convoy's dashboards). The load-bearing addition is a new
+    **`DeliveryQueue.listByMessage(messageId)`** read primitive (the queue already persisted per-task
+    `status`/`attempts`/`lastError`; nothing exposed it per message): added to the contract, both
+    backends (in-memory filter; SQLite `WHERE message_id` + a new `idx_delivery_tasks_message`,
+    auto-created via `IF NOT EXISTS` so an existing DB needs no migration — it is a pure read
+    optimization), and the one shared conformance suite (3 cases × 2 backends). **Security:** tenancy
+    from the key; a message belonging to another app (or absent) is `404`, never revealed — identical
+    to the endpoint routes. Internal queue plumbing (`leaseToken`) is omitted from the view. Proven by
+    a deterministic unit path (ingest → `worker.processOnce` → status flips `pending`→`succeeded`), a
+    real-socket gateway end-to-end, and a compiled-`dist` SQLite smoke run.
+  - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface (now including the
+    status read); a **list** endpoint (`GET /v1/messages`) once a `MessageStore.listByApp` exists;
+    an admin/control-plane *HTTP* route for app/key provisioning (the CLI now covers local bootstrap);
+    a full per-attempt audit log (one record per HTTP attempt with response detail — richer than the
+    current latest-state-per-endpoint view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) — so a deployed instance can be bootstrapped

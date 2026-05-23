@@ -4,6 +4,69 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 14: P3 — delivery-status read API (the "observable" promise made real)
+
+**Repo truth at start:** clean main @ `24400c4`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **407/407**, `npm run build` clean, integrity + local gate both exit 0.
+Node 24.15 / Docker 29.4.3 present / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands;
+the repo is far past the GOAL's "decide a project" stage. Inspected the live HTTP surface (`api.ts`):
+it can **accept** (`POST /v1/messages` → 202) and CRUD endpoints, but there was **no way to read what
+happened to a delivery** — no `GET /v1/messages/:id`, no delivery-status read of any kind. The queue
+persists per-task `status`/`attempts`/`lastError` but exposed only `get(taskId)`/`claimDue`; the 202
+doesn't even return task ids. So a producer fired a message into a void: the product's own one-liner
+promises "signed, retried, **observable** webhooks," yet observability was entirely absent.
+
+**High-leverage move chosen:** Build the **delivery-status read API**. Highest-leverage (checklist #3)
+because it adds a *gating* product capability, not sugar: for a *reliable-delivery* product, inability
+to observe delivery outcomes is the most fundamental missing piece, and per-message status is the
+single most-used feature of every incumbent (Svix/Convoy dashboards). Chosen over the **Dockerfile**
+(the service already runs via `npm start`; containerization is convenience over an already-runnable
+process and adds no new capability) and the **TS SDK** (which would *wrap* this read — it is upstream).
+Exactly the loop's strongest regime: fully deterministic, in-process testable, **zero new
+dependencies**. Followed the proven pure-core / interface+two-backends+one-conformance-suite patterns.
+
+**Built this tick:**
+- **`DeliveryQueue.listByMessage(messageId)`** — the load-bearing read primitive (the data was already
+  persisted; nothing exposed it per message). Added to the contract (a pure read: oldest-first, `[]`
+  for unknown/empty id, never throws, never mutates), to **both backends** (in-memory: filter the
+  insertion-ordered map; SQLite: `WHERE message_id ORDER BY rowid` + a new
+  `idx_delivery_tasks_message`, added to the schema via `IF NOT EXISTS` so a pre-index DB gains it
+  automatically on next open — **no migration needed, it is a pure read optimization over existing
+  rows**), and to the **one shared conformance suite** (3 cases: empty for unknown, oldest-first +
+  scoped-to-message, reflects post-transition state) so the two backends can't drift.
+- **`GET /v1/messages/:id`** (`src/http/api.ts`) — authenticated; loads the message, **404 if absent
+  or another tenant's** (existence never revealed — identical to the endpoint routes; tenancy from the
+  key, never the body), lists its tasks, and returns a `messageView` (id/appId/eventType/idempotencyKey/
+  **payload echoed**/createdAt + `deliveries[]`). `deliveryView` surfaces status/attempts/nextAttemptAt/
+  lastError/endpointId/timestamps and **omits the internal `leaseToken`**. Route ordering is safe:
+  `/v1/messages` (2 segments, POST) and `/v1/messages/:id` (3 segments, GET) never collide.
+
+**Key decisions (honest tradeoffs):**
+- **Latest-state-per-endpoint, not a full per-attempt audit log.** The view shows each delivery's
+  *current* task state; a per-HTTP-attempt history (one row per attempt with response detail) is the
+  richer observability add-on, still deferred and logged (distinct from the load-bearing state shown).
+- **Single-message read only; no `GET /v1/messages` list yet.** A tenant-wide list needs a
+  `MessageStore.listByApp` (+ pagination) that doesn't exist; the bounded single-id read is the precise
+  high-value slice. Logged as the next deferred item.
+- **Payload is echoed back** in the status read (the producer's own data, tenant-scoped) — useful for
+  "what did I actually send?" debugging; the 202 create response still omits it for brevity.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **420/420** (was 407; +13: queue conformance 3
+× 2 backends = 6, api 6 [401/404-unknown/pending-before-worker/succeeded-after-worker/empty-deliveries/
+404-cross-tenant], gateway 1 real-socket end-to-end [ingest → running worker delivers → poll status →
+`succeeded`]). `npm run build` clean. **Smoke-tested the compiled `dist`** on the **SQLite** backends
+through `createApi` (ingest → status `pending`/0 attempts, payload echoed, no `leaseToken` leak → worker
+drains → status `succeeded`/1 attempt → cross-tenant read `404`), through production ESM incl. the
+`node:sqlite` `createRequire` path. Integrity + local gate: exit 0. The three hash-protected files were
+not touched.
+
+**State:** GREEN → committing to main. Posthorn's deliveries are now observable: a producer can ask
+what became of any message it sent. Next tick: the **TS SDK** + **OpenAPI** over this surface (now
+including the status read), the single **Dockerfile** to finish P4 self-host packaging, or a per-attempt
+audit log + `GET /v1/messages` list for richer observability.
+
+---
+
 ## 2026-05-23 — Iteration 13: P3/P4 — admin provisioning CLI (the deployed gateway becomes usable)
 
 **Repo truth at start:** clean main @ `e71de03`. Baseline re-verified before any change:

@@ -161,6 +161,15 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     return this.#tasks.get(taskId) ?? null;
   }
 
+  async listByMessage(messageId: string): Promise<readonly DeliveryTask[]> {
+    const tasks: DeliveryTask[] = [];
+    // Map iteration is insertion order → oldest-first, matching SQLite's rowid.
+    for (const task of this.#tasks.values()) {
+      if (task.messageId === messageId) tasks.push(task);
+    }
+    return tasks;
+  }
+
   /**
    * Resolve the task and assert the caller holds its live lease, or throw the
    * appropriate typed error.

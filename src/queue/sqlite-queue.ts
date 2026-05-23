@@ -121,6 +121,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
 
   // Prepared once at construction, reused per call.
   readonly #selectTask: StatementSync;
+  readonly #selectByMessage: StatementSync;
   readonly #selectClaimable: StatementSync;
   readonly #insertTask: StatementSync;
   readonly #updateTask: StatementSync;
@@ -153,6 +154,12 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
 
     this.#selectTask = this.#db.prepare(
       "SELECT * FROM delivery_tasks WHERE id = ?",
+    );
+    // All tasks for one message, oldest-first (rowid order) — the delivery-status
+    // read. Backed by idx_delivery_tasks_message so it stays cheap as the table
+    // grows unbounded (terminal tasks are never pruned).
+    this.#selectByMessage = this.#db.prepare(
+      "SELECT * FROM delivery_tasks WHERE message_id = ? ORDER BY rowid",
     );
     // Claimable = due pending OR delivering with a lapsed lease. rowid order
     // claims oldest-first; the partial-ish index keeps the scan cheap.
@@ -274,6 +281,11 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     return row === undefined ? null : rowToTask(row);
   }
 
+  async listByMessage(messageId: string): Promise<readonly DeliveryTask[]> {
+    const rows = this.#selectByMessage.all(messageId) as unknown as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
   /** Close the underlying database handle. */
   close(): void {
     this.#db.close();
@@ -347,4 +359,10 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_delivery_tasks_claimable
   ON delivery_tasks (status, next_attempt_at, lease_expires_at);
+
+-- Backs listByMessage (the delivery-status read). IF NOT EXISTS means an
+-- existing pre-index database gains it automatically on the next open — no
+-- migration step needed, since it is a pure read optimization over existing rows.
+CREATE INDEX IF NOT EXISTS idx_delivery_tasks_message
+  ON delivery_tasks (message_id);
 `;

@@ -16,6 +16,7 @@
  * | ------ | -------------------- | ------ | ---------------------------------------- |
  * | GET    | /healthz             | none   | Liveness probe.                          |
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
+ * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
  * | GET    | /v1/endpoints        | Bearer | List the tenant's endpoints.             |
  * | POST   | /v1/endpoints        | Bearer | Create an endpoint (201, secret once).   |
  * | GET    | /v1/endpoints/:id    | Bearer | Fetch one endpoint (tenant-scoped).      |
@@ -43,6 +44,7 @@
 
 import {
   IdempotencyConflictError,
+  type Message,
   type MessageStore,
   type NewMessage,
 } from "../storage/message-store.js";
@@ -53,7 +55,7 @@ import {
   type EndpointUpdate,
   type NewEndpoint,
 } from "../endpoints/endpoint.js";
-import type { DeliveryQueue } from "../queue/delivery-queue.js";
+import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import type { App, AppStore } from "../apps/app.js";
 import { ingest } from "../fanout/fanout.js";
 import {
@@ -208,6 +210,44 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
   };
 }
 
+/**
+ * The tenant-facing view of one delivery attempt-state, as returned by the
+ * message-status read. Surfaces exactly the fields a producer needs to answer
+ * "what happened to my webhook?" — the destination (`endpointId`), the current
+ * `status` (pending/delivering/succeeded/dead_letter), how many `attempts` have
+ * run, when the next retry is due, and the `lastError` if one failed. The opaque
+ * `leaseToken` is internal queue plumbing and is deliberately omitted.
+ */
+function deliveryView(task: DeliveryTask): Record<string, unknown> {
+  return {
+    id: task.id,
+    endpointId: task.endpointId,
+    status: task.status,
+    attempts: task.attempts,
+    nextAttemptAt: task.nextAttemptAt,
+    lastError: task.lastError,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+/** The tenant-facing view of a message and its per-endpoint delivery statuses. */
+function messageView(
+  message: Message,
+  deliveries: readonly DeliveryTask[],
+): Record<string, unknown> {
+  return {
+    id: message.id,
+    appId: message.appId,
+    eventType: message.eventType,
+    idempotencyKey: message.idempotencyKey,
+    // The producer's own payload, echoed back so it can confirm what was sent.
+    payload: message.payload,
+    createdAt: message.createdAt,
+    deliveries: deliveries.map(deliveryView),
+  };
+}
+
 /** Base context every route handler receives. */
 interface BaseContext {
   readonly req: ApiRequest;
@@ -295,6 +335,19 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const getMessage: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const message = await deps.messages.get(id);
+    // Cross-tenant (or absent) reads are 404 — existence is never revealed,
+    // consistent with the endpoint routes. Tenancy comes from the key, so a
+    // caller can only ever read its own messages.
+    if (message === null || message.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no message with id "${id}"`);
+    }
+    const deliveries = await deps.queue.listByMessage(id);
+    return json(200, messageView(message, deliveries));
+  };
+
   const listEndpoints: AuthedHandler = async (ctx) => {
     const all = await deps.endpoints.listByApp(ctx.app.id);
     return json(200, { data: all.map(endpointView) });
@@ -353,6 +406,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
   const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>([
     { method: "GET", pattern: "/healthz", handler: health },
     { method: "POST", pattern: "/v1/messages", handler: authed(createMessage) },
+    { method: "GET", pattern: "/v1/messages/:id", handler: authed(getMessage) },
     { method: "GET", pattern: "/v1/endpoints", handler: authed(listEndpoints) },
     { method: "POST", pattern: "/v1/endpoints", handler: authed(createEndpoint) },
     { method: "GET", pattern: "/v1/endpoints/:id", handler: authed(getEndpoint) },

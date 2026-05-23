@@ -468,6 +468,163 @@ describe("createApi — tenant isolation", () => {
   });
 });
 
+describe("createApi — GET /v1/messages/:id (delivery status)", () => {
+  it("rejects an unauthenticated read with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/messages/msg_1" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown message id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/messages/msg_missing",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("returns the message, its payload, and a pending delivery before the worker runs", async () => {
+    const { api, secret } = await setup();
+    await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://acme.example/hook", eventTypes: ["user.created"] },
+        secret,
+      ),
+    );
+    const ingest = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: { id: 42 } },
+        secret,
+      ),
+    );
+    const id = body(ingest).message.id;
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).id).toBe(id);
+    expect(body(res).eventType).toBe("user.created");
+    expect(body(res).payload).toBe(JSON.stringify({ id: 42 }));
+    expect(body(res).deliveries).toHaveLength(1);
+    const delivery = body(res).deliveries[0];
+    expect(delivery.status).toBe("pending");
+    expect(delivery.attempts).toBe(0);
+    expect(delivery).toHaveProperty("endpointId");
+    // Internal queue plumbing is never exposed.
+    expect(delivery).not.toHaveProperty("leaseToken");
+  });
+
+  it("reflects a succeeded delivery after the worker drains it", async () => {
+    const { api, secret, endpoints, messages, queue } = await setup();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ingest = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: { ok: true } },
+        secret,
+      ),
+    );
+    const id = body(ingest).message.id;
+
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: 200 }),
+    });
+    const tick = await worker.processOnce();
+    expect(tick.succeeded).toBe(1);
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).deliveries).toHaveLength(1);
+    expect(body(res).deliveries[0].status).toBe("succeeded");
+    expect(body(res).deliveries[0].attempts).toBe(1);
+  });
+
+  it("returns an empty deliveries array when nothing matched fan-out", async () => {
+    const { api, secret } = await setup();
+    // No endpoints registered → the message is accepted but fans out to nobody.
+    const ingest = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: {} },
+        secret,
+      ),
+    );
+    expect(body(ingest).fanout.matched).toBe(0);
+    const id = body(ingest).message.id;
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${id}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).deliveries).toEqual([]);
+  });
+
+  it("hides another tenant's message behind 404", async () => {
+    const { api, apps } = await setup();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+
+    const ingest = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, bKey),
+    );
+    const bMessageId = body(ingest).message.id;
+
+    // A cannot read B's message — 404, not 403 (existence is not revealed).
+    const aRead = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${bMessageId}`,
+        headers: { authorization: `Bearer ${aKey}` },
+      }),
+    );
+    expect(aRead.status).toBe(404);
+
+    // B can read its own.
+    const bRead = await api(
+      request({
+        method: "GET",
+        path: `/v1/messages/${bMessageId}`,
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(bRead.status).toBe(200);
+    expect(body(bRead).id).toBe(bMessageId);
+  });
+});
+
 describe("createApi — end-to-end with the delivery worker", () => {
   it("ingests over HTTP, then the worker delivers a request that verifies", async () => {
     const { api, secret, endpoints, messages, queue } = await setup();
