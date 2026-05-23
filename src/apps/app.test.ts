@@ -16,6 +16,7 @@ import {
   generateApiKeySecret,
   hashApiKey,
   isQuotaExceeded,
+  quotaRemaining,
   normalizeNewApp,
   normalizeQuota,
   UnknownAppError,
@@ -142,6 +143,27 @@ describe("isQuotaExceeded", () => {
 
   it("blocks every send for a quota of 0", () => {
     expect(isQuotaExceeded(0, 0)).toBe(true);
+  });
+});
+
+describe("quotaRemaining", () => {
+  it("is null (unbounded) for a null quota", () => {
+    expect(quotaRemaining(0, null)).toBeNull();
+    expect(quotaRemaining(1_000_000, null)).toBeNull();
+  });
+
+  it("is the headroom below the quota", () => {
+    expect(quotaRemaining(0, 10)).toBe(10);
+    expect(quotaRemaining(3, 10)).toBe(7);
+    expect(quotaRemaining(10, 10)).toBe(0);
+  });
+
+  it("floors at 0 on a soft-limit overshoot (never negative)", () => {
+    expect(quotaRemaining(12, 10)).toBe(0);
+  });
+
+  it("is 0 for a quota of 0 (a suspended tenant)", () => {
+    expect(quotaRemaining(0, 0)).toBe(0);
   });
 });
 

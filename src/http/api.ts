@@ -28,6 +28,7 @@
  * | PATCH  | /v1/endpoints/:id    | Bearer | Update an endpoint (tenant-scoped).      |
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
  * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
+ * | GET    | /v1/usage            | Bearer | The tenant's own message usage + quota status. |
  * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
  * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
  * | GET    | /v1/admin/apps/:id   | Admin  | Fetch one tenant.                        |
@@ -96,6 +97,7 @@ import type {
 } from "../attempts/delivery-attempt.js";
 import {
   isQuotaExceeded,
+  quotaRemaining,
   UnknownAppError,
   type ApiKey,
   type App,
@@ -522,6 +524,35 @@ function usageView(summary: UsageSummary): Record<string, unknown> {
   };
 }
 
+/**
+ * The tenant self-service view for `GET /v1/usage`: the queried range's message
+ * breakdown (the same shape {@link usageView} returns) plus a live `quota` block
+ * describing the tenant's **current** UTC-calendar-month status — the enforcement
+ * window `POST /v1/messages` checks. The quota block is independent of the queried
+ * range (a custom `?from=&to=` pulls historical usage while `quota` still reports
+ * this month), so a tenant — or the dashboard rendering it — can see how close it
+ * is to its plan limit and when the allowance resets. `remaining` is `null` for an
+ * unlimited tenant; `resetsAt` is the first day of next UTC month (the exclusive
+ * upper bound of {@link import("../storage/message-store.js").utcMonthRange}).
+ */
+function tenantUsageView(
+  summary: UsageSummary,
+  app: App,
+  monthUsed: number,
+  monthRange: UsageRange,
+): Record<string, unknown> {
+  return {
+    ...usageView(summary),
+    quota: {
+      monthlyMessageQuota: app.monthlyMessageQuota,
+      used: monthUsed,
+      remaining: quotaRemaining(monthUsed, app.monthlyMessageQuota),
+      periodStart: utcDayKey(monthRange.fromMs),
+      resetsAt: utcDayKey(monthRange.toMs),
+    },
+  };
+}
+
 /** Base context every route handler receives. */
 interface BaseContext {
   readonly req: ApiRequest;
@@ -558,6 +589,7 @@ export const API_ROUTE_KEYS = [
   "PATCH /v1/endpoints/:id",
   "DELETE /v1/endpoints/:id",
   "POST /v1/endpoints/:id/rotate-secret",
+  "GET /v1/usage",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
   "POST /v1/admin/apps",
@@ -886,6 +918,28 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, { ...endpointView(rotated), secret: rotated.secret });
   };
 
+  const getUsage: AuthedHandler = async (ctx) => {
+    // The tenant's *own* usage + live quota status — the self-service counterpart to
+    // the admin metering route (`GET /v1/admin/apps/:id/usage`), scoped to the key's
+    // tenant (never a body/path appId). The current UTC month is both the natural
+    // self-service default and the quota-enforcement window.
+    const monthRange = utcMonthRange(now());
+    // Default the breakdown to the current month; a caller may request any historical
+    // window with ?from=&to= (the same inclusive-day contract as the admin route — a
+    // partial or malformed range is a 400 via parseUsageRangeParams).
+    const hasRangeQuery =
+      ctx.req.query["from"] !== undefined || ctx.req.query["to"] !== undefined;
+    const range = hasRangeQuery ? parseUsageRangeParams(ctx.req.query) : monthRange;
+    const summary = await deps.messages.summarizeUsageByApp(ctx.app.id, range);
+    // The quota block always reflects the *current* month. Reuse the summary's total
+    // when the queried range already is the current month (the default — one store
+    // call); only a custom range needs a second count.
+    const monthUsed = hasRangeQuery
+      ? (await deps.messages.summarizeUsageByApp(ctx.app.id, monthRange)).total
+      : summary.total;
+    return json(200, tenantUsageView(summary, ctx.app, monthUsed, monthRange));
+  };
+
   // --- Admin / control-plane handlers ---------------------------------------
   // These provision tenants and API keys cross-tenant; they receive a BaseContext
   // (no resolved `app`) and are gated by `adminAuthed`, not `authed`.
@@ -1009,6 +1063,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "PATCH /v1/endpoints/:id": authed(updateEndpoint),
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
+    "GET /v1/usage": authed(getUsage),
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),
     "GET /v1/admin/apps/:id": adminAuthed(getApp),

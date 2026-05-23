@@ -326,6 +326,23 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(second.nextCursor).toBeNull();
   });
 
+  it("reads the tenant's usage and current-month quota status", async () => {
+    const { client } = await startServer();
+    // This tenant has no quota configured → unlimited.
+    await client.sendMessage({ eventType: "e", payload: { i: 1 } });
+    await client.sendMessage({ eventType: "e", payload: { i: 2 } });
+    const usage = await client.getUsage();
+    expect(usage.appId).toMatch(/^app_/);
+    // Both sends are in the current UTC month (the default window).
+    expect(usage.total).toBe(2);
+    expect(usage.quota.monthlyMessageQuota).toBeNull();
+    expect(usage.quota.used).toBe(2);
+    expect(usage.quota.remaining).toBeNull();
+    expect(usage.quota.periodStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(usage.quota.resetsAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Array.isArray(usage.daily)).toBe(true);
+  });
+
   it("tolerates a trailing slash in baseUrl", async () => {
     const { base, apiKey } = await startServer();
     const client = new PosthornClient({ baseUrl: `${base}///`, apiKey });

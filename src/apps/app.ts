@@ -274,6 +274,20 @@ export function isQuotaExceeded(currentUsage: number, quota: number | null): boo
   return quota !== null && currentUsage >= quota;
 }
 
+/**
+ * How many more messages a tenant may accept this period under its quota:
+ * `quota - currentUsage`, floored at `0` so the soft-limit overshoot (a burst that
+ * crossed the ceiling concurrently) never reports a negative allowance. A `null`
+ * quota means **no limit**, so the remaining allowance is `null` (unbounded). The
+ * companion to {@link isQuotaExceeded}: where that decides *whether* the next send
+ * is admitted, this reports *how much* headroom is left. Pure; the self-service
+ * usage route (`GET /v1/usage`) surfaces it so a tenant sees how close it is to its
+ * plan limit (and a freemium user sees when to upgrade).
+ */
+export function quotaRemaining(currentUsage: number, quota: number | null): number | null {
+  return quota === null ? null : Math.max(0, quota - currentUsage);
+}
+
 /** The validated, normalized fields of a {@link NewApp}. */
 export interface NormalizedNewApp {
   readonly name: string;

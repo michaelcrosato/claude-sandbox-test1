@@ -122,6 +122,12 @@ export function buildOpenApiDocument(): OpenApiDocument {
       { name: "Messages", description: "Send messages and observe their delivery." },
       { name: "Endpoints", description: "Manage the destinations messages fan out to." },
       {
+        name: "Usage",
+        description:
+          "Your own message usage and current-month quota status — the self-service " +
+          "view a customer (or a dashboard) reads to track consumption against its plan.",
+      },
+      {
         name: "Admin",
         description:
           "Control-plane provisioning of tenants (apps) and API keys. Authenticated by " +
@@ -388,6 +394,47 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "400": errorResponse("Malformed request body (e.g. an empty `secret` or negative `overlapMs`)."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
+      "/v1/usage": {
+        get: {
+          operationId: "getUsage",
+          tags: ["Usage"],
+          summary: "Get your usage and quota status",
+          description:
+            "Your own message usage plus a live `quota` block for the **current** UTC " +
+            "calendar month — the self-service counterpart to the admin metering route, " +
+            "scoped to the API key's tenant. The breakdown defaults to the current month; " +
+            "pass `?from=&to=` (inclusive `YYYY-MM-DD` UTC days, span capped at " +
+            `${MAX_USAGE_RANGE_DAYS} days) to pull any historical window — the \`quota\` ` +
+            "block still reports this month either way (where the message-quota gate stands), " +
+            "so you can see how close you are to your plan limit and when the allowance resets. " +
+            "Counts are exact (a deduplicated retry is never double-counted).",
+          parameters: [
+            {
+              name: "from",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "date" },
+              description:
+                "Inclusive start day, `YYYY-MM-DD` (UTC). Omit (with `to`) for the current month.",
+            },
+            {
+              name: "to",
+              in: "query",
+              required: false,
+              schema: { type: "string", format: "date" },
+              description: "Inclusive end day, `YYYY-MM-DD` (UTC). Must be on or after `from`.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse(
+              "Your message usage over the range, plus current-month quota status.",
+              ref("TenantUsage"),
+            ),
+            "400": errorResponse("A partial or invalid `from`/`to`, or a range over the day cap."),
+            "401": errorResponse("Missing or invalid API key."),
           },
         },
       },
@@ -984,6 +1031,53 @@ export function buildOpenApiDocument(): OpenApiDocument {
             date: { type: "string", format: "date", description: "The UTC day, `YYYY-MM-DD`." },
             messages: { type: "integer", minimum: 0, description: "Messages accepted on this day." },
           },
+        },
+        QuotaStatus: {
+          type: "object",
+          description:
+            "A tenant's current-month quota status — the window `POST /v1/messages` enforces.",
+          required: ["monthlyMessageQuota", "used", "remaining", "periodStart", "resetsAt"],
+          properties: {
+            monthlyMessageQuota: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description: "The plan's monthly message cap, or null for no limit.",
+            },
+            used: {
+              type: "integer",
+              minimum: 0,
+              description: "Messages accepted so far this UTC month.",
+            },
+            remaining: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "Messages still allowed this month (floored at 0), or null when unlimited.",
+            },
+            periodStart: {
+              type: "string",
+              format: "date",
+              description: "First day of the current UTC month, `YYYY-MM-DD`.",
+            },
+            resetsAt: {
+              type: "string",
+              format: "date",
+              description: "First day of next UTC month — when the allowance resets, `YYYY-MM-DD`.",
+            },
+          },
+        },
+        TenantUsage: {
+          description:
+            "The tenant self-service usage view (`GET /v1/usage`): the queried range's message " +
+            "breakdown plus a live current-month `quota` block.",
+          allOf: [
+            ref("Usage"),
+            {
+              type: "object",
+              required: ["quota"],
+              properties: { quota: ref("QuotaStatus") },
+            },
+          ],
         },
       },
     },

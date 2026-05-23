@@ -4,6 +4,79 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 27: P5 — tenant self-service usage & quota (`GET /v1/usage`)
+
+**Repo truth at start:** clean main @ `38fed27` (iter 26, monthly quota enforcement) — a real clean
+baseline, not an interrupted tick (git clean; iter-26 entry present + matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **687/687, 32 files**, `npm run build` clean,
+integrity + local gate exit 0. Node 24.15. The GOAL→PROJECT reconciliation stands (Posthorn; the GitHub
+check is settled in PROJECT.md §1 — re-searching for a *new* project 27 ticks in would be anti-leverage).
+
+**High-leverage move chosen (checklist #3):** Build the **tenant self-service usage & quota endpoint**
+(`GET /v1/usage`). The decisive reasoning, consistent with iters 24–26's deliberate strategy (the sending
+core is mature and exhaustively tested → its marginal polish is low-value; advancing the *profit phase*
+P5 is high-value, the GOAL's prime filter): iter-25 *metered* message usage and iter-26 *enforced* a
+monthly quota, but **both were admin-only** (`/v1/admin/apps/:id/usage`, admin-token-gated). A tenant had
+**no way to see its own usage or even its plan limit** — so a freemium user that hit a `429` was blind,
+which is both a support-ticket generator and a missed upgrade prompt. Exposing the metered+enforced quota
+to the paying tenant **completes the meter→enforce→expose arc**, is the tenant-facing API the eventual P5
+dashboard renders, and is a direct freemium→paid funnel lever. It beats the standing-deferred alternatives:
+Stripe billing needs an external account (unvalidatable in the loop's gate); per-tenant *delivery* usage
+needs a recording rollup (a larger, riskier store change); the admin SDK client / `lastUsedAt` / attempt
+pagination are each narrower. And it is a clean, deterministic, **zero-new-state** green unit.
+
+**Decisive design call — pure reuse, no new state.** The endpoint composes only existing primitives:
+`summarizeUsageByApp` (the iter-25 exact-aggregate read model), `utcMonthRange` (iter-26), and one new
+pure helper `quotaRemaining(used, quota)` (`src/apps/app.ts`; the companion to `isQuotaExceeded` —
+`null`→`null` unlimited, else `max(0, quota−used)` so a soft-limit overshoot never reports negative). So
+**no store change, no migration, no new index, no ingest/worker touch.** Scoped to the API key's tenant
+(never a body/path `appId`, like every tenant route). The breakdown **defaults to the current UTC month**
+(the self-service view) and accepts the same optional inclusive-`YYYY-MM-DD` `?from=&to=` historical
+window as the admin route (reusing `parseUsageRangeParams`; partial/invalid/over-cap → `400`). Critically
+the `quota` block (`monthlyMessageQuota`/`used`/`remaining`/`periodStart`/`resetsAt`) always reports the
+**current month** regardless of the queried range — so a dashboard shows "N of M, resets on the 1st" while
+still pulling history. One store call in the default case; a custom range adds one more to keep the quota
+block live.
+
+**Built this tick (a vertical slice over existing machinery):**
+- **`apps/app.ts`** — pure `quotaRemaining`, re-exported from `index.ts`.
+- **`http/api.ts`** — `"GET /v1/usage"` added to `API_ROUTE_KEYS` (the `Record<ApiRouteKey, …>` made wiring
+  exhaustive); `getUsage` authed handler; `tenantUsageView` (the `usageView` breakdown + the live `quota`
+  block); module surface table updated.
+- **`http/openapi.ts`** — a `Usage` tag + the `getUsage` operation + `TenantUsage` (`allOf` of the existing
+  `Usage` + `quota`) / `QuotaStatus` schemas; the bidirectional drift + orphan-schema tests *forced* the op
+  and both schemas (and re-referencing `Usage` keeps it non-orphan).
+- **`sdk/client.ts`** — `client.getUsage({from?,to?})` → `TenantUsage`, plus SDK-owned `TenantUsage`/
+  `QuotaStatus`/`UsageDay`/`GetUsageParams` wire types (the SDK's own views, per its design); the top three
+  re-exported from `index.ts` (the SDK's `UsageDay` deliberately not re-exported — it would collide with
+  the message-store `UsageDay` already on the barrel).
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **698/698, 32 files**
+(was 687; **+11**: `quotaRemaining` pure unit ×4; a pure handler suite ×6 — 401, current-month default,
+unlimited→`remaining:null`, used/remaining against a quota, historical-range-with-live-quota, partial/
+invalid/inverted `400`, tenant isolation; an in-process SDK test ×1). `npm run build` clean. Integrity gate
+exit 0 (three hash-protected files untouched); local gate exit 0. No tinypool flake this run
+([[vitest-tinypool-flaky-worker-exit]]).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway on a
+**file-backed** dir with an admin token; provisioned a tenant with `monthlyMessageQuota:5` over the admin
+HTTP API, minted a key, sent 3 messages, and read `GET /v1/usage` **through the SDK's `getUsage`** — got
+`total:3`, `quota.used:3`, `quota.remaining:2`, `periodStart:2026-05-01`, `resetsAt:2026-06-01`; a
+historical `2020-01-01..02` range returned its empty window while `quota.used` stayed `3` (current month);
+then **restarted on the same files** and saw usage + quota persist (durable, no Redis). Exit 0; temp script
+removed; git shows only the 8 intended source/test files.
+
+**State:** GREEN → committing to main as Iteration 27. Net: a Posthorn tenant can now **see its own**
+message usage and live monthly quota status (used / remaining / when it resets) over its own API key and
+the SDK — the customer-facing surface that turns the admin-only metering+enforcement into a self-service,
+funnel-driving capability and the foundation the P5 dashboard renders. **Standing deferred (next
+candidates):** usage-based billing integration (Stripe); per-tenant *delivery* usage (needs a recording
+rollup — attempts aren't tenant-indexed); an *admin* SDK client; per-key `lastUsedAt`; attempt-log
+pagination; an operator deploy/monitoring guide; and the rest of P5 (dashboard UI).
+
+---
+
 ## 2026-05-23 — Iteration 26: P5 — real-time monthly quota enforcement (RECONCILED interrupted tick)
 
 **Repo truth at start — an interrupted prior tick, not a clean baseline.** git head was `4f30cb9`

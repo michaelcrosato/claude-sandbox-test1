@@ -534,6 +534,34 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     `node:sqlite` file). **Reconciled, not freshly authored:** the implementation landed orphaned from an
     interrupted prior tick (built + uncommitted, no LOOP_LOG entry, tree red on `tsc`); this tick
     adjudicated it, completed the missing test coverage, and validated it green ([[interrupted-tick-reconcile-pattern]]).
+  - **Tenant self-service usage & quota — `GET /v1/usage` ✅ (this tick):** the *customer-facing* half of
+    the meter→enforce→**expose** arc, and the foundation the eventual dashboard UI renders. iter-25 metered
+    message usage and iter-26 enforced a monthly quota, but both were reachable **only** over the admin
+    control plane (`/v1/admin/apps/:id/usage`, admin-token-gated) — a tenant had *no* way to see its own
+    consumption or even its plan limit, so a freemium user hitting a `429` was flying blind (and every such
+    "what's my usage / how close am I?" question is a support ticket and an invisible upgrade prompt). This
+    adds the tenant-authenticated counterpart (`src/http/api.ts`): scoped to the API key's tenant (never a
+    body/path `appId`), it returns the tenant's own message breakdown over a range **plus** a live `quota`
+    block for the **current UTC month** — `monthlyMessageQuota`, `used`, `remaining`, `periodStart`,
+    `resetsAt`. The breakdown **defaults to the current month** (the natural self-service view) and accepts
+    the same optional inclusive-`YYYY-MM-DD` `?from=&to=` historical window as the admin route (reusing
+    `parseUsageRangeParams`; a partial/invalid/over-cap range → `400`); critically the `quota` block always
+    reports **this month** regardless of the queried range — so a dashboard can show "you've used N of M,
+    resets on the 1st" while still pulling history. **Pure reuse, zero new state:** it composes the existing
+    `summarizeUsageByApp` read model (iter-25), `utcMonthRange` (iter-26), and a new pure
+    `quotaRemaining(used, quota)` (`src/apps/app.ts` — the companion to `isQuotaExceeded`: `null`→`null`
+    unlimited, else `max(0, quota−used)` so a soft-limit overshoot never reports negative) — **no store
+    change, no migration, no new index, no ingest/worker change**. One store call in the default case (the
+    queried range *is* the current month); a custom range adds one more to keep the quota block live. The
+    compile-checked route table + bidirectional OpenAPI drift + orphan-schema tests **forced** the `getUsage`
+    operation, a `Usage` tag, and the `TenantUsage` (`allOf` of the existing `Usage` + a `quota`) /
+    `QuotaStatus` schemas. The SDK gained `client.getUsage({from?,to?})` → `TenantUsage` (the typed-TS path
+    stays complete). Proven by pure `quotaRemaining` unit tests, a pure handler suite (401, current-month
+    default, unlimited→`remaining:null`, used/remaining against a quota, historical-range-with-live-quota,
+    partial/invalid/inverted-range `400`, tenant isolation), an in-process SDK test, and a **compiled-`dist`**
+    smoke (admin-provision a quota'd tenant over HTTP → send → SDK `getUsage` reports `used/remaining` →
+    historical range returns its window while quota stays current-month → usage+quota **survive a restart**
+    on the real `node:sqlite` file).
   - Remaining: usage-based billing integration (Stripe), per-tenant *delivery* usage, and the dashboard UI.
 
 ## 5. Out of scope / non-goals

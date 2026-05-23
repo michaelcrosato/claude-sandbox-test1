@@ -382,6 +382,121 @@ describe("createApi — POST /v1/messages monthly quota enforcement", () => {
   });
 });
 
+describe("createApi — GET /v1/usage (tenant self-service)", () => {
+  interface UsageFixture {
+    readonly api: ApiHandler;
+    readonly secret: string;
+    readonly appId: string;
+    readonly messages: InMemoryMessageStore;
+    setNow(ms: number): void;
+  }
+
+  /**
+   * A single-tenant API over a clock shared by the message store (so messages land
+   * on the intended UTC day) and the usage route (so the current-month window lines
+   * up). The clock can be moved to seed messages in different months.
+   */
+  async function setupUsage(quota: number | null = null): Promise<UsageFixture> {
+    let nowMs = Date.UTC(2026, 4, 15, 12, 0, 0); // 2026-05-15T12:00:00Z
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs });
+    const app = await apps.create({ name: "Acme", monthlyMessageQuota: quota });
+    const { secret } = await apps.createApiKey(app.id);
+    return { api, secret, appId: app.id, messages, setNow: (ms) => { nowMs = ms; } };
+  }
+
+  function usageRequest(secret: string | null, query: Record<string, string> = {}): ApiRequest {
+    return request({
+      method: "GET",
+      path: "/v1/usage",
+      query,
+      headers: secret !== null ? { authorization: `Bearer ${secret}` } : {},
+    });
+  }
+
+  it("requires authentication", async () => {
+    const { api } = await setupUsage();
+    expect((await api(usageRequest(null))).status).toBe(401);
+  });
+
+  it("defaults to the current UTC month and reports an unlimited quota as null", async () => {
+    const { api, secret, appId, messages } = await setupUsage(null);
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    const res = await api(usageRequest(secret));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({
+      appId,
+      from: "2026-05-01",
+      to: "2026-05-31",
+      total: 2,
+      daily: [{ date: "2026-05-15", messages: 2 }],
+      quota: {
+        monthlyMessageQuota: null,
+        used: 2,
+        remaining: null,
+        periodStart: "2026-05-01",
+        resetsAt: "2026-06-01",
+      },
+    });
+  });
+
+  it("reports used and remaining against a configured quota", async () => {
+    const { api, secret, appId, messages } = await setupUsage(10);
+    for (let i = 0; i < 3; i++) {
+      await messages.create({ appId, eventType: "e", payload: "{}" });
+    }
+    const b = body(await api(usageRequest(secret)));
+    expect(b.quota.monthlyMessageQuota).toBe(10);
+    expect(b.quota.used).toBe(3);
+    expect(b.quota.remaining).toBe(7);
+  });
+
+  it("pulls a historical range while the quota block still reports the current month", async () => {
+    const { api, secret, appId, messages, setNow } = await setupUsage(100);
+    // One message in April…
+    setNow(Date.UTC(2026, 3, 20, 9, 0, 0)); // 2026-04-20
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    // …two in May, the "current" month per the clock.
+    setNow(Date.UTC(2026, 4, 15, 12, 0, 0)); // 2026-05-15
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+
+    const b = body(await api(usageRequest(secret, { from: "2026-04-01", to: "2026-04-30" })));
+    // The breakdown is the requested April window…
+    expect(b.from).toBe("2026-04-01");
+    expect(b.to).toBe("2026-04-30");
+    expect(b.total).toBe(1);
+    expect(b.daily).toEqual([{ date: "2026-04-20", messages: 1 }]);
+    // …but the quota block reflects the current (May) month, not the queried range.
+    expect(b.quota.used).toBe(2);
+    expect(b.quota.remaining).toBe(98);
+    expect(b.quota.periodStart).toBe("2026-05-01");
+    expect(b.quota.resetsAt).toBe("2026-06-01");
+  });
+
+  it("400s on a partial or invalid range", async () => {
+    const { api, secret } = await setupUsage();
+    expect((await api(usageRequest(secret, { from: "2026-05-01" }))).status).toBe(400); // missing to
+    expect((await api(usageRequest(secret, { to: "2026-05-01" }))).status).toBe(400); // missing from
+    expect((await api(usageRequest(secret, { from: "2026-02-30", to: "2026-03-01" }))).status).toBe(400); // invalid day
+    expect((await api(usageRequest(secret, { from: "2026-05-02", to: "2026-05-01" }))).status).toBe(400); // inverted
+  });
+
+  it("never counts another tenant's messages", async () => {
+    const { api, secret, appId, messages } = await setupUsage(null);
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    await messages.create({ appId: "app_other", eventType: "e", payload: "{}" });
+    const b = body(await api(usageRequest(secret)));
+    expect(b.total).toBe(1);
+    expect(b.quota.used).toBe(1);
+  });
+});
+
 describe("createApi — endpoints CRUD", () => {
   it("creates an endpoint, returning the secret exactly once", async () => {
     const { api, secret, appId } = await setup();

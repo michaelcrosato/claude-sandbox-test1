@@ -297,6 +297,54 @@ export interface RotateEndpointSecretInput {
   readonly overlapMs?: number;
 }
 
+/** One UTC day's message count in a {@link TenantUsage} breakdown. */
+export interface UsageDay {
+  /** The UTC day, `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Messages accepted on this day (within the queried range). */
+  readonly messages: number;
+}
+
+/**
+ * The current-month quota status block of {@link TenantUsage} — the window the
+ * gateway enforces a monthly message quota over (`POST /v1/messages` → `429`).
+ */
+export interface QuotaStatus {
+  /** The plan's monthly message cap, or `null` for no limit. */
+  readonly monthlyMessageQuota: number | null;
+  /** Messages accepted so far this UTC month. */
+  readonly used: number;
+  /** Messages still allowed this month (floored at 0), or `null` when unlimited. */
+  readonly remaining: number | null;
+  /** First day of the current UTC month, `YYYY-MM-DD`. */
+  readonly periodStart: string;
+  /** First day of next UTC month — when the allowance resets, `YYYY-MM-DD`. */
+  readonly resetsAt: string;
+}
+
+/** The result of {@link PosthornClient.getUsage}. */
+export interface TenantUsage {
+  readonly appId: string;
+  /** Inclusive start day of the breakdown (UTC), `YYYY-MM-DD`. */
+  readonly from: string;
+  /** Inclusive end day of the breakdown (UTC), `YYYY-MM-DD`. */
+  readonly to: string;
+  /** Total messages across the queried range. */
+  readonly total: number;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one message. */
+  readonly daily: readonly UsageDay[];
+  /** Live current-month quota status (independent of the queried range). */
+  readonly quota: QuotaStatus;
+}
+
+/** Options for {@link PosthornClient.getUsage}; omit both for the current UTC month. */
+export interface GetUsageParams {
+  /** Inclusive start day, `YYYY-MM-DD` (UTC). */
+  readonly from?: string;
+  /** Inclusive end day, `YYYY-MM-DD` (UTC). Must be on or after `from`. */
+  readonly to?: string;
+}
+
 /** Default `fetch`, bound to the platform global, adapting it to {@link PosthornFetch}. */
 const defaultFetch: PosthornFetch = (url, init) => fetch(url, init);
 
@@ -475,6 +523,25 @@ export class PosthornClient {
       "POST",
       `/v1/endpoints/${encodeURIComponent(id)}/rotate-secret`,
       body,
+    );
+  }
+
+  /**
+   * Read your own message usage and current-month quota status — `GET /v1/usage`.
+   * Defaults to the current UTC month; pass `{ from, to }` (inclusive `YYYY-MM-DD`
+   * UTC days) to pull a historical window. The returned {@link TenantUsage.quota}
+   * always reports the current month (used / remaining / when it resets), so you can
+   * track your plan limit regardless of the queried range — surface it to warn a user
+   * before they hit a `429`.
+   */
+  async getUsage(params: GetUsageParams = {}): Promise<TenantUsage> {
+    const query = new URLSearchParams();
+    if (params.from !== undefined) query.set("from", params.from);
+    if (params.to !== undefined) query.set("to", params.to);
+    const qs = query.toString();
+    return this.#request<TenantUsage>(
+      "GET",
+      `/v1/usage${qs.length > 0 ? `?${qs}` : ""}`,
     );
   }
 

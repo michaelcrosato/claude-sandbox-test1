@@ -210,6 +210,7 @@ export {
   applyAppUpdate,
   normalizeQuota,
   isQuotaExceeded,
+  quotaRemaining,
   API_KEY_SECRET_PREFIX,
   type App,
   type NewApp,
@@ -315,6 +316,9 @@ export {
   type CreateEndpointInput,
   type UpdateEndpointInput,
   type RotateEndpointSecretInput,
+  type TenantUsage,
+  type QuotaStatus,
+  type GetUsageParams,
 } from "./sdk/client.js";
 
 export {
