@@ -1,5 +1,7 @@
 # Posthorn
 
+[![CI](https://github.com/michaelcrosato/claude-sandbox-test1/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelcrosato/claude-sandbox-test1/actions/workflows/ci.yml)
+
 > Open-core, [Standard Webhooks](https://www.standardwebhooks.com/)-compliant **reliable
 > webhook delivery infrastructure**. Single container, **no Redis**, MIT-licensed.
 >
@@ -401,6 +403,8 @@ embedded SQLite file. Because Posthorn has **zero runtime dependencies** (every 
 Node built-in), the image ships only a Node binary and the compiled output: no `node_modules` to
 audit or patch.
 
+For a production setup with Prometheus monitoring, see **[`docs/DEPLOY.md`](docs/DEPLOY.md)**.
+
 ```bash
 docker build -t posthorn .
 docker run -p 3000:3000 -v posthorn-data:/data posthorn
@@ -421,7 +425,7 @@ The container binds `0.0.0.0:3000`, runs as the unprivileged `node` user, and sh
 setting with the `POSTHORN_*` environment variables below (e.g. `-e POSTHORN_PORT=8080`). When
 bind-mounting a host directory instead of a named volume, ensure it is writable by uid `1000`.
 
-Configuration is environment-driven (all optional):
+Configuration is environment-driven (all optional). See also `.env.example` and the full reference in [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -429,11 +433,13 @@ Configuration is environment-driven (all optional):
 | `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the SQLite files, or `:memory:` for an ephemeral run. |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap (`413` beyond it). |
+| `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API (`/v1/admin/*`) and dashboard. Must be ≥ 32 chars. |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
 | `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight at once within a tick (`1` = sequential). |
 | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout. |
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when idle. |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime before an in-flight delivery is reclaimed. |
+| `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` | `432000000` | Auto-disable a failing endpoint after this many ms (default 5 days). `0` = off. |
 
 ### Bootstrap the first tenant + API key
 
