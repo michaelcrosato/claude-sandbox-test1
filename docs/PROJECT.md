@@ -689,8 +689,13 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     **compiled-`dist` smoke run** (22/22 checks through production ESM: login flow, session
     cookie attrs, tenant isolation, message list + detail, endpoints, logout, unauthenticated
     redirect).
+  - **Per-key `lastUsedAt` ✅ (iter 33):** `ApiKey.lastUsedAt` tracks the last successful
+    authentication timestamp (null = never used). Written inside `AppStore.authenticate` on success
+    (no blast radius on callers), surfaced in the admin dashboard key table ("Last used" column),
+    the admin SDK `AdminApiKey` type, and the OpenAPI `ApiKey` schema. Both backends (in-memory +
+    SQLite with a seamless `ALTER TABLE` migration).
   - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop); per-key `lastUsedAt`; attempt-log pagination; operator deploy/monitoring guide (P4 docs).
+    loop); attempt-log pagination (scaling concern); operator deploy/monitoring guide (P4 docs).
 
 ## 5. Out of scope / non-goals
 

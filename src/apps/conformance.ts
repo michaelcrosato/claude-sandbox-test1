@@ -211,10 +211,39 @@ export function describeAppStoreContract(
         expect(apiKey.appId).toBe(app.id);
         expect(apiKey.prefix).toBe(secret); // the short test secret is < prefix length
         expect(apiKey.revokedAt).toBeNull();
+        expect(apiKey.lastUsedAt).toBeNull(); // never used yet
         expect(apiKey.createdAt).toBe(clock.now());
         // The minted secret is returned here and listed only as metadata.
         const listed = await store.listApiKeys(app.id);
         expect(listed).toEqual([apiKey]);
+      });
+
+      it("updates lastUsedAt on each successful authentication, not on failure", async () => {
+        const app = await store.create();
+        const { secret } = await store.createApiKey(app.id);
+
+        // Null before first use.
+        const [before] = await store.listApiKeys(app.id);
+        expect(before?.lastUsedAt).toBeNull();
+
+        // First successful auth records the time.
+        clock.advance(1_000);
+        await store.authenticate(secret);
+        const [after1] = await store.listApiKeys(app.id);
+        expect(after1?.lastUsedAt).toBe(clock.now());
+
+        // A later auth bumps it again.
+        clock.advance(1_000);
+        await store.authenticate(secret);
+        const [after2] = await store.listApiKeys(app.id);
+        expect(after2?.lastUsedAt).toBe(clock.now());
+
+        // A failed auth (wrong secret) leaves lastUsedAt unchanged.
+        const lastGoodTime = clock.now();
+        clock.advance(1_000);
+        await store.authenticate("phk_wrong");
+        const [afterFail] = await store.listApiKeys(app.id);
+        expect(afterFail?.lastUsedAt).toBe(lastGoodTime);
       });
 
       it("throws UnknownAppError when minting for an unknown app", async () => {

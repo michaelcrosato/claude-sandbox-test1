@@ -990,7 +990,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         ApiKey: {
           type: "object",
           description: "An API key's non-secret metadata. The secret is never included (the store keeps only its hash).",
-          required: ["id", "appId", "prefix", "createdAt", "revokedAt"],
+          required: ["id", "appId", "prefix", "createdAt", "revokedAt", "lastUsedAt"],
           properties: {
             id: { type: "string", examples: ["ak_5Qm2..."], description: "Used to revoke the key." },
             appId: { type: "string", description: "The tenant this key authenticates as." },
@@ -1004,6 +1004,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["integer", "null"],
               format: "int64",
               description: "When the key was revoked (epoch ms), or null while it is still live.",
+            },
+            lastUsedAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description: "The last time this key successfully authenticated a request (epoch ms), or null if it has never been used.",
             },
           },
         },

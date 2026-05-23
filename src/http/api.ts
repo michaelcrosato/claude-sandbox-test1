@@ -510,6 +510,7 @@ function apiKeyView(key: ApiKey): Record<string, unknown> {
     prefix: key.prefix,
     createdAt: key.createdAt,
     revokedAt: key.revokedAt,
+    lastUsedAt: key.lastUsedAt,
   };
 }
 

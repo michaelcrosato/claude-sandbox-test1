@@ -186,13 +186,14 @@ export function appDetailPage(
 
   const keyRows =
     keys.length === 0
-      ? `<tr><td colspan="5" class="empty">No keys yet.</td></tr>`
+      ? `<tr><td colspan="6" class="empty">No keys yet.</td></tr>`
       : keys
           .map(
             (k) => `<tr>
     <td class="mono">${esc(k.prefix)}…</td>
     <td class="mono meta">${esc(k.id)}</td>
     <td class="meta">${new Date(k.createdAt).toISOString().slice(0, 10)}</td>
+    <td class="meta">${k.lastUsedAt !== null ? new Date(k.lastUsedAt).toISOString().slice(0, 10) : "—"}</td>
     <td><span class="pill ${k.revokedAt !== null ? "pill-gray" : "pill-green"}">${k.revokedAt !== null ? "Revoked" : "Active"}</span></td>
     <td>${
       k.revokedAt === null
@@ -218,7 +219,7 @@ ${newKeyBanner}
 <div class="card">
   <table>
     <thead>
-      <tr><th>Prefix</th><th>Key ID</th><th>Created</th><th>Status</th><th></th></tr>
+      <tr><th>Prefix</th><th>Key ID</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr>
     </thead>
     <tbody>${keyRows}</tbody>
   </table>

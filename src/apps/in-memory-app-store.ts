@@ -152,6 +152,7 @@ export class InMemoryAppStore implements AppStore {
       prefix: apiKeyPrefix(secret),
       createdAt: nowMs,
       revokedAt: null,
+      lastUsedAt: null,
     };
     this.#keys.set(id, { key: apiKey, keyHash });
     this.#byHash.set(keyHash, id);
@@ -194,6 +195,9 @@ export class InMemoryAppStore implements AppStore {
     if (!apiKeyHashesEqual(hash, stored.keyHash)) {
       return null; // defense-in-depth; the index match makes this unreachable
     }
+    // Record last-used time on successful authentication.
+    const updated: ApiKey = { ...stored.key, lastUsedAt: this.#now() };
+    this.#keys.set(keyId, { key: updated, keyHash: stored.keyHash });
     return this.#apps.get(stored.key.appId) ?? null;
   }
 }

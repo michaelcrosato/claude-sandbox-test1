@@ -117,6 +117,8 @@ export interface AdminApiKey {
   readonly createdAt: number;
   /** When the key was revoked (epoch ms), or `null` if still live. */
   readonly revokedAt: number | null;
+  /** Last time this key successfully authenticated a request (epoch ms), or `null` if unused. */
+  readonly lastUsedAt: number | null;
 }
 
 /**

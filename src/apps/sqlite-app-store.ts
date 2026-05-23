@@ -79,6 +79,7 @@ interface ApiKeyRow {
   readonly prefix: string;
   readonly created_at: number;
   readonly revoked_at: number | null;
+  readonly last_used_at: number | null;
 }
 
 function rowToApp(row: AppRow): App {
@@ -99,6 +100,7 @@ function rowToApiKey(row: ApiKeyRow): ApiKey {
     prefix: row.prefix,
     createdAt: Number(row.created_at),
     revokedAt: row.revoked_at === null ? null : Number(row.revoked_at),
+    lastUsedAt: row.last_used_at === null ? null : Number(row.last_used_at),
   };
 }
 
@@ -119,6 +121,7 @@ export class SqliteAppStore implements AppStore {
   readonly #selectKeysByApp: StatementSync;
   readonly #selectKeyByHash: StatementSync;
   readonly #revokeKey: StatementSync;
+  readonly #updateKeyLastUsed: StatementSync;
   readonly #countApps: StatementSync;
 
   constructor(options: SqliteAppStoreOptions = {}) {
@@ -141,9 +144,10 @@ export class SqliteAppStore implements AppStore {
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec("PRAGMA foreign_keys = ON");
     this.#db.exec(SCHEMA);
-    // Bring a database created before per-tenant quotas existed up to schema. For a
-    // fresh database the column is in SCHEMA and this is a no-op.
+    // Bring databases created before later schema additions up to current. For a
+    // fresh database these columns are in SCHEMA and each call is a no-op.
     this.#migrateQuotaColumn();
+    this.#migrateLastUsedAtColumn();
 
     this.#selectApp = this.#db.prepare("SELECT * FROM apps WHERE id = ?");
     // rowid order is insertion order → oldest-first, matching the in-memory backend.
@@ -157,8 +161,8 @@ export class SqliteAppStore implements AppStore {
     );
     this.#deleteApp = this.#db.prepare("DELETE FROM apps WHERE id = ?");
     this.#insertKey = this.#db.prepare(
-      `INSERT INTO api_keys (id, app_id, key_hash, prefix, created_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO api_keys (id, app_id, key_hash, prefix, created_at, revoked_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#selectKeysByApp = this.#db.prepare(
       "SELECT * FROM api_keys WHERE app_id = ? ORDER BY rowid",
@@ -168,6 +172,9 @@ export class SqliteAppStore implements AppStore {
     );
     this.#revokeKey = this.#db.prepare(
       "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+    );
+    this.#updateKeyLastUsed = this.#db.prepare(
+      "UPDATE api_keys SET last_used_at = ? WHERE id = ?",
     );
     this.#countApps = this.#db.prepare("SELECT COUNT(*) AS n FROM apps");
   }
@@ -186,6 +193,22 @@ export class SqliteAppStore implements AppStore {
       return;
     }
     this.#db.exec("ALTER TABLE apps ADD COLUMN monthly_message_quota INTEGER");
+  }
+
+  /**
+   * Add the `last_used_at` column to `api_keys` for databases created before
+   * per-key last-used tracking. Existing rows default to `NULL` (never used),
+   * so an upgrade is seamless. For a fresh database the column is in
+   * {@link SCHEMA} and this is a no-op.
+   */
+  #migrateLastUsedAtColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(api_keys)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "last_used_at")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE api_keys ADD COLUMN last_used_at INTEGER");
   }
 
   /** Number of apps currently held. Convenience for inspection/tests. */
@@ -258,8 +281,9 @@ export class SqliteAppStore implements AppStore {
         prefix: apiKeyPrefix(secret),
         createdAt: nowMs,
         revokedAt: null,
+        lastUsedAt: null,
       };
-      this.#insertKey.run(id, appId, keyHash, apiKey.prefix, nowMs, null);
+      this.#insertKey.run(id, appId, keyHash, apiKey.prefix, nowMs, null, null);
       return { apiKey, secret };
     });
   }
@@ -287,6 +311,8 @@ export class SqliteAppStore implements AppStore {
     if (!apiKeyHashesEqual(hash, row.key_hash)) {
       return null; // defense-in-depth; the unique-hash lookup makes this unreachable
     }
+    // Record last-used time on successful authentication.
+    this.#updateKeyLastUsed.run(this.#now(), row.id);
     return this.get(row.app_id);
   }
 
@@ -333,12 +359,13 @@ CREATE TABLE IF NOT EXISTS apps (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS api_keys (
-  id         TEXT    PRIMARY KEY,
-  app_id     TEXT    NOT NULL REFERENCES apps (id) ON DELETE CASCADE,
-  key_hash   TEXT    NOT NULL UNIQUE,
-  prefix     TEXT    NOT NULL,
-  created_at INTEGER NOT NULL,
-  revoked_at INTEGER
+  id           TEXT    PRIMARY KEY,
+  app_id       TEXT    NOT NULL REFERENCES apps (id) ON DELETE CASCADE,
+  key_hash     TEXT    NOT NULL UNIQUE,
+  prefix       TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  revoked_at   INTEGER,
+  last_used_at INTEGER
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_app ON api_keys (app_id);

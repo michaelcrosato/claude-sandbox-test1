@@ -93,6 +93,12 @@ export interface ApiKey {
   readonly createdAt: number;
   /** When the key was revoked (epoch ms), or `null` if it is still live. */
   readonly revokedAt: number | null;
+  /**
+   * The last time this key successfully authenticated a request (epoch ms), or
+   * `null` if it has never been used. Updated by {@link AppStore.authenticate}
+   * on each successful auth. Useful for identifying stale keys.
+   */
+  readonly lastUsedAt: number | null;
 }
 
 /**
@@ -149,8 +155,10 @@ export interface AppStore {
   /**
    * Resolve a presented plaintext secret to its owning {@link App}, or `null` if
    * no live key matches. This is the authentication entry point: the HTTP layer
-   * calls it once per request and scopes the request to the returned app. A read,
-   * with no side effects.
+   * calls it once per request and scopes the request to the returned app. On a
+   * successful match the matching key's {@link ApiKey.lastUsedAt} is updated to
+   * the current time (a best-effort write; failed authentications produce no
+   * side effect).
    */
   authenticate(presentedSecret: string): Promise<App | null>;
 }

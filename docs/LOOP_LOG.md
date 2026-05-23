@@ -4,6 +4,87 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 33: P3/P5 — per-key `lastUsedAt` — API-key activity observability
+
+**Repo truth at start:** clean main @ `cf629e8` (iter 32, tenant dashboard UI) — a real clean
+baseline (git clean; iter-32 LOOP_LOG entry present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **812/812** (790 iter-31 baseline +
+7 tenant-sessions + 15 tenant-handler = 812; [[vitest-tinypool-flaky-worker-exit]] not triggered),
+`npm run build` clean, integrity + local gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Implement **per-key `lastUsedAt`** — track when an
+API key last successfully authenticated a request. The reasoning: the standing deferred items are
+Stripe billing (ungateable), per-key `lastUsedAt` (labeled "observability add-on" but in fact the
+single most-asked security question: "is this key still in use?"), and attempt-log pagination (a
+scaling concern with no immediate user gap). `lastUsedAt` is the highest-leverage buildable move
+because: *(a)* it directly enables the operator security workflow "identify and revoke stale keys"
+— without it a key can be minted and forgotten, never revoked, and there is no signal it has
+expired; *(b)* it surfaces in the now-existing admin dashboard's key table (previously the table
+showed Prefix / Key ID / Created / Status — with `lastUsedAt` it is actionable at a glance); *(c)*
+the admin SDK `AdminApiKey` was already the wire shape for all key listings, so adding one field
+completes the type rather than introducing a new one; *(d)* the implementation follows the
+established best-effort-write pattern (`recordAttempt`, `onDeliveryOutcome`) and is fully
+validatable in one tick.
+
+**Decisive design calls.**
+- **Side-effect write inside `authenticate`, not a separate call.** The alternative was to change
+  `authenticate`'s return type to `{ app: App; key: ApiKey } | null` so callers could get the key
+  id and call a separate `recordKeyUsed`. That would have been a blast-radius change (conformance
+  suite, both backends, HTTP handler, tenant dashboard login handler, admin CLI tests). The natural
+  design: `authenticate` on a successful match writes `lastUsedAt = now()` to the matched key and
+  returns the `App`. Callers are unchanged; the side effect is local to the auth path, which already
+  held the key record. The docstring now accurately reflects "a read + best-effort timestamp write
+  on success."
+- **`lastUsedAt` on `ApiKey`, not `App`.** Keys are the credential being used; apps are the tenant
+  the key authenticates as. A tenant can have multiple keys; you want to know *which* key is active,
+  not just whether any key authenticated the tenant.
+- **No clock injection in the migrate path.** The SQLite migration just adds the `last_used_at
+  INTEGER` column (nullable); existing rows stay `NULL` — "never used" is semantically correct for
+  a key that was minted before tracking. No backfill needed.
+- **No `lastUsedAt` in the tenant dashboard view.** The tenant sees their own API keys only
+  implicitly (the key authenticates the session at login); the per-key `lastUsedAt` is a control-
+  plane observability metric for *operators*, not tenant metadata. Showing it to tenants would just
+  echo the session timestamp back at them. The admin dashboard is where it belongs.
+
+**Built this tick:**
+- `ApiKey.lastUsedAt: number | null` (new field; `null` = never used).
+- `InMemoryAppStore.authenticate` — records `lastUsedAt = this.#now()` on the matching key entry.
+- `SqliteAppStore`: `last_used_at INTEGER` column in `SCHEMA`; `#migrateLastUsedAtColumn()` (same
+  `PRAGMA table_info` guard pattern as quota migration — pre-existing rows stay `NULL`); new
+  `#updateKeyLastUsed` prepared statement; `authenticate` calls `.run(this.#now(), row.id)` on
+  success; `rowToApiKey` maps the column.
+- `conformance.ts`: +1 `lastUsedAt: null` assertion in the mint test; new test
+  "updates lastUsedAt on each successful authentication, not on failure" (verifies null before
+  first use, set after first auth, advanced on second auth, unchanged after failed auth).
+- `apiKeyView` in `api.ts` — `lastUsedAt` added to the wire shape.
+- `AdminApiKey` in `sdk/admin-client.ts` — `lastUsedAt: number | null` field.
+- `ApiKey` schema in `openapi.ts` — `lastUsedAt` added to `required[]` and `properties`
+  (`type: ["integer","null"]`, `format: "int64"`).
+- `views.ts` admin dashboard — "Last used" column in the keys table (empty state `colspan` bumped
+  6→ correct; date formatted `YYYY-MM-DD` or `—`).
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **814/814,
+37 files** (was 812; **+2**: 2 new conformance cases × 2 backends (in-memory + SQLite) — the
+"updates lastUsedAt" test). `npm run build` clean. Integrity gate exit 0 (three hash-protected
+files untouched); local gate exit 0.
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** `scripts/smoke-last-used-at.mjs`
+**15/15 checks PASS** through production ESM: (1–4) in-memory lifecycle (null on create, set after
+auth, unchanged on failed auth, advances on second auth); (5–7) SQLite lifecycle (same, with the
+`node:sqlite` `createRequire` path); (8–10) OpenAPI `ApiKey` schema has `lastUsedAt` in both
+`properties` and `required[]` with correct `["integer","null"]` type; (11–15) running-gateway
+end-to-end: `lastUsedAt` is `null` before first use → `GET /v1/endpoints` triggers auth → admin SDK
+`listApiKeys` returns a non-null `lastUsedAt` → preserved on revocation, `revokedAt` also set.
+
+**State:** GREEN → committing to main as Iteration 33. Net: an operator can now see, at a glance
+in the admin dashboard (or via the admin SDK), exactly when each API key was last used — enabling
+the "find and revoke stale keys" security workflow. **Standing deferred (next candidates):**
+Stripe billing (ungateable); attempt-log pagination (scaling concern, not immediate user gap);
+operator deploy/monitoring guide (P4 docs).
+
+---
+
 ## 2026-05-23 — Iteration 32: P5 — tenant dashboard UI (browser webhook-debug view)
 
 **Repo truth at start:** clean main @ `d3c7774` (iter 31, admin dashboard UI) — a real clean

@@ -176,6 +176,11 @@ Early foundation. Implemented so far:
   double-counted. The span is capped (≤ 366 days) so a query stays bounded.
 - ✅ **Endpoint health + auto-disable** — Posthorn stops wasting deliveries on a permanently-dead
   endpoint.
+- ✅ **Per-key `lastUsedAt`** — each API key now records the last time it successfully
+  authenticated a request (`lastUsedAt`, epoch ms; `null` if never used). Surfaced in the admin
+  dashboard's key table, the admin SDK `AdminApiKey` type, and the OpenAPI `ApiKey` schema.
+  Enables the "find and revoke stale keys" security workflow at a glance.
+
 - ✅ **Tenant dashboard UI** — a browser UI at `/dashboard/tenant` where any tenant can log in with
   their API key and browse their message history, per-endpoint delivery statuses, and the
   per-attempt audit log (the "attempt 3: 503 in 1.2s" view). Tenant-scoped by session — one
