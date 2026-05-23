@@ -19,6 +19,12 @@ export interface Message {
   /** Server-assigned unique id (e.g. `msg_…`). */
   readonly id: string;
   /**
+   * The tenant (application) this message belongs to. Opaque scope string —
+   * the entity that mints/validates it is a later tick. Fan-out delivers a
+   * message only to endpoints in this same `appId`.
+   */
+  readonly appId: string;
+  /**
    * The idempotency key the producer supplied, or `null` if none was given.
    * Recorded for traceability; dedup itself is handled by the store.
    */
@@ -33,10 +39,13 @@ export interface Message {
 
 /** The fields a caller provides to create a message. */
 export interface NewMessage {
+  /** The owning tenant (application). Must be a non-empty string. */
+  readonly appId: string;
   /**
    * Optional idempotency key. When present, a repeat create with the same key
-   * (within the store's idempotency window) returns the original message
-   * instead of creating a new one. Must be a non-empty string when provided.
+   * *within the same app* (and inside the store's idempotency window) returns
+   * the original message instead of creating a new one. Must be a non-empty
+   * string when provided.
    */
   readonly idempotencyKey?: string | null;
   /** The event type / topic. Must be a non-empty string. */
@@ -68,19 +77,22 @@ export interface MessageStore {
    * Accept a message for delivery.
    *
    * If {@link NewMessage.idempotencyKey} is set and a non-expired message
-   * already exists for that key, the original is returned with
-   * `deduplicated: true` — *provided the request matches*. A reused key paired
-   * with a different `eventType`/`payload` is a programming error and throws
-   * {@link IdempotencyConflictError}.
+   * already exists for that key *in the same app*, the original is returned
+   * with `deduplicated: true` — *provided the request matches*. A reused key
+   * paired with a different `eventType`/`payload` is a programming error and
+   * throws {@link IdempotencyConflictError}. Idempotency keys are scoped per
+   * tenant, so the same key in two apps never collides.
    */
   create(input: NewMessage): Promise<CreateMessageResult>;
   /** Fetch a message by its id, or `null` if unknown. */
   get(id: string): Promise<Message | null>;
   /**
-   * Fetch the message currently associated with an idempotency key, or `null`
-   * if the key is unknown or its idempotency window has elapsed.
+   * Fetch the message associated with an idempotency key *within an app*, or
+   * `null` if that app has no live binding for the key (unknown or its window
+   * has elapsed). Scoped by `appId` so one tenant's key never resolves — or
+   * leaks — another tenant's message.
    */
-  getByIdempotencyKey(key: string): Promise<Message | null>;
+  getByIdempotencyKey(appId: string, key: string): Promise<Message | null>;
 }
 
 /**
@@ -161,6 +173,7 @@ export function isIdempotencyExpired(
 
 /** A {@link NewMessage} whose fields have been validated and normalized. */
 export interface NormalizedNewMessage {
+  readonly appId: string;
   readonly eventType: string;
   readonly payload: string;
   readonly idempotencyKey: string | null;
@@ -173,7 +186,10 @@ export interface NormalizedNewMessage {
  * absent.
  */
 export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
-  const { eventType, payload } = input;
+  const { appId, eventType, payload } = input;
+  if (typeof appId !== "string" || appId.length === 0) {
+    throw new TypeError("appId must be a non-empty string");
+  }
   if (typeof eventType !== "string" || eventType.length === 0) {
     throw new TypeError("eventType must be a non-empty string");
   }
@@ -189,5 +205,5 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
       "idempotencyKey must be a non-empty string when provided",
     );
   }
-  return { eventType, payload, idempotencyKey };
+  return { appId, eventType, payload, idempotencyKey };
 }

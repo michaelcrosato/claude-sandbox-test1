@@ -52,8 +52,12 @@ export class InMemoryMessageStore implements MessageStore {
   readonly #idempotencyWindowMs: number;
   /** id → message. Insertion order is preserved. */
   readonly #messages = new Map<string, Message>();
-  /** idempotency key → entry. */
-  readonly #idempotency = new Map<string, IdempotencyEntry>();
+  /**
+   * appId → (idempotency key → entry). Idempotency keys are scoped per tenant
+   * so the same key in two apps is two independent bindings — one tenant's key
+   * never dedups against, or leaks, another tenant's message.
+   */
+  readonly #idempotency = new Map<string, Map<string, IdempotencyEntry>>();
 
   constructor(options: InMemoryStoreOptions = {}) {
     const {
@@ -73,14 +77,14 @@ export class InMemoryMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { eventType, payload, idempotencyKey: key } =
+    const { appId, eventType, payload, idempotencyKey: key } =
       normalizeNewMessage(input);
 
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
 
     if (key !== null) {
-      const existing = this.#idempotency.get(key);
+      const existing = this.#idempotency.get(appId)?.get(key);
       if (
         existing !== undefined &&
         !isIdempotencyExpired(existing.storedAt, nowMs, this.#idempotencyWindowMs)
@@ -96,7 +100,7 @@ export class InMemoryMessageStore implements MessageStore {
         }
       }
       // Absent or expired: drop any stale binding and fall through to create.
-      this.#idempotency.delete(key);
+      this.#deleteIdempotency(appId, key);
     }
 
     const id = this.#generateId();
@@ -105,6 +109,7 @@ export class InMemoryMessageStore implements MessageStore {
     }
     const message: Message = {
       id,
+      appId,
       idempotencyKey: key,
       eventType,
       payload,
@@ -112,7 +117,11 @@ export class InMemoryMessageStore implements MessageStore {
     };
     this.#messages.set(id, message);
     if (key !== null) {
-      this.#idempotency.set(key, { messageId: id, fingerprint, storedAt: nowMs });
+      this.#setIdempotency(appId, key, {
+        messageId: id,
+        fingerprint,
+        storedAt: nowMs,
+      });
     }
     return { message, deduplicated: false };
   }
@@ -121,8 +130,11 @@ export class InMemoryMessageStore implements MessageStore {
     return this.#messages.get(id) ?? null;
   }
 
-  async getByIdempotencyKey(key: string): Promise<Message | null> {
-    const entry = this.#idempotency.get(key);
+  async getByIdempotencyKey(
+    appId: string,
+    key: string,
+  ): Promise<Message | null> {
+    const entry = this.#idempotency.get(appId)?.get(key);
     if (
       entry === undefined ||
       isIdempotencyExpired(entry.storedAt, this.#now(), this.#idempotencyWindowMs)
@@ -130,5 +142,23 @@ export class InMemoryMessageStore implements MessageStore {
       return null;
     }
     return this.#messages.get(entry.messageId) ?? null;
+  }
+
+  /** Bind `key` to an entry within `appId`'s namespace, creating it if needed. */
+  #setIdempotency(appId: string, key: string, entry: IdempotencyEntry): void {
+    let perApp = this.#idempotency.get(appId);
+    if (perApp === undefined) {
+      perApp = new Map<string, IdempotencyEntry>();
+      this.#idempotency.set(appId, perApp);
+    }
+    perApp.set(key, entry);
+  }
+
+  /** Drop `key` from `appId`'s namespace, pruning the namespace when empty. */
+  #deleteIdempotency(appId: string, key: string): void {
+    const perApp = this.#idempotency.get(appId);
+    if (perApp === undefined) return;
+    perApp.delete(key);
+    if (perApp.size === 0) this.#idempotency.delete(appId);
   }
 }

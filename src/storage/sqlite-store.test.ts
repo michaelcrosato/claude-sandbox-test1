@@ -33,8 +33,8 @@ describe("SqliteMessageStore — specifics", () => {
     });
     try {
       expect(store.size).toBe(0);
-      await store.create({ eventType: "e", payload: "{}" });
-      await store.create({ eventType: "e", payload: "{}" });
+      await store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+      await store.create({ appId: "app_1", eventType: "e", payload: "{}" });
       expect(store.size).toBe(2);
     } finally {
       store.close();
@@ -62,6 +62,7 @@ describe("SqliteMessageStore — durability", () => {
     // First process: accept a message under an idempotency key, then "crash".
     const before = new SqliteMessageStore({ location: dbPath, ...opts });
     const { message } = await before.create({
+      appId: "app_1",
       eventType: "user.created",
       payload: '{"id":1}',
       idempotencyKey: "req-1",
@@ -74,9 +75,10 @@ describe("SqliteMessageStore — durability", () => {
     try {
       expect(after.size).toBe(1);
       expect(await after.get(message.id)).toEqual(message);
-      expect(await after.getByIdempotencyKey("req-1")).toEqual(message);
+      expect(await after.getByIdempotencyKey("app_1", "req-1")).toEqual(message);
 
       const retry = await after.create({
+        appId: "app_1",
         eventType: "user.created",
         payload: '{"id":1}',
         idempotencyKey: "req-1",
@@ -93,7 +95,11 @@ describe("SqliteMessageStore — durability", () => {
     const a = new SqliteMessageStore({ location: join(dir, "a.sqlite") });
     const b = new SqliteMessageStore({ location: join(dir, "b.sqlite") });
     try {
-      const { message } = await a.create({ eventType: "e", payload: "{}" });
+      const { message } = await a.create({
+        appId: "app_1",
+        eventType: "e",
+        payload: "{}",
+      });
       expect(await a.get(message.id)).not.toBeNull();
       expect(await b.get(message.id)).toBeNull();
       expect(b.size).toBe(0);

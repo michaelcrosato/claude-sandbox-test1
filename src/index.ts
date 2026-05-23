@@ -127,3 +127,15 @@ export {
   storeBackedResolver,
   endpointToDeliveryTarget,
 } from "./endpoints/endpoint-resolver.js";
+
+export {
+  fanOut,
+  ingest,
+  selectFanoutTargets,
+  type FanoutSelection,
+  type FanoutDeps,
+  type FanoutOptions,
+  type FanoutResult,
+  type IngestDeps,
+  type IngestResult,
+} from "./fanout/fanout.js";

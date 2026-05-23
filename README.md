@@ -36,6 +36,19 @@ Early foundation. Implemented so far:
   crash**: if a worker dies mid-delivery, its lease lapses and the task is reclaimed rather than
   lost. Failures reschedule through the retry policy or dead-letter once exhausted. Same two
   backends (in-memory + SQLite), same one conformance suite.
+- ✅ **Delivery worker** — the runtime I/O driver that joins the pieces into a real send: it
+  claims due tasks, loads each message, signs it, POSTs it over an injectable transport, and
+  settles the task so the retry policy reschedules or dead-letters it. Every outside-world touch
+  (clock, HTTP transport, endpoint lookup) is an injected seam, so the whole loop is fake-clock
+  testable; a worker-emitted request verifies against the signer.
+- ✅ **Endpoints** — the persisted, tenant-scoped subscriptions (`appId`, destination URL,
+  signing secret, event-type filter, enable/disable). Same dual-backend + one-conformance-suite
+  pattern; the worker resolves a task's endpoint to its URL + secret through this store.
+- ✅ **Message fan-out** — the step that makes Posthorn a webhook *service*: `fanOut` lists a
+  message's tenant endpoints, selects the enabled subscribers for the event type, and enqueues one
+  delivery per match; `ingest` accepts a message and fans it out in one call, suppressing
+  re-delivery on an idempotent (deduplicated) retry. Idempotency keys are **scoped per tenant**, so
+  one app's key never dedups against — or leaks — another app's message.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -99,6 +112,7 @@ import { InMemoryMessageStore } from "posthorn";
 const store = new InMemoryMessageStore();
 
 const { message } = await store.create({
+  appId: "app_acme", // the tenant the message belongs to
   eventType: "user.created",
   payload: JSON.stringify({ id: 42 }),
   idempotencyKey: "req_abc123", // optional
@@ -106,11 +120,14 @@ const { message } = await store.create({
 
 // A network-retried create with the same key is collapsed onto the original:
 const again = await store.create({
+  appId: "app_acme",
   eventType: "user.created",
   payload: JSON.stringify({ id: 42 }),
   idempotencyKey: "req_abc123",
 });
 again.deduplicated; // true — again.message.id === message.id (no duplicate send)
+// Idempotency keys are scoped per tenant: the same key under a different appId
+// is an independent message, never a cross-tenant dedup or leak.
 ```
 
 For durability across restarts, swap in the SQLite backend — same interface, now
@@ -152,6 +169,45 @@ for (const task of await queue.claimDue({ nowMs: Date.now() })) {
 }
 
 queue.close(); // release the database handle on shutdown
+```
+
+## Quickstart (ingest + fan-out)
+
+The headline operation: accept a message and fan it out to every subscribed, enabled endpoint
+in its tenant — one durable delivery task per match. A `DeliveryWorker` then drains the queue.
+
+```ts
+import {
+  SqliteEndpointStore,
+  SqliteMessageStore,
+  SqliteDeliveryQueue,
+  ingest,
+} from "posthorn";
+
+const endpoints = new SqliteEndpointStore({ location: "./posthorn.sqlite" });
+const messages = new SqliteMessageStore({ location: "./posthorn.sqlite" });
+const queue = new SqliteDeliveryQueue({ location: "./posthorn.sqlite" });
+
+// Register where this tenant's events should go (secret auto-generated):
+await endpoints.create({
+  appId: "app_acme",
+  url: "https://acme.example/webhooks",
+  eventTypes: ["user.created"], // omit/null = subscribe to everything
+});
+
+// Accept an event and fan it out in one call:
+const { message, fanout } = await ingest(
+  {
+    appId: "app_acme",
+    eventType: "user.created",
+    payload: JSON.stringify({ id: 42 }),
+    idempotencyKey: "req_abc123", // optional; a retry won't double-fan-out
+  },
+  { messages, endpoints, queue },
+);
+fanout.matched; // number of endpoints a delivery was enqueued for
+
+// ...then run a DeliveryWorker against the same queue/store/endpoints to deliver.
 ```
 
 ## Development

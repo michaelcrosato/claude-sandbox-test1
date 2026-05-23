@@ -4,6 +4,68 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 8: P3 — message fan-out (the parts become a service)
+
+**Repo truth at start:** clean main @ `b9c4cfa`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **222/222**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 7: signer, FSM/retry, message store, queue, worker, endpoint store, and resolver
+were all built — but **nothing connected "a message was created" to "enqueue a delivery for each
+subscribed endpoint."** You had to hand-enqueue one `DeliveryTask` per endpoint. That join — fan-out
+— is the functional heart of a webhook service and the exact thing a future `POST /messages` sits on.
+
+**High-leverage move chosen:** Build **message fan-out**. Highest-leverage because (a) it converts a
+pile of correct-but-disconnected machinery into an actual service (ingest an event → it reliably
+reaches every relevant destination); (b) it needs **zero new dependencies** (unlike Fastify, which
+carries an install/network risk in this sandbox), is fully deterministic + in-process validatable
+(Axiom 2); (c) it is the prerequisite the HTTP ingest path will sit on. Deferred the App/tenant
+entity and the Fastify layer to keep this one cohesive green unit.
+
+**Prerequisite, done right (`src/storage/`):** fan-out needs a message to know its tenant, so added
+**`appId` to `Message`/`NewMessage`** (required, mirroring the endpoint store). Because the message
+now carries a tenant, **idempotency had to become per-tenant** — otherwise tenant B's key would
+dedup against, and *return*, tenant A's message (a real cross-tenant data leak that adding `appId`
+would have introduced). So `getByIdempotencyKey(appId, key)`, a nested in-memory index, and a
+composite `(app_id, key)` SQLite PK. The shared conformance suite gained cross-tenant isolation
+tests proving both backends namespace keys per app. Fingerprint stays `(eventType, payload)` — within
+a fixed `(appId, key)` scope the appId is invariant, so it adds nothing.
+
+**Built this tick (`src/fanout/`):**
+- `selectFanoutTargets(endpoints, eventType)` — **pure** routing: partitions into `matched`
+  (enabled + `endpointSubscribesTo`), `skippedDisabled`, `skippedUnsubscribed`; order-preserving;
+  disabled wins over subscribed. Skip-reason buckets give operators "why didn't my endpoint fire?".
+- `fanOut(message, {endpoints, queue}, {availableAt?})` — lists the message's `appId` endpoints,
+  selects, and enqueues one `DeliveryTask` per match (carrying the opaque `endpointId`), sequentially
+  in endpoint order (deterministic; matches the worker's sequential model). Returns the tasks + counts.
+- `ingest(input, {messages, endpoints, queue})` — the headline op: create the message, then fan out
+  **only when the create was new**; a deduplicated retry is *not* re-fanned (would double-deliver).
+- `src/index.ts` re-exports the fan-out surface.
+
+**Key decisions (honest tradeoffs):**
+- **Per-tenant idempotency was bundled in, not deferred.** Adding `appId` without scoping the key
+  index would knowingly ship a cross-tenant leak; correctness outranks a smaller diff. The cost was
+  mechanical test churn (every message-`create` call gained `appId`).
+- **`ingest` is not atomic.** A crash after store-create but before fan-out completes leaves a
+  message whose retry dedups and skips fan-out → some deliveries never enqueue. Right fix is a
+  transactional outbox (enqueue inside the create txn); deferred and logged, not hidden. Best-effort
+  -after-accept is the correct common-path default and never double-*creates*.
+- **Fan-out is at-least-once** (like the queue it feeds): a second `fanOut` of the same message
+  enqueues a second task set → possible duplicate delivery, which is why every message carries a
+  stable id for receiver-side dedup (Standard Webhooks).
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **239/239** (was 222; +17: fan-out 13 [pure 6,
+fanOut 4, ingest 3 incl. an end-to-end ingest→deliver→verify] + cross-tenant idempotency conformance
+4 [in-mem 2, sqlite 2]). `npm run build` clean. **Smoke-tested the built `dist/index.js`** end-to-end
+on SQLite backends (ingest fans out to 2/4 endpoints, skips 1 unsubscribed + 1 disabled; cross-tenant
+key stays distinct/no-leak; retry dedups + no re-fan-out; worker drains both; signature **verifies**).
+Integrity + local gate: exit 0.
+
+**State:** GREEN → committing to main. Posthorn now ingests an event and reliably fans it out to a
+tenant's subscribers, end-to-end. Next tick: the **App/tenant** entity (mint/validate `appId`), then
+the **Fastify HTTP API**, or the **transactional outbox** to make ingest atomic.
+
+---
+
 ## 2026-05-22 — Iteration 7: P3 begins — the endpoint store + store-backed resolver
 
 **Repo truth at start:** clean main @ `6b58953`. Baseline re-verified before any change:

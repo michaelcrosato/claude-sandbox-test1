@@ -105,6 +105,7 @@ describe("isSuccessStatus", () => {
 describe("buildSignedRequest", () => {
   const message: Message = {
     id: "msg_1",
+    appId: "app_1",
     idempotencyKey: null,
     eventType: "user.created",
     payload: "BODY",
@@ -218,6 +219,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("delivers a message end-to-end and the receiver can verify the signature", async () => {
     const env = setup();
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "user.created",
       payload: '{"hello":"world"}',
     });
@@ -258,6 +260,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("passes a live (un-aborted) AbortSignal to the transport", async () => {
     const env = setup();
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -276,6 +279,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("reschedules a failed (non-2xx) attempt for a future retry", async () => {
     const env = setup({ retryPolicy: fixedSchedule([60_000]) });
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -302,6 +306,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("dead-letters once the retry schedule is exhausted", async () => {
     const env = setup({ retryPolicy: fixedSchedule([]) }); // 1 attempt, no retries
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -321,6 +326,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("treats a thrown transport error as a failed attempt", async () => {
     const env = setup({ retryPolicy: fixedSchedule([60_000]) });
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -353,6 +359,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("fails the attempt (no HTTP call) when no endpoint resolves", async () => {
     const env = setup({ retryPolicy: fixedSchedule([60_000]) });
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -373,6 +380,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("supports an async endpoint resolver", async () => {
     const env = setup();
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -392,6 +400,7 @@ describe("DeliveryWorker.processOnce", () => {
     const env = setup();
     for (let i = 0; i < 5; i++) {
       const { message } = await env.store.create({
+        appId: "app_1",
         eventType: "e",
         payload: String(i),
       });
@@ -410,6 +419,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("absorbs a lapsed-lease reclaim as 'stale' and does not double-settle", async () => {
     const env = setup({ visibilityTimeoutMs: 1_000 });
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -435,6 +445,7 @@ describe("DeliveryWorker.processOnce", () => {
   it("propagates an unexpected (non-stale) settle error", async () => {
     const env = setup();
     const { message } = await env.store.create({
+      appId: "app_1",
       eventType: "e",
       payload: "{}",
     });
@@ -478,6 +489,7 @@ describe("DeliveryWorker.processOnce", () => {
     try {
       const env = setup({ retryPolicy: fixedSchedule([]) });
       const { message } = await env.store.create({
+        appId: "app_1",
         eventType: "e",
         payload: "{}",
       });
@@ -511,6 +523,7 @@ describe("DeliveryWorker.run", () => {
     const env = setup();
     for (let i = 0; i < 3; i++) {
       const { message } = await env.store.create({
+        appId: "app_1",
         eventType: "e",
         payload: String(i),
       });

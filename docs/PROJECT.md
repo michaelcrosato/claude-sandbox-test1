@@ -127,10 +127,23 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     `storeBackedResolver` fills the worker's `EndpointResolver` seam — proven end-to-end (a stored
     endpoint's secret signs a delivery that verifies against the verifier, in tests and a compiled-
     `dist` smoke run). The worker is no longer an island awaiting a hand-written resolver.
-  - **Deferred (next ticks):** message **fan-out** (on create, enqueue one task per subscribed,
-    enabled endpoint via `endpointSubscribesTo`; this needs `appId` on the message), the **App/tenant**
-    entity that mints/validates `appId`, the **Fastify HTTP API** (apps/endpoints/messages CRUD +
-    ingest), contract tests, TS SDK, OpenAPI.
+  - **Message fan-out ✅ (this tick):** the step that makes the parts a *service* — `src/fanout/`.
+    A message is now **tenant-aware** (`appId` added to `Message`/`NewMessage`), and because the
+    message carries a tenant, **idempotency is now scoped per app** (`getByIdempotencyKey(appId, key)`,
+    composite `(app_id, key)` SQLite PK, nested in-memory index) — one tenant's key can no longer
+    dedup against *or leak* another tenant's message (a real cross-tenant bug that adding `appId`
+    would otherwise have introduced). `selectFanoutTargets` is the **pure** routing rule (enabled +
+    `endpointSubscribesTo`, with skip-reason buckets for observability); `fanOut` lists a message's
+    `appId` endpoints, selects, and enqueues one `DeliveryTask` per match (carrying the opaque
+    `endpointId`); `ingest` accepts a message and fans it out in one call, **suppressing re-fan-out
+    on a deduplicated retry** (the headline `POST /messages` operation). Proven end-to-end through
+    the compiled `dist` (ingest → fan-out → queue → worker → sign → **verify**) including cross-tenant
+    idempotency isolation. **Honest limitation:** `ingest`'s create+fan-out is not one atomic unit —
+    a crash between them leaves a message whose retry dedups and skips fan-out; the robust fix is a
+    transactional outbox (enqueue inside the create txn), deferred.
+  - **Deferred (next ticks):** the **App/tenant** entity that mints/validates `appId`, the
+    **Fastify HTTP API** (apps/endpoints/messages CRUD + ingest), contract tests, TS SDK, OpenAPI,
+    and the **transactional outbox** that makes ingest's accept-and-fan-out atomic.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

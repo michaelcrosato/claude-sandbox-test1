@@ -33,6 +33,7 @@ function taskWithEndpoint(endpointId: string | null): DeliveryTask {
 
 const FAKE_MESSAGE = {
   id: "msg_1",
+  appId: "app_1",
   idempotencyKey: null,
   eventType: "user.created",
   payload: "{}",
@@ -109,6 +110,7 @@ describe("end-to-end: worker delivers to a stored endpoint", () => {
       url: "https://example.test/hook",
     });
     const { message } = await store.create({
+      appId: "app_1",
       eventType: "user.created",
       payload: '{"hello":"world"}',
     });

@@ -48,6 +48,9 @@ export type MessageStoreFactory = (
   options: ConformanceStoreOptions,
 ) => MessageStore;
 
+/** The tenant the bulk of the contract operates within. */
+const APP = "app_1";
+
 /**
  * Register the full {@link MessageStore} contract against one backend.
  *
@@ -95,11 +98,13 @@ export function describeMessageStoreContract(
     describe("create — basics", () => {
       it("creates a message with assigned id, timestamp, and no dedup", async () => {
         const { message, deduplicated } = await store.create({
+          appId: APP,
           eventType: "user.created",
           payload: '{"id":1}',
         });
         expect(deduplicated).toBe(false);
         expect(message.id).toBe("msg_test_1");
+        expect(message.appId).toBe(APP);
         expect(message.eventType).toBe("user.created");
         expect(message.payload).toBe('{"id":1}');
         expect(message.createdAt).toBe(clock.now());
@@ -108,34 +113,50 @@ export function describeMessageStoreContract(
       });
 
       it("retrieves a created message by id, and null for unknown ids", async () => {
-        const { message } = await store.create({ eventType: "e", payload: "{}" });
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+        });
         expect(await store.get(message.id)).toEqual(message);
         expect(await store.get("msg_nope")).toBeNull();
       });
 
       it("creates distinct messages when no idempotency key is given", async () => {
-        const a = await store.create({ eventType: "e", payload: "{}" });
-        const b = await store.create({ eventType: "e", payload: "{}" });
+        const a = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        const b = await store.create({ appId: APP, eventType: "e", payload: "{}" });
         expect(a.message.id).not.toBe(b.message.id);
         expect(await store.get(a.message.id)).toEqual(a.message);
         expect(await store.get(b.message.id)).toEqual(b.message);
       });
 
       it("accepts an empty-string payload", async () => {
-        const { message } = await store.create({ eventType: "e", payload: "" });
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "",
+        });
         expect(message.payload).toBe("");
       });
 
-      it("rejects an empty eventType, a non-string payload, and an empty key", async () => {
+      it("rejects an empty appId, eventType, a non-string payload, and an empty key", async () => {
         await expect(
-          store.create({ eventType: "", payload: "{}" }),
+          store.create({ appId: "", eventType: "e", payload: "{}" }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          store.create({ appId: APP, eventType: "", payload: "{}" }),
         ).rejects.toThrow(TypeError);
         await expect(
           // @ts-expect-error — payload must be a string
-          store.create({ eventType: "e", payload: 123 }),
+          store.create({ appId: APP, eventType: "e", payload: 123 }),
         ).rejects.toThrow(TypeError);
         await expect(
-          store.create({ eventType: "e", payload: "{}", idempotencyKey: "" }),
+          store.create({
+            appId: APP,
+            eventType: "e",
+            payload: "{}",
+            idempotencyKey: "",
+          }),
         ).rejects.toThrow(TypeError);
       });
     });
@@ -143,6 +164,7 @@ export function describeMessageStoreContract(
     describe("create — idempotency", () => {
       it("collapses repeats with the same key onto the first message", async () => {
         const first = await store.create({
+          appId: APP,
           eventType: "user.created",
           payload: '{"id":1}',
           idempotencyKey: "key-1",
@@ -150,6 +172,7 @@ export function describeMessageStoreContract(
         expect(first.deduplicated).toBe(false);
 
         const repeat = await store.create({
+          appId: APP,
           eventType: "user.created",
           payload: '{"id":1}',
           idempotencyKey: "key-1",
@@ -160,6 +183,7 @@ export function describeMessageStoreContract(
 
       it("records the idempotency key on the stored message", async () => {
         const { message } = await store.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
@@ -169,21 +193,24 @@ export function describeMessageStoreContract(
 
       it("looks a message up by its idempotency key", async () => {
         const { message } = await store.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
         });
-        expect(await store.getByIdempotencyKey("key-1")).toEqual(message);
-        expect(await store.getByIdempotencyKey("absent")).toBeNull();
+        expect(await store.getByIdempotencyKey(APP, "key-1")).toEqual(message);
+        expect(await store.getByIdempotencyKey(APP, "absent")).toBeNull();
       });
 
       it("treats different keys as different messages", async () => {
         const a = await store.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-a",
         });
         const b = await store.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-b",
@@ -195,12 +222,14 @@ export function describeMessageStoreContract(
 
       it("throws IdempotencyConflictError when a key is reused for a different request", async () => {
         const first = await store.create({
+          appId: APP,
           eventType: "user.created",
           payload: '{"id":1}',
           idempotencyKey: "key-1",
         });
         await expect(
           store.create({
+            appId: APP,
             eventType: "user.created",
             payload: '{"id":2}', // same key, different payload
             idempotencyKey: "key-1",
@@ -209,13 +238,72 @@ export function describeMessageStoreContract(
         // A different eventType under the same key also conflicts.
         await expect(
           store.create({
+            appId: APP,
             eventType: "user.updated",
             payload: '{"id":1}',
             idempotencyKey: "key-1",
           }),
         ).rejects.toBeInstanceOf(IdempotencyConflictError);
         // Nothing extra was stored: the key still resolves to the original.
-        expect(await store.getByIdempotencyKey("key-1")).toEqual(first.message);
+        expect(await store.getByIdempotencyKey(APP, "key-1")).toEqual(
+          first.message,
+        );
+      });
+    });
+
+    describe("create — idempotency is scoped per tenant", () => {
+      it("does not dedup, conflict, or leak across apps for the same key", async () => {
+        const a = await store.create({
+          appId: "app_a",
+          eventType: "user.created",
+          payload: '{"id":1}',
+          idempotencyKey: "shared-key",
+        });
+        // Same key, different app, even a *different* payload: no conflict, a
+        // brand-new message — the key namespaces are independent.
+        const b = await store.create({
+          appId: "app_b",
+          eventType: "user.created",
+          payload: '{"id":2}',
+          idempotencyKey: "shared-key",
+        });
+        expect(b.deduplicated).toBe(false);
+        expect(b.message.id).not.toBe(a.message.id);
+
+        // Each app's lookup resolves only its own message — no cross-tenant leak.
+        expect(await store.getByIdempotencyKey("app_a", "shared-key")).toEqual(
+          a.message,
+        );
+        expect(await store.getByIdempotencyKey("app_b", "shared-key")).toEqual(
+          b.message,
+        );
+        // An app that never used the key sees nothing.
+        expect(
+          await store.getByIdempotencyKey("app_c", "shared-key"),
+        ).toBeNull();
+      });
+
+      it("still dedups a repeat within the same app", async () => {
+        const first = await store.create({
+          appId: "app_a",
+          eventType: "e",
+          payload: "{}",
+          idempotencyKey: "k",
+        });
+        await store.create({
+          appId: "app_b",
+          eventType: "e",
+          payload: "{}",
+          idempotencyKey: "k",
+        });
+        const repeat = await store.create({
+          appId: "app_a",
+          eventType: "e",
+          payload: "{}",
+          idempotencyKey: "k",
+        });
+        expect(repeat.deduplicated).toBe(true);
+        expect(repeat.message.id).toBe(first.message.id);
       });
     });
 
@@ -225,6 +313,7 @@ export function describeMessageStoreContract(
         const ttlStore = make({ idempotencyWindowMs: ttl });
 
         const first = await ttlStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
@@ -232,6 +321,7 @@ export function describeMessageStoreContract(
 
         clock.advance(ttl); // reach exactly the expiry boundary (>= window)
         const afterExpiry = await ttlStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
@@ -246,12 +336,14 @@ export function describeMessageStoreContract(
       it("still dedups within the window", async () => {
         const ttlStore = make({ idempotencyWindowMs: 1_000 });
         const first = await ttlStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
         });
         clock.advance(999); // still inside the window
         const repeat = await ttlStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
@@ -263,12 +355,13 @@ export function describeMessageStoreContract(
       it("reports an expired key as absent via getByIdempotencyKey", async () => {
         const ttlStore = make({ idempotencyWindowMs: 1_000 });
         await ttlStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
         });
         clock.advance(1_000);
-        expect(await ttlStore.getByIdempotencyKey("key-1")).toBeNull();
+        expect(await ttlStore.getByIdempotencyKey(APP, "key-1")).toBeNull();
       });
 
       it("never expires keys when the window is Infinity", async () => {
@@ -276,12 +369,14 @@ export function describeMessageStoreContract(
           idempotencyWindowMs: Number.POSITIVE_INFINITY,
         });
         const first = await foreverStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",
         });
         clock.advance(10 * 365 * 24 * 60 * 60 * 1_000); // a decade later
         const repeat = await foreverStore.create({
+          appId: APP,
           eventType: "e",
           payload: "{}",
           idempotencyKey: "key-1",

@@ -29,12 +29,22 @@ describe("InMemoryMessageStore — specifics", () => {
       generateId: clock.generateId,
     });
     expect(store.size).toBe(0);
-    await store.create({ eventType: "e", payload: "{}" });
-    await store.create({ eventType: "e", payload: "{}" });
+    await store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+    await store.create({ appId: "app_1", eventType: "e", payload: "{}" });
     expect(store.size).toBe(2);
     // A deduplicated create does not grow the store.
-    await store.create({ eventType: "e", payload: "{}", idempotencyKey: "k" });
-    await store.create({ eventType: "e", payload: "{}", idempotencyKey: "k" });
+    await store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+      idempotencyKey: "k",
+    });
+    await store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+      idempotencyKey: "k",
+    });
     expect(store.size).toBe(3);
   });
 });

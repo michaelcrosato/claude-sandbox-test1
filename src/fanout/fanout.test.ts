@@ -1,0 +1,278 @@
+import { describe, expect, it } from "vitest";
+import { fanOut, ingest, selectFanoutTargets } from "./fanout.js";
+import {
+  InMemoryEndpointStore,
+  type InMemoryEndpointStoreOptions,
+} from "../endpoints/in-memory-endpoint-store.js";
+import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
+import type { Endpoint, NewEndpoint } from "../endpoints/endpoint.js";
+import { InMemoryMessageStore } from "../storage/in-memory-store.js";
+import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import {
+  DeliveryWorker,
+  type HttpDeliveryRequest,
+  type Transport,
+} from "../worker/delivery-worker.js";
+import { HEADERS, verify } from "../signing/webhook-signature.js";
+
+const APP = "app_1";
+
+/** A bare {@link Endpoint} for the pure-selection tests (no store needed). */
+function endpoint(overrides: Partial<Endpoint>): Endpoint {
+  return {
+    id: "ep_x",
+    appId: APP,
+    url: "https://x.test/hook",
+    secret: "whsec_x",
+    description: "",
+    eventTypes: null,
+    disabled: false,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
+
+describe("selectFanoutTargets", () => {
+  it("matches a null-filter (subscribe-all) endpoint to any event", () => {
+    const ep = endpoint({ eventTypes: null });
+    const sel = selectFanoutTargets([ep], "anything.at.all");
+    expect(sel.matched).toEqual([ep]);
+    expect(sel.skippedDisabled).toEqual([]);
+    expect(sel.skippedUnsubscribed).toEqual([]);
+  });
+
+  it("matches only endpoints whose filter includes the event type", () => {
+    const subscribed = endpoint({ id: "ep_a", eventTypes: ["user.created"] });
+    const other = endpoint({ id: "ep_b", eventTypes: ["order.paid"] });
+    const sel = selectFanoutTargets([subscribed, other], "user.created");
+    expect(sel.matched).toEqual([subscribed]);
+    expect(sel.skippedUnsubscribed).toEqual([other]);
+    expect(sel.skippedDisabled).toEqual([]);
+  });
+
+  it("skips a disabled endpoint even when it subscribes (disabled wins)", () => {
+    const ep = endpoint({ disabled: true, eventTypes: null });
+    const sel = selectFanoutTargets([ep], "user.created");
+    expect(sel.matched).toEqual([]);
+    expect(sel.skippedDisabled).toEqual([ep]);
+    expect(sel.skippedUnsubscribed).toEqual([]);
+  });
+
+  it("treats an empty filter array as subscribing to nothing", () => {
+    const ep = endpoint({ eventTypes: [] });
+    const sel = selectFanoutTargets([ep], "user.created");
+    expect(sel.matched).toEqual([]);
+    expect(sel.skippedUnsubscribed).toEqual([ep]);
+  });
+
+  it("partitions a mix and preserves input order within each bucket", () => {
+    const a = endpoint({ id: "ep_a", eventTypes: null });
+    const b = endpoint({ id: "ep_b", eventTypes: ["user.created"] });
+    const c = endpoint({ id: "ep_c", eventTypes: ["order.paid"] });
+    const d = endpoint({ id: "ep_d", disabled: true });
+    const e = endpoint({ id: "ep_e", eventTypes: ["user.created", "x"] });
+
+    const sel = selectFanoutTargets([a, b, c, d, e], "user.created");
+    expect(sel.matched.map((ep) => ep.id)).toEqual(["ep_a", "ep_b", "ep_e"]);
+    expect(sel.skippedUnsubscribed.map((ep) => ep.id)).toEqual(["ep_c"]);
+    expect(sel.skippedDisabled.map((ep) => ep.id)).toEqual(["ep_d"]);
+  });
+
+  it("returns all-empty buckets for no endpoints", () => {
+    expect(selectFanoutTargets([], "e")).toEqual({
+      matched: [],
+      skippedDisabled: [],
+      skippedUnsubscribed: [],
+    });
+  });
+});
+
+/** A fan-out fixture: three stores sharing one deterministic clock. */
+function setup(endpointOpts: InMemoryEndpointStoreOptions = {}) {
+  let nowMs = 1_700_000_000_000;
+  const now = () => nowMs;
+  const setClock = (ms: number) => {
+    nowMs = ms;
+  };
+  const endpoints = new InMemoryEndpointStore({ now, ...endpointOpts });
+  const messages = new InMemoryMessageStore({ now });
+  const queue = new InMemoryDeliveryQueue({ now });
+  const addEndpoint = (input: Partial<NewEndpoint> = {}) =>
+    endpoints.create({ appId: APP, url: "https://x.test/hook", ...input });
+  return { endpoints, messages, queue, now, setClock, addEndpoint };
+}
+
+describe("fanOut", () => {
+  it("enqueues one task per matched endpoint, tagged with message and endpoint", async () => {
+    const env = setup();
+    const all = await env.addEndpoint({ url: "https://a.test/h" }); // subscribe-all
+    const subscribed = await env.addEndpoint({
+      url: "https://b.test/h",
+      eventTypes: ["user.created"],
+    });
+    await env.addEndpoint({
+      url: "https://c.test/h",
+      eventTypes: ["order.paid"],
+    }); // unsubscribed
+    await env.addEndpoint({ url: "https://d.test/h", disabled: true }); // disabled
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { endpoints: env.endpoints, queue: env.queue },
+    );
+
+    expect(result).toMatchObject({
+      messageId: "msg_1",
+      matched: 2,
+      skippedUnsubscribed: 1,
+      skippedDisabled: 1,
+    });
+    // One task per match, in endpoint (oldest-first) order, all for our message.
+    expect(result.tasks.map((t) => t.endpointId)).toEqual([
+      all.id,
+      subscribed.id,
+    ]);
+    expect(result.tasks.every((t) => t.messageId === "msg_1")).toBe(true);
+    expect(result.tasks.every((t) => t.status === "pending")).toBe(true);
+  });
+
+  it("enqueues nothing when no endpoint matches", async () => {
+    const env = setup();
+    await env.addEndpoint({ eventTypes: ["order.paid"] });
+    await env.addEndpoint({ disabled: true });
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { endpoints: env.endpoints, queue: env.queue },
+    );
+    expect(result.matched).toBe(0);
+    expect(result.tasks).toHaveLength(0);
+    expect(result.skippedUnsubscribed).toBe(1);
+    expect(result.skippedDisabled).toBe(1);
+  });
+
+  it("fans out only within the message's own tenant", async () => {
+    const env = setup();
+    const mine = await env.addEndpoint({ url: "https://mine.test/h" });
+    // A subscribe-all endpoint in a *different* app must never be enqueued.
+    await env.endpoints.create({ appId: "app_2", url: "https://other.test/h" });
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { endpoints: env.endpoints, queue: env.queue },
+    );
+    expect(result.matched).toBe(1);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.endpointId).toBe(mine.id);
+  });
+
+  it("applies availableAt to every enqueued task", async () => {
+    const env = setup();
+    await env.addEndpoint({ url: "https://a.test/h" });
+    await env.addEndpoint({ url: "https://b.test/h" });
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "e" },
+      { endpoints: env.endpoints, queue: env.queue },
+      { availableAt: 5_000 },
+    );
+    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks.every((t) => t.nextAttemptAt === 5_000)).toBe(true);
+  });
+});
+
+describe("ingest", () => {
+  it("creates the message and fans it out in one call", async () => {
+    const env = setup();
+    const ep = await env.addEndpoint();
+
+    const result = await ingest(
+      { appId: APP, eventType: "user.created", payload: '{"id":1}' },
+      { endpoints: env.endpoints, queue: env.queue, messages: env.messages },
+    );
+
+    expect(result.deduplicated).toBe(false);
+    expect(result.message.appId).toBe(APP);
+    expect(result.fanout).not.toBeNull();
+    expect(result.fanout?.matched).toBe(1);
+    expect(result.fanout?.tasks[0]?.endpointId).toBe(ep.id);
+    expect(result.fanout?.tasks[0]?.messageId).toBe(result.message.id);
+  });
+
+  it("does not re-fan-out a deduplicated (retried) message", async () => {
+    const env = setup();
+    await env.addEndpoint();
+    const input = {
+      appId: APP,
+      eventType: "user.created",
+      payload: "{}",
+      idempotencyKey: "k-1",
+    };
+
+    const first = await ingest(input, {
+      endpoints: env.endpoints,
+      queue: env.queue,
+      messages: env.messages,
+    });
+    const second = await ingest(input, {
+      endpoints: env.endpoints,
+      queue: env.queue,
+      messages: env.messages,
+    });
+
+    expect(first.deduplicated).toBe(false);
+    expect(first.fanout?.matched).toBe(1);
+    // The retry dedups to the same message and is NOT fanned out again.
+    expect(second.deduplicated).toBe(true);
+    expect(second.message.id).toBe(first.message.id);
+    expect(second.fanout).toBeNull();
+  });
+
+  it("delivers an ingested message end-to-end with a verifiable signature", async () => {
+    const env = setup();
+    const ep = await env.addEndpoint({ url: "https://hook.test/in" });
+
+    const { message, fanout } = await ingest(
+      { appId: APP, eventType: "user.created", payload: '{"hello":"world"}' },
+      { endpoints: env.endpoints, queue: env.queue, messages: env.messages },
+    );
+    expect(fanout?.tasks).toHaveLength(1);
+
+    // Drain the queue with a real worker; capture the request it emits.
+    let captured: HttpDeliveryRequest | null = null;
+    const transport: Transport = async (request) => {
+      captured = request;
+      return { status: 200 };
+    };
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.messages,
+      resolveEndpoint: storeBackedResolver(env.endpoints),
+      transport,
+      now: env.now,
+    });
+
+    const result = await worker.processOnce();
+    expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
+
+    const request = captured as unknown as HttpDeliveryRequest;
+    expect(request.url).toBe("https://hook.test/in");
+    expect(request.body).toBe('{"hello":"world"}');
+    // The whole pipeline — ingest → fan-out → queue → worker → sign — produces a
+    // signature that verifies against the secret the endpoint store minted.
+    expect(() =>
+      verify(
+        ep.secret,
+        {
+          id: request.headers[HEADERS.id]!,
+          timestamp: request.headers[HEADERS.timestamp]!,
+          signature: request.headers[HEADERS.signature]!,
+        },
+        request.body,
+        { now: Math.floor(env.now() / 1000) },
+      ),
+    ).not.toThrow();
+    expect(message.id).toBe(request.headers[HEADERS.id]);
+  });
+});

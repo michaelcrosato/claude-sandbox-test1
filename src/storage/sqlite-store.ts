@@ -66,6 +66,7 @@ export interface SqliteStoreOptions {
 /** Shape of a row from the `messages` table. */
 interface MessageRow {
   readonly id: string;
+  readonly app_id: string;
   readonly idempotency_key: string | null;
   readonly event_type: string;
   readonly payload: string;
@@ -82,6 +83,7 @@ interface IdempotencyRow {
 function rowToMessage(row: MessageRow): Message {
   return {
     id: row.id,
+    appId: row.app_id,
     idempotencyKey: row.idempotency_key,
     eventType: row.event_type,
     payload: row.payload,
@@ -124,19 +126,19 @@ export class SqliteMessageStore implements MessageStore {
     this.#db.exec(SCHEMA);
 
     this.#selectMessage = this.#db.prepare(
-      "SELECT id, idempotency_key, event_type, payload, created_at FROM messages WHERE id = ?",
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at FROM messages WHERE id = ?",
     );
     this.#selectIdempotency = this.#db.prepare(
-      "SELECT message_id, fingerprint, stored_at FROM idempotency_keys WHERE key = ?",
+      "SELECT message_id, fingerprint, stored_at FROM idempotency_keys WHERE app_id = ? AND key = ?",
     );
     this.#insertMessage = this.#db.prepare(
-      "INSERT INTO messages (id, idempotency_key, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
     this.#insertIdempotency = this.#db.prepare(
-      "INSERT INTO idempotency_keys (key, message_id, fingerprint, stored_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO idempotency_keys (app_id, key, message_id, fingerprint, stored_at) VALUES (?, ?, ?, ?, ?)",
     );
     this.#deleteIdempotency = this.#db.prepare(
-      "DELETE FROM idempotency_keys WHERE key = ?",
+      "DELETE FROM idempotency_keys WHERE app_id = ? AND key = ?",
     );
     this.#countMessages = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM messages",
@@ -149,7 +151,7 @@ export class SqliteMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { eventType, payload, idempotencyKey: key } =
+    const { appId, eventType, payload, idempotencyKey: key } =
       normalizeNewMessage(input);
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
@@ -159,6 +161,7 @@ export class SqliteMessageStore implements MessageStore {
     this.#db.exec("BEGIN IMMEDIATE");
     try {
       const result = this.#createWithinTransaction(
+        appId,
         eventType,
         payload,
         key,
@@ -178,6 +181,7 @@ export class SqliteMessageStore implements MessageStore {
   }
 
   #createWithinTransaction(
+    appId: string,
     eventType: string,
     payload: string,
     key: string | null,
@@ -185,7 +189,7 @@ export class SqliteMessageStore implements MessageStore {
     nowMs: number,
   ): CreateMessageResult {
     if (key !== null) {
-      const existing = this.#selectIdempotency.get(key) as
+      const existing = this.#selectIdempotency.get(appId, key) as
         | IdempotencyRow
         | undefined;
       if (
@@ -205,7 +209,7 @@ export class SqliteMessageStore implements MessageStore {
         }
       }
       // Absent or expired: drop any stale binding and fall through to create.
-      this.#deleteIdempotency.run(key);
+      this.#deleteIdempotency.run(appId, key);
     }
 
     const id = this.#generateId();
@@ -214,12 +218,19 @@ export class SqliteMessageStore implements MessageStore {
         `generated message id "${id}" collides with an existing one`,
       );
     }
-    this.#insertMessage.run(id, key, eventType, payload, nowMs);
+    this.#insertMessage.run(id, appId, key, eventType, payload, nowMs);
     if (key !== null) {
-      this.#insertIdempotency.run(key, id, fingerprint, nowMs);
+      this.#insertIdempotency.run(appId, key, id, fingerprint, nowMs);
     }
     return {
-      message: { id, idempotencyKey: key, eventType, payload, createdAt: nowMs },
+      message: {
+        id,
+        appId,
+        idempotencyKey: key,
+        eventType,
+        payload,
+        createdAt: nowMs,
+      },
       deduplicated: false,
     };
   }
@@ -229,8 +240,11 @@ export class SqliteMessageStore implements MessageStore {
     return row === undefined ? null : rowToMessage(row);
   }
 
-  async getByIdempotencyKey(key: string): Promise<Message | null> {
-    const entry = this.#selectIdempotency.get(key) as
+  async getByIdempotencyKey(
+    appId: string,
+    key: string,
+  ): Promise<Message | null> {
+    const entry = this.#selectIdempotency.get(appId, key) as
       | IdempotencyRow
       | undefined;
     if (
@@ -255,10 +269,15 @@ export class SqliteMessageStore implements MessageStore {
  * Idempotent schema. `STRICT` enforces declared column types; the foreign key
  * keeps every idempotency binding pointing at a real message. `IF NOT EXISTS`
  * lets a restart reattach to an existing database unchanged (crash-safe replay).
+ *
+ * Idempotency keys are scoped per tenant: the binding's primary key is the
+ * composite `(app_id, key)`, so the same key in two apps is two independent
+ * rows and one tenant's key can never resolve another tenant's message.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS messages (
   id              TEXT    PRIMARY KEY,
+  app_id          TEXT    NOT NULL,
   idempotency_key TEXT,
   event_type      TEXT    NOT NULL,
   payload         TEXT    NOT NULL,
@@ -266,10 +285,12 @@ CREATE TABLE IF NOT EXISTS messages (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
-  key        TEXT    PRIMARY KEY,
+  app_id     TEXT    NOT NULL,
+  key        TEXT    NOT NULL,
   message_id TEXT    NOT NULL,
   fingerprint TEXT   NOT NULL,
   stored_at  INTEGER NOT NULL,
+  PRIMARY KEY (app_id, key),
   FOREIGN KEY (message_id) REFERENCES messages (id)
 ) STRICT;
 `;
