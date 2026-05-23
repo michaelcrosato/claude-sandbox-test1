@@ -4,6 +4,56 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 6: P2.5 — the delivery worker (runtime I/O driver), end-to-end send real
+
+**Repo truth at start:** clean main @ `7c1926b`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **145/145**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after P2: signer, retry/FSM, store, and the durable queue were **four fully-built but
+disconnected islands** — nothing performed actual I/O, so Posthorn could not yet *send a single
+webhook*. The roadmap's named next item (P2.5) closes exactly that.
+
+**High-leverage move chosen:** Build the **`DeliveryWorker`** — the runtime loop that joins all four
+islands into a real send: claim due tasks → load message → sign → POST → settle. Highest-leverage
+because it converts a pile of correct-but-inert machinery into a working product (the first
+end-to-end delivery), and it does so without adding any decision logic (retry/state stays in P1/P2),
+keeping the unit small and fully green.
+
+**Built this tick (`src/worker/delivery-worker.ts`):**
+- Pure helpers: `isSuccessStatus` (2xx) and `buildSignedRequest` (Standard Webhooks headers; signs
+  over `{id}.{ts}.{payload}` with the *send* time, not message createdAt; caller headers merged but
+  cannot clobber the `webhook-*` headers).
+- `DeliveryWorker`: `processOnce()` (deterministic single tick at one clock instant — claim a batch,
+  deliver each sequentially, return a `TickResult` tally) and `run()`/`stop()` (continuous poll:
+  drains back-to-back, sleeps `idlePollMs` when idle, survives unexpected tick errors via `onError`).
+- Injected seams (the whole point — fully fake-clock/transport-testable): `queue`, `store`, `now`,
+  `transport` (default `fetchTransport` over global `fetch`, with per-attempt `AbortSignal` timeout),
+  injectable `sleep`, and an **`EndpointResolver`** — the deliberate plug-point for P3's
+  endpoint/secret store (the queue task carries only an opaque `messageId`).
+- Settle hygiene: a lapsed-and-reclaimed lease raises `StaleLeaseError` on `complete`/`fail`, which
+  the worker absorbs (counted `stale`) per the queue's at-least-once contract — never double-settles.
+  Missing message / unresolved endpoint / transport throw / non-2xx all become a *failed attempt*
+  (the queue's policy then retries or dead-letters); deliberately no out-of-band cancel in v1.
+- `src/index.ts` re-exports the worker surface.
+
+**Key decision — sequential batch processing in v1.** Honest tradeoff: simple + deterministic, but
+`batchSize × requestTimeoutMs` must stay below the queue's visibility timeout or leases lapse
+mid-batch. Correctness holds regardless (stale settles are absorbed); bounded concurrency is the
+next throughput optimization. Documented in code + PROJECT.md.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **168/168** (was 145; +23 worker: pure-helper +
+construction guards + happy-path + retry/dead-letter/missing-msg/no-endpoint/transport-error/stale-
+reclaim/timeout-abort + `run` drain/resilience/concurrent-guard). The headline test and a
+compiled-**`dist`** smoke run both prove a worker-emitted request **verifies against the existing
+verifier** — the full sign→deliver→verify loop closed in-process and in production ESM.
+`npm run build` clean. Integrity + local gate: exit 0.
+
+**State:** GREEN → committing to main. P2.5 complete; Posthorn now performs a real end-to-end
+delivery. Next tick: P3 — Fastify HTTP API (apps/endpoints/messages) + an endpoint store backing a
+real `EndpointResolver` + TS SDK.
+
+---
+
 ## 2026-05-22 — Iteration 5: P2 finished — durable delivery queue (lease + crash-safe replay)
 
 **Repo truth at start:** clean main @ `542b0b0`. Baseline re-verified before any change:

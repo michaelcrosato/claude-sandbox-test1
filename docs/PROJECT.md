@@ -102,12 +102,22 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
   the P1 pure FSM + retry policy for every transition. Deferred to a later tick: a full per-attempt
   audit log (one record per HTTP attempt with response detail) — an observability add-on, distinct
   from the load-bearing state the queue already persists.
-- **P2.5 — Delivery worker (next):** the runtime loop that ties the pieces together — claim due
-  tasks from the queue, load each message from the store, sign it, POST it, and `complete`/`fail`
-  the task. Pure decision logic stays in P1/P2; this adds the (injectable, fake-clock-testable)
-  I/O driver.
-- **P3 — HTTP API + SDK:** Fastify endpoints (apps, endpoints, messages), contract tests,
-  TS SDK, OpenAPI.
+- **P2.5 — Delivery worker (complete):** the runtime I/O driver that ties the pieces together —
+  `DeliveryWorker` (`src/worker/delivery-worker.ts`) claims due tasks from the queue, loads each
+  message from the store, signs it, POSTs it over an **injectable `Transport`** (default
+  `fetchTransport`), and settles the task (`complete`/`fail`) so the P1/P2 pure FSM + retry policy
+  reschedule a retry or dead-letter an exhausted delivery. Holds **no** retry/state logic of its
+  own; it only classifies a 2xx response as success. Every outside-world touch is an injected seam
+  (clock, transport, idle `sleep`, and an **`EndpointResolver`** — the exact plug-point where P3's
+  endpoint store supplies each task's URL + signing secret). `processOnce()` is the deterministic
+  unit of work; `run()`/`stop()` is the continuous poll loop (drains back-to-back, sleeps when idle,
+  survives unexpected tick errors via `onError`). A lapsed-and-reclaimed lease surfaces as a
+  `StaleLeaseError` on settle, which the worker absorbs (counted `stale`) so it never double-settles.
+  Per-attempt HTTP timeout via `AbortSignal`. Proven end-to-end: a worker-emitted request **verifies
+  against the existing verifier** in tests and a compiled-`dist` smoke run. v1 processes a claimed
+  batch sequentially (bounded concurrency is the next throughput optimization).
+- **P3 — HTTP API + SDK (next):** Fastify endpoints (apps, endpoints, messages), an endpoint store
+  backing a real `EndpointResolver`, contract tests, TS SDK, OpenAPI.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

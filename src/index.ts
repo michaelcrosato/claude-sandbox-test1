@@ -81,3 +81,21 @@ export {
   SqliteDeliveryQueue,
   type SqliteQueueOptions,
 } from "./queue/sqlite-queue.js";
+
+export {
+  DeliveryWorker,
+  buildSignedRequest,
+  isSuccessStatus,
+  fetchTransport,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_IDLE_POLL_MS,
+  DEFAULT_WORKER_BATCH_SIZE,
+  type DeliveryWorkerOptions,
+  type DeliveryTarget,
+  type EndpointResolver,
+  type Transport,
+  type HttpDeliveryRequest,
+  type HttpDeliveryResponse,
+  type TickResult,
+  type TaskOutcome,
+} from "./worker/delivery-worker.js";
