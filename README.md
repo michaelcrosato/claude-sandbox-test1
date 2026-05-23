@@ -21,11 +21,15 @@ Early foundation. Implemented so far:
   (fixed or exponential, optional injectable jitter, sensible default schedule) and a delivery
   state machine (`pending → delivering → succeeded`, with policy-driven retries and automatic
   dead-lettering once retries are exhausted).
-- ✅ **Message store + idempotent intake** — a storage interface (`MessageStore`) with a
-  zero-dependency in-memory implementation. Idempotency keys collapse a producer's retried
-  `create` onto the single message first accepted; reusing a key for a *different* request is
-  rejected as a conflict; key bindings expire after a configurable window. This is the seam the
-  SQLite/Postgres backends will implement next.
+- ✅ **Message store + idempotent intake** — a storage interface (`MessageStore`) with two
+  interchangeable backends. Idempotency keys collapse a producer's retried `create` onto the
+  single message first accepted; reusing a key for a *different* request is rejected as a
+  conflict; key bindings expire after a configurable window.
+  - **In-memory** — zero-dependency reference backend, ideal for embedding and tests.
+  - **SQLite** — durable, **crash-safe** backend built on Node's *built-in* `node:sqlite`
+    (Node 22.5+): no native compilation, no third-party dependency. Survives restarts, so a
+    producer's retry after a crash still dedups. Both backends pass one shared behavioural
+    conformance suite, so they are guaranteed to behave identically.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -101,6 +105,17 @@ const again = await store.create({
   idempotencyKey: "req_abc123",
 });
 again.deduplicated; // true — again.message.id === message.id (no duplicate send)
+```
+
+For durability across restarts, swap in the SQLite backend — same interface, now
+crash-safe and persisted to a file (or `:memory:`):
+
+```ts
+import { SqliteMessageStore } from "posthorn";
+
+const store = new SqliteMessageStore({ location: "./posthorn.sqlite" });
+// ...identical create / get / getByIdempotencyKey API as above...
+store.close(); // release the database handle on shutdown
 ```
 
 ## Development

@@ -4,6 +4,59 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 4: P2 begins — durable, crash-safe SQLite MessageStore + shared conformance
+
+**Repo truth at start:** clean main @ `6984197`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **81/81**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9 / Vite 5.4.21. Roadmap's next item: P2 — a durable
+`MessageStore` implementing the P1 interface.
+
+**High-leverage move chosen:** Build the **durable storage backend** + a **shared conformance
+suite** that every `MessageStore` must pass. Highest-leverage because it (a) delivers the
+product's core "single process, no Redis, durable" wedge, (b) validates the P1 storage seam by
+giving it a *second* implementation, and (c) the conformance suite makes the future Postgres
+backend trivially verifiable — "matches the reference" becomes a proven fact, not a hope.
+Scoped to the store only; the durable queue + delivery-attempt records are deferred to keep
+this a small, fully-validatable green unit (mirrors how P1 was split).
+
+**Engine decision revised — `better-sqlite3` → built-in `node:sqlite`.** Probed the sandbox:
+Node 24's `node:sqlite` works with zero deps and no native compile step. This *strengthens* the
+"zero-dependency single container" wedge vs. the native `better-sqlite3` originally planned.
+PROJECT.md §3 updated.
+
+**Built this tick:**
+- `src/storage/message-store.ts` — extracted three shared, pure helpers so backends can't
+  drift: `normalizeNewMessage` (intake validation), `isIdempotencyExpired` (the one expiry
+  rule, Infinity-safe), `assertValidIdempotencyWindow`, plus shared `DEFAULT_IDEMPOTENCY_WINDOW_MS`.
+- `src/storage/in-memory-store.ts` — refactored onto those helpers; behaviour unchanged.
+- `src/storage/sqlite-store.ts` — `SqliteMessageStore`: WAL + `synchronous=NORMAL` + FK,
+  `STRICT` tables, two-table schema mirroring the in-memory design (`messages` never pruned;
+  `idempotency_keys` ages out). `create` runs in a `BEGIN IMMEDIATE` txn so check-then-insert
+  is atomic across connections. Adds `close()` and a `size` getter.
+- `src/storage/conformance.ts` — `describeMessageStoreContract(label, factory)` + a
+  deterministic clock; the single behavioural spec both backends run.
+- Test files rewritten to call the conformance suite; SQLite adds a **crash-safe replay** test
+  (write to a temp file, close, reopen → message + idempotency binding survive, retry dedups)
+  and a file-isolation test. `src/index.ts` re-exports `SqliteMessageStore`.
+
+**Snag + fix (logged honestly):** Vite 5's bundled builtins list predates `node:sqlite`, so a
+static `import … from "node:sqlite"` made vite-node strip the prefix and fail to resolve
+`sqlite`. `server.deps.external` and a `pre` `resolveId` plugin both failed to stop it. Resolved
+by loading the builtin via `createRequire(import.meta.url)("node:sqlite")` — no static specifier
+for the bundler to mangle; works identically in the compiled `dist` ESM (smoke-tested). `vitest.config.ts`
+left at its clean original.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **100/100** (was 81; +19: SQLite suite 18
+incl. 14 shared-conformance + reopen/isolation, in-memory +1 size test). `npm run build` clean.
+Smoke-tested the built `dist/index.js` (Sqlite create→dedup→size→close) to prove the
+`createRequire` path works in production, not just under Vitest. Integrity + local gate: exit 0.
+
+**State:** GREEN → committing to main. Next tick: continue P2 — delivery-attempt persistence
+(extend the schema/interface) and a durable, store-backed queue with crash-safe replay of
+in-flight deliveries.
+
+---
+
 ## 2026-05-22 — Iteration 3: P1 finished — idempotent message store + storage seam
 
 **Repo truth at start:** clean main @ `d2f06f8`. Baseline re-verified before any change:

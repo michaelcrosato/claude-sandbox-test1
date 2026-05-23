@@ -79,8 +79,10 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
   matches the human's primary ecosystem (their `salesforce-lite-crm` is TS), and the SDKs
   customers consume are TS/JS first. Go's single-static-binary edge is nice but
   unavailable here; Docker presence still delivers the single-container self-host story.
-- **HTTP:** Fastify. **Storage:** SQLite default (`better-sqlite3`), Postgres optional via
-  a thin storage interface. **Queue:** durable, store-backed (no Redis). **Tests:** Vitest.
+- **HTTP:** Fastify. **Storage:** SQLite default via Node's **built-in `node:sqlite`**
+  (revised from `better-sqlite3` — the builtin needs no native compile step and adds zero
+  dependencies, strengthening the "single container, no deps" wedge), Postgres optional via a
+  thin storage interface. **Queue:** durable, store-backed (no Redis). **Tests:** Vitest.
 - **Packaging:** single Docker image; library entrypoint published to npm.
 
 ## 4. Roadmap (each phase is one or more validated loop iterations)
@@ -90,8 +92,11 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
 - **P1 — Delivery core (complete):** retry/backoff schedule ✅, delivery state machine ✅,
   dead-letter ✅ (`src/delivery/`); idempotency/dedup keys ✅, in-memory store + `MessageStore`
   storage interface ✅ (`src/storage/`). All pure/deterministic, heavily tested.
-- **P2 — Persistence + queue:** SQLite `MessageStore` (implements the P1 interface), durable
-  store-backed queue, crash-safe replay. Delivery-attempt records persisted alongside messages.
+- **P2 — Persistence + queue (in progress):** durable, crash-safe SQLite `MessageStore` on
+  built-in `node:sqlite` ✅ (`src/storage/sqlite-store.ts`), proven byte-for-byte equivalent to
+  the in-memory reference via a shared conformance suite ✅ (`src/storage/conformance.ts`). Still
+  open: delivery-attempt records persisted alongside messages, and a durable store-backed queue
+  with crash-safe replay of in-flight work.
 - **P3 — HTTP API + SDK:** Fastify endpoints (apps, endpoints, messages), contract tests,
   TS SDK, OpenAPI.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.

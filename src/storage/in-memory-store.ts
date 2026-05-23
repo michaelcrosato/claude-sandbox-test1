@@ -12,17 +12,18 @@
  */
 
 import {
+  assertValidIdempotencyWindow,
   createMessageId,
+  DEFAULT_IDEMPOTENCY_WINDOW_MS,
   IdempotencyConflictError,
+  isIdempotencyExpired,
   messageFingerprint,
+  normalizeNewMessage,
   type CreateMessageResult,
   type Message,
   type MessageStore,
   type NewMessage,
 } from "./message-store.js";
-
-/** Default idempotency window: 24 hours, matching common provider behaviour. */
-const DEFAULT_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
 /** Construction options for {@link InMemoryMessageStore}. */
 export interface InMemoryStoreOptions {
@@ -60,11 +61,7 @@ export class InMemoryMessageStore implements MessageStore {
       generateId = createMessageId,
       idempotencyWindowMs = DEFAULT_IDEMPOTENCY_WINDOW_MS,
     } = options;
-    if (!(idempotencyWindowMs > 0)) {
-      throw new RangeError(
-        "idempotencyWindowMs must be a positive number (or Infinity)",
-      );
-    }
+    assertValidIdempotencyWindow(idempotencyWindowMs);
     this.#now = now;
     this.#generateId = generateId;
     this.#idempotencyWindowMs = idempotencyWindowMs;
@@ -76,26 +73,18 @@ export class InMemoryMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const eventType = input.eventType;
-    if (typeof eventType !== "string" || eventType.length === 0) {
-      throw new TypeError("eventType must be a non-empty string");
-    }
-    if (typeof input.payload !== "string") {
-      throw new TypeError("payload must be a string");
-    }
-    const key = input.idempotencyKey ?? null;
-    if (key !== null && (typeof key !== "string" || key.length === 0)) {
-      throw new TypeError(
-        "idempotencyKey must be a non-empty string when provided",
-      );
-    }
+    const { eventType, payload, idempotencyKey: key } =
+      normalizeNewMessage(input);
 
     const nowMs = this.#now();
-    const fingerprint = messageFingerprint(eventType, input.payload);
+    const fingerprint = messageFingerprint(eventType, payload);
 
     if (key !== null) {
       const existing = this.#idempotency.get(key);
-      if (existing !== undefined && !this.#isExpired(existing, nowMs)) {
+      if (
+        existing !== undefined &&
+        !isIdempotencyExpired(existing.storedAt, nowMs, this.#idempotencyWindowMs)
+      ) {
         if (existing.fingerprint !== fingerprint) {
           throw new IdempotencyConflictError(key);
         }
@@ -118,7 +107,7 @@ export class InMemoryMessageStore implements MessageStore {
       id,
       idempotencyKey: key,
       eventType,
-      payload: input.payload,
+      payload,
       createdAt: nowMs,
     };
     this.#messages.set(id, message);
@@ -134,13 +123,12 @@ export class InMemoryMessageStore implements MessageStore {
 
   async getByIdempotencyKey(key: string): Promise<Message | null> {
     const entry = this.#idempotency.get(key);
-    if (entry === undefined || this.#isExpired(entry, this.#now())) {
+    if (
+      entry === undefined ||
+      isIdempotencyExpired(entry.storedAt, this.#now(), this.#idempotencyWindowMs)
+    ) {
       return null;
     }
     return this.#messages.get(entry.messageId) ?? null;
-  }
-
-  #isExpired(entry: IdempotencyEntry, nowMs: number): boolean {
-    return nowMs - entry.storedAt >= this.#idempotencyWindowMs;
   }
 }

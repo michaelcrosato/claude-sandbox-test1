@@ -127,3 +127,67 @@ const MESSAGE_ID_PREFIX = "msg_";
 export function createMessageId(): string {
   return MESSAGE_ID_PREFIX + randomBytes(18).toString("base64url");
 }
+
+/** Default idempotency window: 24 hours, matching common provider behaviour. */
+export const DEFAULT_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Validate an idempotency window at store construction. Shared by every backend
+ * so they reject the same inputs identically. Must be `> 0`;
+ * `Number.POSITIVE_INFINITY` is permitted and means "never expire".
+ */
+export function assertValidIdempotencyWindow(windowMs: number): void {
+  if (!(windowMs > 0)) {
+    throw new RangeError(
+      "idempotencyWindowMs must be a positive number (or Infinity)",
+    );
+  }
+}
+
+/**
+ * The single, shared rule for whether an idempotency binding has aged out:
+ * `true` once `windowMs` has fully elapsed since `storedAt`. The `>=` makes the
+ * window half-open `[storedAt, storedAt + windowMs)`, and an infinite window
+ * never expires (`anything >= Infinity` is `false`). Every backend defers to
+ * this so dedup semantics cannot drift between engines.
+ */
+export function isIdempotencyExpired(
+  storedAt: number,
+  nowMs: number,
+  windowMs: number,
+): boolean {
+  return nowMs - storedAt >= windowMs;
+}
+
+/** A {@link NewMessage} whose fields have been validated and normalized. */
+export interface NormalizedNewMessage {
+  readonly eventType: string;
+  readonly payload: string;
+  readonly idempotencyKey: string | null;
+}
+
+/**
+ * Validate and normalize the caller-supplied fields of a create call, throwing
+ * {@link TypeError} on malformed input. Shared by every backend so they enforce
+ * the same intake contract; the `idempotencyKey` is collapsed to `null` when
+ * absent.
+ */
+export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
+  const { eventType, payload } = input;
+  if (typeof eventType !== "string" || eventType.length === 0) {
+    throw new TypeError("eventType must be a non-empty string");
+  }
+  if (typeof payload !== "string") {
+    throw new TypeError("payload must be a string");
+  }
+  const idempotencyKey = input.idempotencyKey ?? null;
+  if (
+    idempotencyKey !== null &&
+    (typeof idempotencyKey !== "string" || idempotencyKey.length === 0)
+  ) {
+    throw new TypeError(
+      "idempotencyKey must be a non-empty string when provided",
+    );
+  }
+  return { eventType, payload, idempotencyKey };
+}

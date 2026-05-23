@@ -52,3 +52,8 @@ export {
   InMemoryMessageStore,
   type InMemoryStoreOptions,
 } from "./storage/in-memory-store.js";
+
+export {
+  SqliteMessageStore,
+  type SqliteStoreOptions,
+} from "./storage/sqlite-store.js";
