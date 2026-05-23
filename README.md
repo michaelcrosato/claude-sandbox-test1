@@ -17,6 +17,10 @@ Early foundation. Implemented so far:
 - ✅ **Standard Webhooks signer / verifier** — HMAC-SHA256, `whsec_` secrets, `v1,` signature
   scheme, replay-window enforcement, key-rotation (multi-signature) support. Verified against
   the canonical Standard Webhooks test vector.
+- ✅ **Delivery decision core** — a pure, deterministic retry/backoff scheduler
+  (fixed or exponential, optional injectable jitter, sensible default schedule) and a delivery
+  state machine (`pending → delivering → succeeded`, with policy-driven retries and automatic
+  dead-lettering once retries are exhausted).
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -35,6 +39,38 @@ const signature = sign(secret, { id, timestamp, payload });
 
 // Receiver side — throws WebhookVerificationError on any mismatch / replay:
 verify(secret, { id, timestamp, signature }, payload);
+```
+
+## Quickstart (delivery core)
+
+The delivery core decides *what happens* as attempts resolve; your worker owns the HTTP call.
+
+```ts
+import {
+  DEFAULT_RETRY_POLICY,
+  initialDeliveryState,
+  isDeliverable,
+  isTerminal,
+  reduce,
+} from "posthorn";
+
+let state = initialDeliveryState(); // pending, deliverable now
+
+while (!isTerminal(state)) {
+  if (!isDeliverable(state, Date.now())) break; // wait until state.nextAttemptAt
+  state = reduce(DEFAULT_RETRY_POLICY, state, { type: "attemptStarted" });
+
+  const ok = await tryDeliver(); // your HTTP POST -> true on a 2xx
+  state = ok
+    ? reduce(DEFAULT_RETRY_POLICY, state, { type: "attemptSucceeded" })
+    : reduce(DEFAULT_RETRY_POLICY, state, {
+        type: "attemptFailed",
+        error: "non-2xx",
+        nowMs: Date.now(),
+      });
+  // On failure, state is `pending` with `nextAttemptAt` set — or `dead_letter`
+  // once the retry schedule is exhausted.
+}
 ```
 
 ## Development

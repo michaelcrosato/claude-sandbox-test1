@@ -14,3 +14,26 @@ export {
   type VerifyHeaders,
   type VerifyOptions,
 } from "./signing/webhook-signature.js";
+
+export {
+  DEFAULT_RETRY_POLICY,
+  exponentialBackoff,
+  fixedSchedule,
+  maxAttempts,
+  planNextAttempt,
+  type RetryPolicy,
+  type RetryPlan,
+  type JitterOptions,
+  type ExponentialBackoffOptions,
+} from "./delivery/retry-policy.js";
+
+export {
+  reduce,
+  initialDeliveryState,
+  isTerminal,
+  isDeliverable,
+  DeliveryStateError,
+  type DeliveryState,
+  type DeliveryStatus,
+  type DeliveryEvent,
+} from "./delivery/delivery-state.js";
