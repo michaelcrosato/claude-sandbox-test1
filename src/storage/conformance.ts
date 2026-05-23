@@ -494,5 +494,144 @@ export function describeMessageStoreContract(
         );
       });
     });
+
+    describe("listByApp — pagination", () => {
+      /** Create `n` messages under `appId`, one ms apart, returning their ids. */
+      async function seed(n: number, appId = APP): Promise<string[]> {
+        const ids: string[] = [];
+        for (let i = 0; i < n; i += 1) {
+          const { message } = await store.create({
+            appId,
+            eventType: "e",
+            payload: `{"i":${i}}`,
+          });
+          ids.push(message.id);
+          clock.advance(1);
+        }
+        return ids;
+      }
+
+      it("returns an empty page for an empty store or unknown app", async () => {
+        expect(await store.listByApp(APP)).toEqual({
+          messages: [],
+          nextCursor: null,
+        });
+        await seed(2);
+        expect(await store.listByApp("app_with_nothing")).toEqual({
+          messages: [],
+          nextCursor: null,
+        });
+      });
+
+      it("lists a tenant's messages newest-first", async () => {
+        const ids = await seed(3); // oldest → newest
+        const page = await store.listByApp(APP);
+        expect(page.messages.map((m) => m.id)).toEqual([...ids].reverse());
+        expect(page.nextCursor).toBeNull(); // fits in one default page
+        expect(page.messages[0]).toEqual(await store.get(ids[2]!)); // full message
+      });
+
+      it("scopes the listing to the app, never leaking another tenant's", async () => {
+        const aIds = await seed(2, "app_a");
+        const bIds = await seed(3, "app_b");
+        expect((await store.listByApp("app_a")).messages.map((m) => m.id)).toEqual(
+          [...aIds].reverse(),
+        );
+        expect((await store.listByApp("app_b")).messages.map((m) => m.id)).toEqual(
+          [...bIds].reverse(),
+        );
+      });
+
+      it("pages through with a cursor, in order and without overlap or gaps", async () => {
+        const ids = await seed(5);
+        const newestFirst = [...ids].reverse();
+
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        let pages = 0;
+        do {
+          const page = await store.listByApp(APP, {
+            limit: 2,
+            ...(cursor !== null ? { cursor } : {}),
+          });
+          seen.push(...page.messages.map((m) => m.id));
+          cursor = page.nextCursor;
+          pages += 1;
+          expect(pages).toBeLessThanOrEqual(5); // guard against a paging loop
+        } while (cursor !== null);
+
+        expect(pages).toBe(3); // [5,4] [3,2] [1]
+        expect(seen).toEqual(newestFirst); // exact, ordered coverage
+      });
+
+      it("ends cleanly when the total is an exact multiple of the limit", async () => {
+        const ids = await seed(4);
+        const first = await store.listByApp(APP, { limit: 2 });
+        expect(first.messages.map((m) => m.id)).toEqual([ids[3], ids[2]]);
+        expect(first.nextCursor).not.toBeNull();
+
+        const second = await store.listByApp(APP, {
+          limit: 2,
+          cursor: first.nextCursor!,
+        });
+        expect(second.messages.map((m) => m.id)).toEqual([ids[1], ids[0]]);
+        // No phantom empty trailing page: the last full page reports no cursor.
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it("breaks createdAt ties by id (descending) and pages stably across the tie", async () => {
+        // Three messages sharing one createdAt (clock never advanced).
+        const ids: string[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          const { message } = await store.create({
+            appId: APP,
+            eventType: "e",
+            payload: "{}",
+          });
+          ids.push(message.id);
+        }
+        const byIdDesc = [...ids].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+        expect((await store.listByApp(APP)).messages.map((m) => m.id)).toEqual(
+          byIdDesc,
+        );
+
+        const first = await store.listByApp(APP, { limit: 2 });
+        expect(first.messages.map((m) => m.id)).toEqual(byIdDesc.slice(0, 2));
+        const second = await store.listByApp(APP, {
+          limit: 2,
+          cursor: first.nextCursor!,
+        });
+        expect(second.messages.map((m) => m.id)).toEqual(byIdDesc.slice(2));
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it("rejects an out-of-range or non-integer limit", async () => {
+        await expect(store.listByApp(APP, { limit: 0 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { limit: -1 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { limit: 1.5 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { limit: 201 })).rejects.toThrow(RangeError);
+      });
+
+      it("rejects a malformed cursor", async () => {
+        await expect(
+          store.listByApp(APP, { cursor: "not-a-real-cursor!!" }),
+        ).rejects.toThrow(TypeError);
+        await expect(store.listByApp(APP, { cursor: "" })).rejects.toThrow(
+          TypeError,
+        );
+      });
+
+      it("round-trips a real nextCursor as the next page's cursor", async () => {
+        const ids = await seed(3);
+        const first = await store.listByApp(APP, { limit: 1 });
+        expect(first.messages.map((m) => m.id)).toEqual([ids[2]]);
+        expect(first.nextCursor).toBeTypeOf("string");
+        const second = await store.listByApp(APP, {
+          limit: 1,
+          cursor: first.nextCursor!,
+        });
+        expect(second.messages.map((m) => m.id)).toEqual([ids[1]]);
+      });
+    });
   });
 }

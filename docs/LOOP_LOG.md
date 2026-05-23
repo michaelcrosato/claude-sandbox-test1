@@ -4,6 +4,84 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 16: P3 — message listing (`GET /v1/messages`, keyset-paginated)
+
+**Repo truth at start:** clean main @ `f6030ba`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **450/450**, `npm run build` clean, integrity + local gate both exit 0.
+Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands; repo is far past the
+GOAL's "decide a project" stage. The glaring gap after iter 15: the server + SDK cover the full
+send→observe-*one*-message→verify loop, but there was **no way to enumerate messages** — a producer
+could read `GET /v1/messages/:id` only if it had kept the id; it could not browse what it sent. Every
+incumbent's dashboard centers on a messages list, and PROJECT.md listed `GET /v1/messages` (gated on a
+`MessageStore.listByApp`) as deferred. Also note: there was **no query-string plumbing** in the HTTP
+layer at all (`server.ts` discarded it), so pagination needed that rail built too.
+
+**High-leverage move chosen:** Build **`GET /v1/messages`** — tenant-scoped, **keyset-paginated**
+message listing — backed by a new `MessageStore.listByApp`, plus query-string support in the HTTP layer
+and `client.listMessages` on the SDK. Highest-leverage (checklist #3): it closes a *functional* gap (not
+docs), completes the "observable" half of the product (iter 14 did the single message; this does the
+collection), and lays a **reusable `?limit=&cursor=` rail** every future list/filter route — and the P5
+control-plane dashboard — needs; messages is exactly the unbounded collection where pagination is
+mandatory. Chosen over **OpenAPI** (interop/docs, not a capability — a smaller user value than the
+missing browse) and the **per-attempt audit log** (larger, touches the worker hot path → higher risk to
+land green in one tick) and the **Dockerfile** (still un-validatable green here — `docker build` needs
+network egress this sandbox blocks). The loop's strongest regime: fully deterministic, in-process
+testable, **zero new deps**; followed the proven pure-core / interface+two-backends+one-conformance-suite
+pattern.
+
+**Built this tick:**
+- **`MessageStore.listByApp(appId, {limit, cursor})` → `MessagePage` (`src/storage/message-store.ts`).**
+  Newest-first by `(createdAt, id)` DESC, **keyset** (not offset) paginated: an opaque base64url cursor
+  encodes the last row's `(createdAt, id)`; the next page is everything strictly older. Keyset is stable
+  under concurrent inserts (a new message appears on page one, never shifting an in-flight scan — the
+  classic offset bug) and stays indexed as the log grows unbounded. Shared pure helpers are the single
+  source of the rule: `encodeMessageCursor`/`decodeMessageCursor` (malformed → `TypeError`),
+  `resolveListMessagesQuery` (limit defaults 50, capped at `MAX_LIST_MESSAGES_LIMIT=200`, RangeError
+  otherwise), and `compareMessagesNewestFirst`/`isMessageAfterCursor` — the in-memory backend sorts by
+  the comparator, SQLite mirrors it as `ORDER BY created_at DESC, id DESC` + the keyset predicate, so the
+  two cannot drift (ids are ASCII ⇒ JS string order == SQLite BINARY collation).
+- **Both backends + conformance.** In-memory: filter+sort+slice (fetch-one-extra signals a further page).
+  SQLite: two prepared statements (first page / keyset page) + a new `idx_messages_app_created
+  (app_id, created_at, id)` created via `IF NOT EXISTS` — **no migration**, a pure read optimization over
+  existing rows (same reasoning as iter 14's per-message index). 9 new shared conformance cases × 2
+  backends (empty, newest-first, tenant-scoping, multi-page coverage with no overlap/gaps, exact-multiple
+  termination [no phantom trailing page], same-ms id tiebreak, limit out-of-range reject, malformed-cursor
+  reject, real-cursor round-trip).
+- **HTTP query rail + route (`src/http/api.ts`, `server.ts`).** `ApiRequest` gained a `query` map, filled
+  by the `node:http` adapter from `URL.searchParams` (first value wins for repeats) — the reusable rail.
+  `GET /v1/messages` validates `?limit=` to a `400` and passes `?cursor=` through (a malformed one →
+  `TypeError` → `400` via the existing map); tenancy is the key's, so a listing never reveals another
+  tenant's messages. **Lean list rows** (`messageListItemView`): id/appId/eventType/idempotencyKey/
+  createdAt only — no payload, no deliveries, so a page never fans out into an N+1 delivery query (detail
+  stays on `/:id`).
+- **SDK `client.listMessages({limit, cursor})` → `{ data: MessageRef[], nextCursor }`** (`src/sdk/client.ts`),
+  building the query string via `URLSearchParams`. Re-exported new public types/constants from
+  `src/index.ts` (storage `ListMessagesOptions`/`MessagePage`/`MessageCursor` + cursor helpers + limit
+  constants; SDK `ListMessagesParams`/`MessageListPage`). README + PROJECT.md updated; the deferred list
+  dropped the message-list item.
+
+**Key decisions (honest tradeoffs):** keyset over offset (correctness under concurrent writes + indexed
+at scale, at the cost of opaque cursors — the right call for an append-only log). Lean list rows over
+embedding delivery status per row (avoids N+1; detail view already exists). `query` made a **required**
+`ApiRequest` field (one test helper + the one adapter updated) rather than optional, so handlers never
+thread an `undefined`. List items typed as the existing SDK `MessageRef` (identical shape) rather than a
+new wire type — less surface, no lie.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **479/479** (was 450; +29: conformance 9×2=18,
+api list block 7, server query-parse 1, SDK 3 [in-process paging + 2 injected-fetch URL-construction]).
+`npm run build` clean. **Smoke-tested the compiled `dist`**: boot gateway → SDK send 5 → page through
+3×(limit 2) → distinct full coverage, full list lean (no payload/deliveries) + `nextCursor:null`, unknown
+id still `404` — through production ESM. Integrity + local gate: exit 0. The three hash-protected files
+were not touched.
+
+**State:** GREEN → committing to main. A producer can now browse everything it has sent, paginated and
+tenant-scoped, and the HTTP layer has a reusable query/pagination rail. Next tick: the **OpenAPI** spec
+over this surface (other-language clients + docs); the **per-attempt audit log** (richer than the
+latest-state-per-endpoint view); or the single **Dockerfile** to finish P4 (blocked on validatable
+network egress here).
+
+---
+
 ## 2026-05-23 — Iteration 15: P3 — the first-class TS/JS SDK (the consumer's touchpoint)
 
 **Repo truth at start:** clean main @ `f1a7608`. Baseline re-verified before any change:

@@ -85,6 +85,15 @@ Early foundation. Implemented so far:
   (another tenant's message is `404`, never revealed), and proven end-to-end (ingest → worker delivers
   → the status flips to `succeeded`).
 
+- ✅ **Message listing** — the collection half of "what have I sent?": `GET /v1/messages` returns the
+  tenant's messages **newest-first**, **keyset-paginated** (`?limit=` + an opaque `?cursor=` fed back
+  from each page's `nextCursor`). Keyset paging stays correct as the message log grows unbounded and is
+  stable under concurrent sends — a new message lands on page one rather than shifting rows out from
+  under an in-flight scan. List rows are lightweight summaries (no payload, no per-endpoint deliveries —
+  fetch `GET /v1/messages/:id` for those). Backed by a new `MessageStore.listByApp` (both backends, one
+  conformance suite), scoped to the authenticated tenant so a listing never reveals another tenant's
+  messages.
+
 - ✅ **First-class TypeScript/JavaScript SDK** — the typed client a producer imports instead of
   hand-rolling `fetch`: `PosthornClient` covers the whole surface (send messages, manage endpoints,
   read delivery status) with mapped errors (`PosthornApiError` carries the HTTP status + machine
@@ -346,12 +355,17 @@ curl -sX POST localhost:3000/v1/messages \
 # Then check what happened to it — its per-endpoint delivery status:
 curl -s localhost:3000/v1/messages/$MESSAGE_ID -H "authorization: Bearer $SECRET"
 #   { "id": "...", "deliveries": [ { "endpointId": "...", "status": "succeeded", "attempts": 1, ... } ] }
+
+# Browse what you've sent — newest-first, paginated. Feed nextCursor back as ?cursor= for the next page:
+curl -s "localhost:3000/v1/messages?limit=50" -H "authorization: Bearer $SECRET"
+#   { "data": [ { "id": "...", "eventType": "user.created", "createdAt": 169... } ], "nextCursor": "..." }
 ```
 
 | Method | Path                | Auth   | Purpose                                |
 | ------ | ------------------- | ------ | -------------------------------------- |
 | GET    | `/healthz`          | none   | Liveness probe.                        |
 | POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
+| GET    | `/v1/messages`      | Bearer | List the tenant's messages (paginated).|
 | GET    | `/v1/messages/:id`  | Bearer | Read a message + its delivery statuses.|
 | GET    | `/v1/endpoints`     | Bearer | List the tenant's endpoints.           |
 | POST   | `/v1/endpoints`     | Bearer | Create an endpoint (`201`, secret once).|
@@ -390,6 +404,13 @@ fanout?.matched; // endpoints a delivery was enqueued for
 // Ask what happened to it — per-endpoint delivery status:
 const status = await client.getMessage(message.id);
 status.deliveries[0]?.status; // "pending" | "delivering" | "succeeded" | "dead_letter"
+
+// Browse what you've sent, newest-first. Page forward with the returned cursor:
+let page = await client.listMessages({ limit: 50 });
+page.data; // MessageRef[] (lightweight summaries — no payload/deliveries)
+while (page.nextCursor !== null) {
+  page = await client.listMessages({ limit: 50, cursor: page.nextCursor });
+}
 
 try {
   await client.getMessage("msg_does_not_exist");

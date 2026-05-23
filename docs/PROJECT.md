@@ -269,12 +269,36 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     entirely through the SDK** (send → running worker delivers → the receiver verifies with the SDK's
     own `verifyWebhook` → the SDK's `getMessage` observes `succeeded`), plus a compiled-`dist` smoke run
     of that same loop through production ESM.
+  - **Message listing — `GET /v1/messages` ✅ (this tick):** the *collection* half of the product's
+    observability promise, completing the single-message read from the prior tick. A producer can now
+    enumerate what it has sent — newest-first — rather than only fetching a message whose id it already
+    kept; this is the load-bearing surface every incumbent's dashboard is built on, and a prerequisite
+    for the eventual hosted control plane (P5). **Keyset-paginated, not offset-paginated** (`src/storage/
+    message-store.ts`): a new `MessageStore.listByApp(appId, {limit, cursor})` orders by `(createdAt,
+    id)` descending and pages on an opaque cursor encoding the last row's `(createdAt, id)` — stable
+    under concurrent inserts (a new message lands on page one, never shifting an in-flight scan) and an
+    indexed lookup as the unbounded log grows. One shared ordering rule (`compareMessagesNewestFirst` /
+    `isMessageAfterCursor`) is mirrored by the in-memory sort and the SQLite `ORDER BY … DESC` + keyset
+    predicate, so the two backends can't drift; both pass the same expanded conformance suite (9 new
+    cases × 2 backends — empty, newest-first, tenant-scoping, multi-page coverage, exact-multiple
+    termination, same-ms id tiebreak, limit cap, malformed-cursor reject). SQLite gains
+    `idx_messages_app_created (app_id, created_at, id)`, created via `IF NOT EXISTS` so an existing DB
+    needs **no migration** (a pure read optimization, like the prior tick's per-message index). The HTTP
+    layer learned to parse a **query string** (`ApiRequest.query`, filled by the `node:http` adapter) —
+    the reusable `?limit=&cursor=` rail every future list/filter route needs; the route validates
+    `?limit=` to a 400 and scopes to the authenticated tenant (a listing never reveals another tenant's
+    messages). **Lean list rows** (`messageListItemView`): id/appId/eventType/idempotencyKey/createdAt
+    only — no payload, no per-endpoint deliveries, so a page never fans out into an N+1 delivery query;
+    the detail (`GET /v1/messages/:id`) carries those. The SDK gained `client.listMessages({limit,
+    cursor})` → `{ data: MessageRef[], nextCursor }`. Proven by the expanded conformance suite, a pure
+    handler suite (auth/empty/order/paging/400s/tenant-isolation), a real-socket query-parsing test, an
+    in-process SDK paging test, and a compiled-`dist` smoke run (send 5 → page through 3× via the SDK →
+    full list lean + `nextCursor:null`).
   - **Deferred (next ticks):** an **OpenAPI** spec over this surface (the SDK now covers typed TS
-    consumers; OpenAPI would serve other-language clients + interactive docs); a **list** endpoint
-    (`GET /v1/messages`) once a `MessageStore.listByApp` exists; an admin/control-plane *HTTP* route
-    for app/key provisioning (the CLI now covers local bootstrap); a full per-attempt audit log (one
-    record per HTTP attempt with response detail — richer than the current latest-state-per-endpoint
-    view); and per-key `lastUsedAt`.
+    consumers; OpenAPI would serve other-language clients + interactive docs); an admin/control-plane
+    *HTTP* route for app/key provisioning (the CLI now covers local bootstrap); a full per-attempt audit
+    log (one record per HTTP attempt with response detail — richer than the current
+    latest-state-per-endpoint view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) — so a deployed instance can be bootstrapped

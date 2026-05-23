@@ -25,14 +25,18 @@ import {
   assertValidIdempotencyWindow,
   createMessageId,
   DEFAULT_IDEMPOTENCY_WINDOW_MS,
+  encodeMessageCursor,
   IdempotencyConflictError,
   isIdempotencyExpired,
   messageFingerprint,
   normalizeNewMessage,
+  resolveListMessagesQuery,
   resolvePendingFanoutQuery,
   type CreateMessageResult,
+  type ListMessagesOptions,
   type ListPendingFanoutOptions,
   type Message,
+  type MessagePage,
   type MessageStore,
   type NewMessage,
 } from "./message-store.js";
@@ -110,6 +114,8 @@ export class SqliteMessageStore implements MessageStore {
   readonly #countMessages: StatementSync;
   readonly #markFannedOut: StatementSync;
   readonly #listPendingFanout: StatementSync;
+  readonly #listByApp: StatementSync;
+  readonly #listByAppAfter: StatementSync;
 
   constructor(options: SqliteStoreOptions = {}) {
     const {
@@ -164,6 +170,21 @@ export class SqliteMessageStore implements MessageStore {
       "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
         " FROM messages WHERE fanned_out_at IS NULL AND created_at <= ?" +
         " ORDER BY created_at ASC, id ASC LIMIT ?",
+    );
+    // Newest-first page of a tenant's messages (first page). The DESC scan rides
+    // idx_messages_app_created backwards; ORDER BY mirrors compareMessagesNewestFirst.
+    this.#listByApp = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ?" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    // Subsequent pages: the keyset predicate mirrors isMessageAfterCursor — every
+    // row strictly older than the cursor's (created_at, id).
+    this.#listByAppAfter = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ?" +
+        " AND (created_at < ? OR (created_at = ? AND id < ?))" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
   }
 
@@ -329,6 +350,33 @@ export class SqliteMessageStore implements MessageStore {
     return rows.map(rowToMessage);
   }
 
+  async listByApp(
+    appId: string,
+    options?: ListMessagesOptions,
+  ): Promise<MessagePage> {
+    const { limit, cursor } = resolveListMessagesQuery(options);
+    // Fetch one extra row: its presence is exactly the signal that a further page
+    // exists, without a second COUNT query.
+    const fetchLimit = limit + 1;
+    const rows = (
+      cursor === null
+        ? this.#listByApp.all(appId, fetchLimit)
+        : this.#listByAppAfter.all(
+            appId,
+            cursor.createdAt,
+            cursor.createdAt,
+            cursor.id,
+            fetchLimit,
+          )
+    ) as unknown as MessageRow[];
+    const hasMore = rows.length > limit;
+    const messages = (hasMore ? rows.slice(0, limit) : rows).map(rowToMessage);
+    const last = messages[messages.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeMessageCursor(last) : null;
+    return { messages, nextCursor };
+  }
+
   /** Close the underlying database handle. Idempotent-safe to call once. */
   close(): void {
     this.#db.close();
@@ -376,8 +424,15 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
  * `fanned_out_at` column is guaranteed to exist. A **partial** index over only
  * the unfanned rows keeps `listPendingFanout` (and the outbox sweep) an indexed
  * lookup over a near-empty set, even though `messages` itself grows unbounded.
+ * `idx_messages_app_created` covers the keyset {@link SqliteMessageStore.listByApp}
+ * scan — `(app_id, created_at, id)`, walked backwards for newest-first paging. Both
+ * use `IF NOT EXISTS`, so a database from an earlier build gains them on next open
+ * with no migration (they are pure read optimizations over existing rows).
  */
 const INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_messages_pending_fanout
   ON messages (created_at, id) WHERE fanned_out_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_messages_app_created
+  ON messages (app_id, created_at, id);
 `;

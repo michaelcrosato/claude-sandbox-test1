@@ -167,6 +167,29 @@ export interface DeliveryView {
   readonly updatedAt: number;
 }
 
+/** Options for {@link PosthornClient.listMessages}. */
+export interface ListMessagesParams {
+  /** Page size, 1..200. Defaults to the gateway's default (50). */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link MessageListPage.nextCursor}; omit
+   * (or `null`) for the first page.
+   */
+  readonly cursor?: string | null;
+}
+
+/**
+ * One page of {@link PosthornClient.listMessages}: a newest-first slice of the
+ * tenant's messages (each a lightweight {@link MessageRef} — no payload or
+ * deliveries; fetch {@link PosthornClient.getMessage} for those) plus the cursor
+ * to fetch the next page.
+ */
+export interface MessageListPage {
+  readonly data: readonly MessageRef[];
+  /** Pass back as {@link ListMessagesParams.cursor}; `null` on the last page. */
+  readonly nextCursor: string | null;
+}
+
 /** A message plus its per-endpoint delivery statuses ({@link PosthornClient.getMessage}). */
 export interface MessageWithDeliveries {
   readonly id: string;
@@ -275,6 +298,27 @@ export class PosthornClient {
       body["idempotencyKey"] = input.idempotencyKey;
     }
     return this.#request<SendMessageResult>("POST", "/v1/messages", body);
+  }
+
+  /**
+   * List the tenant's messages, newest-first — `GET /v1/messages`. Keyset-paginated:
+   * pass the returned {@link MessageListPage.nextCursor} back as
+   * {@link ListMessagesParams.cursor} to fetch the next page (it is `null` on the
+   * last page).
+   */
+  async listMessages(params: ListMessagesParams = {}): Promise<MessageListPage> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) {
+      query.set("limit", String(params.limit));
+    }
+    if (params.cursor !== undefined && params.cursor !== null) {
+      query.set("cursor", params.cursor);
+    }
+    const qs = query.toString();
+    return this.#request<MessageListPage>(
+      "GET",
+      `/v1/messages${qs.length > 0 ? `?${qs}` : ""}`,
+    );
   }
 
   /** Read a message and its per-endpoint delivery statuses — `GET /v1/messages/:id`. */

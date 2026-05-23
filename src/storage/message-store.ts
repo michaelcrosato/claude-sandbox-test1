@@ -144,6 +144,24 @@ export interface MessageStore {
    * the message here to be recovered, rather than silently undelivered.
    */
   listPendingFanout(options?: ListPendingFanoutOptions): Promise<Message[]>;
+  /**
+   * List a tenant's messages, **newest-first** (by `createdAt`, then `id` as a
+   * stable tiebreak), one page at a time. This is the read side of the producer's
+   * "what have I sent?" question — the collection view that complements the
+   * single-message {@link get} read.
+   *
+   * Keyset-paginated, not offset-paginated: pass the previous page's
+   * {@link MessagePage.nextCursor} back as {@link ListMessagesOptions.cursor} to
+   * fetch the next page, which is `null` once the last page is reached. Keyset
+   * paging is stable under concurrent inserts — a message accepted mid-pagination
+   * appears on page one and never shifts rows out from under an in-flight scan, the
+   * classic offset-pagination bug — and stays an indexed lookup as the (unbounded)
+   * message log grows.
+   *
+   * Scoped to `appId`: never returns, or reveals the existence of, another
+   * tenant's messages.
+   */
+  listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage>;
 }
 
 /**
@@ -276,4 +294,137 @@ export function resolvePendingFanoutQuery(
     limit,
     createdAtOrBefore: options.createdAtOrBefore ?? Number.POSITIVE_INFINITY,
   };
+}
+
+/** Default page size for {@link MessageStore.listByApp}. */
+export const DEFAULT_LIST_MESSAGES_LIMIT = 50;
+
+/**
+ * Largest page {@link MessageStore.listByApp} will return in one call. A caller
+ * asking for more is a {@link RangeError}, so the server can never be coerced into
+ * materializing an unbounded page.
+ */
+export const MAX_LIST_MESSAGES_LIMIT = 200;
+
+/** Options for {@link MessageStore.listByApp}. */
+export interface ListMessagesOptions {
+  /**
+   * Page size, an integer in `[1, {@link MAX_LIST_MESSAGES_LIMIT}]`. Defaults to
+   * {@link DEFAULT_LIST_MESSAGES_LIMIT}.
+   */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link MessagePage.nextCursor}. Omit (or
+   * `null`) for the first page. A malformed cursor throws {@link TypeError}.
+   */
+  readonly cursor?: string | null;
+}
+
+/** One page of {@link MessageStore.listByApp}, newest-first, plus the next cursor. */
+export interface MessagePage {
+  /** This page's messages, newest-first. */
+  readonly messages: Message[];
+  /** Opaque cursor for the following page, or `null` when this is the last page. */
+  readonly nextCursor: string | null;
+}
+
+/** A decoded keyset cursor — the `(createdAt, id)` of the last message on a page. */
+export interface MessageCursor {
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/**
+ * Encode a keyset cursor that points just *after* `message` in newest-first
+ * order. Opaque, URL-safe (base64url), and paired with
+ * {@link decodeMessageCursor}; clients should treat it as a black box.
+ */
+export function encodeMessageCursor(message: {
+  readonly createdAt: number;
+  readonly id: string;
+}): string {
+  return Buffer.from(`${message.createdAt}:${message.id}`, "utf8").toString(
+    "base64url",
+  );
+}
+
+/**
+ * Decode a cursor produced by {@link encodeMessageCursor}, throwing
+ * {@link TypeError} on any malformed token (so the HTTP layer renders a 400, not a
+ * 500). The `createdAt` prefix is all digits and ids never contain a `:`, so the
+ * first colon splits the two unambiguously.
+ */
+export function decodeMessageCursor(cursor: string): MessageCursor {
+  if (typeof cursor !== "string" || cursor.length === 0) {
+    throw new TypeError("cursor must be a non-empty string");
+  }
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const sep = decoded.indexOf(":");
+  if (sep <= 0) {
+    throw new TypeError("malformed cursor");
+  }
+  const createdAt = Number(decoded.slice(0, sep));
+  const id = decoded.slice(sep + 1);
+  if (!Number.isInteger(createdAt) || createdAt < 0 || id.length === 0) {
+    throw new TypeError("malformed cursor");
+  }
+  return { createdAt, id };
+}
+
+/**
+ * Resolve {@link ListMessagesOptions} into a concrete `(limit, cursor)`, shared by
+ * every backend so they page identically. `limit` defaults to
+ * {@link DEFAULT_LIST_MESSAGES_LIMIT} and must be an integer in
+ * `[1, {@link MAX_LIST_MESSAGES_LIMIT}]` (RangeError otherwise); a malformed
+ * `cursor` throws TypeError via {@link decodeMessageCursor}.
+ */
+export function resolveListMessagesQuery(
+  options: ListMessagesOptions = {},
+): { limit: number; cursor: MessageCursor | null } {
+  const limit = options.limit ?? DEFAULT_LIST_MESSAGES_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_MESSAGES_LIMIT) {
+    throw new RangeError(
+      `limit must be an integer in [1, ${MAX_LIST_MESSAGES_LIMIT}]`,
+    );
+  }
+  const cursor =
+    options.cursor === undefined || options.cursor === null
+      ? null
+      : decodeMessageCursor(options.cursor);
+  return { limit, cursor };
+}
+
+/**
+ * Order two messages **newest-first**: `createdAt` descending, then `id`
+ * descending as a stable tiebreak. The single textual definition of the
+ * {@link MessageStore.listByApp} ordering — the SQLite backend mirrors it as
+ * `ORDER BY created_at DESC, id DESC` and the in-memory backend sorts by this
+ * comparator, so the two cannot drift. (Ids are ASCII, so JS string order matches
+ * SQLite's default BINARY collation.)
+ */
+export function compareMessagesNewestFirst(
+  a: { readonly createdAt: number; readonly id: string },
+  b: { readonly createdAt: number; readonly id: string },
+): number {
+  if (a.createdAt !== b.createdAt) {
+    return b.createdAt - a.createdAt;
+  }
+  if (a.id < b.id) return 1;
+  if (a.id > b.id) return -1;
+  return 0;
+}
+
+/**
+ * Whether `message` falls strictly *after* `cursor` in newest-first order — i.e.
+ * belongs on a later page. Mirrors the SQLite keyset predicate
+ * `created_at < ? OR (created_at = ? AND id < ?)`.
+ */
+export function isMessageAfterCursor(
+  message: { readonly createdAt: number; readonly id: string },
+  cursor: MessageCursor,
+): boolean {
+  return (
+    message.createdAt < cursor.createdAt ||
+    (message.createdAt === cursor.createdAt && message.id < cursor.id)
+  );
 }

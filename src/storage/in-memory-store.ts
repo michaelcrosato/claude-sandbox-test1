@@ -13,16 +13,22 @@
 
 import {
   assertValidIdempotencyWindow,
+  compareMessagesNewestFirst,
   createMessageId,
   DEFAULT_IDEMPOTENCY_WINDOW_MS,
+  encodeMessageCursor,
   IdempotencyConflictError,
   isIdempotencyExpired,
+  isMessageAfterCursor,
   messageFingerprint,
   normalizeNewMessage,
+  resolveListMessagesQuery,
   resolvePendingFanoutQuery,
   type CreateMessageResult,
+  type ListMessagesOptions,
   type ListPendingFanoutOptions,
   type Message,
+  type MessagePage,
   type MessageStore,
   type NewMessage,
 } from "./message-store.js";
@@ -168,6 +174,30 @@ export class InMemoryMessageStore implements MessageStore {
       }
     }
     return pending;
+  }
+
+  async listByApp(
+    appId: string,
+    options?: ListMessagesOptions,
+  ): Promise<MessagePage> {
+    const { limit, cursor } = resolveListMessagesQuery(options);
+    // Sort by the shared newest-first comparator (not insertion order) so this
+    // matches the SQLite backend exactly, including the id tiebreak when several
+    // messages share a createdAt. #messages is never pruned, so this is total.
+    const ordered = [...this.#messages.values()]
+      .filter((m) => m.appId === appId)
+      .sort(compareMessagesNewestFirst);
+    const after =
+      cursor === null
+        ? ordered
+        : ordered.filter((m) => isMessageAfterCursor(m, cursor));
+    // One extra beyond `limit` would remain ⇒ there is a further page.
+    const hasMore = after.length > limit;
+    const messages = after.slice(0, limit);
+    const last = messages[messages.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeMessageCursor(last) : null;
+    return { messages, nextCursor };
   }
 
   async getByIdempotencyKey(

@@ -16,6 +16,7 @@
  * | ------ | -------------------- | ------ | ---------------------------------------- |
  * | GET    | /healthz             | none   | Liveness probe.                          |
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
+ * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
  * | GET    | /v1/endpoints        | Bearer | List the tenant's endpoints.             |
  * | POST   | /v1/endpoints        | Bearer | Create an endpoint (201, secret once).   |
@@ -44,6 +45,8 @@
 
 import {
   IdempotencyConflictError,
+  MAX_LIST_MESSAGES_LIMIT,
+  type ListMessagesOptions,
   type Message,
   type MessageStore,
   type NewMessage,
@@ -85,9 +88,15 @@ export interface ApiDeps {
  */
 export interface ApiRequest {
   readonly method: string;
-  /** The URL pathname only — no query string. */
+  /** The URL pathname only — no query string (that is parsed into {@link query}). */
   readonly path: string;
   readonly headers: Readonly<Record<string, string | undefined>>;
+  /**
+   * Parsed query-string parameters, keys as written. The `server.ts` adapter
+   * builds this from the request URL; for a repeated key the first value wins.
+   * Empty when there is no query string.
+   */
+  readonly query: Readonly<Record<string, string | undefined>>;
   readonly rawBody: string;
 }
 
@@ -194,6 +203,36 @@ function requireParam(params: RouteParams, name: string): string {
 }
 
 /**
+ * Parse the `?limit=&cursor=` query of the message-list route into store options.
+ * A present-but-invalid `limit` (non-integer or outside `[1, MAX]`) is a client
+ * error → `400`; the cursor is passed through opaquely (the store validates its
+ * shape, surfacing a malformed one as a `TypeError` → `400`). An absent param is
+ * simply omitted so the store applies its own default.
+ */
+function parseListMessagesParams(
+  query: Readonly<Record<string, string | undefined>>,
+): ListMessagesOptions {
+  const options: { limit?: number; cursor?: string } = {};
+  const rawLimit = query["limit"];
+  if (rawLimit !== undefined) {
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_MESSAGES_LIMIT) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `limit must be an integer in [1, ${MAX_LIST_MESSAGES_LIMIT}]`,
+      );
+    }
+    options.limit = limit;
+  }
+  const rawCursor = query["cursor"];
+  if (rawCursor !== undefined && rawCursor.length > 0) {
+    options.cursor = rawCursor;
+  }
+  return options;
+}
+
+/**
  * The non-secret view of an endpoint returned by list/get/update. Crucially omits
  * `secret` — the signing secret is write-only over HTTP (see the module docstring).
  */
@@ -228,6 +267,22 @@ function deliveryView(task: DeliveryTask): Record<string, unknown> {
     lastError: task.lastError,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+  };
+}
+
+/**
+ * The summary view of a message in a list/index response. Deliberately lighter
+ * than {@link messageView}: it omits the (potentially large) `payload` and the
+ * per-endpoint `deliveries` — listing a page of messages should not fan out into
+ * a delivery query per row. Fetch `GET /v1/messages/:id` for the full detail.
+ */
+function messageListItemView(message: Message): Record<string, unknown> {
+  return {
+    id: message.id,
+    appId: message.appId,
+    eventType: message.eventType,
+    idempotencyKey: message.idempotencyKey,
+    createdAt: message.createdAt,
   };
 }
 
@@ -335,6 +390,20 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const listMessages: AuthedHandler = async (ctx) => {
+    const page = await deps.messages.listByApp(
+      ctx.app.id,
+      parseListMessagesParams(ctx.req.query),
+    );
+    // `data` mirrors the endpoint-list shape; `nextCursor` (opaque, or null on the
+    // last page) is fed back as `?cursor=` to page forward. Tenancy is the key's,
+    // so a caller only ever pages its own messages.
+    return json(200, {
+      data: page.messages.map(messageListItemView),
+      nextCursor: page.nextCursor,
+    });
+  };
+
   const getMessage: AuthedHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     const message = await deps.messages.get(id);
@@ -406,6 +475,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
   const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>([
     { method: "GET", pattern: "/healthz", handler: health },
     { method: "POST", pattern: "/v1/messages", handler: authed(createMessage) },
+    { method: "GET", pattern: "/v1/messages", handler: authed(listMessages) },
     { method: "GET", pattern: "/v1/messages/:id", handler: authed(getMessage) },
     { method: "GET", pattern: "/v1/endpoints", handler: authed(listEndpoints) },
     { method: "POST", pattern: "/v1/endpoints", handler: authed(createEndpoint) },

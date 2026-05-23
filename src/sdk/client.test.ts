@@ -258,6 +258,32 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect((err as PosthornApiError).status).toBe(404);
   });
 
+  it("lists messages newest-first and pages through with the cursor", async () => {
+    const { client } = await startServer();
+    const refs: { id: string; createdAt: number }[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const sent = await client.sendMessage({ eventType: "e", payload: { i } });
+      refs.push({ id: sent.message.id, createdAt: sent.message.createdAt });
+    }
+    const expected = [...refs]
+      .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      .map((m) => m.id);
+
+    const all = await client.listMessages();
+    expect(all.data.map((m) => m.id)).toEqual(expected);
+    expect(all.nextCursor).toBeNull();
+    // A list item is a lightweight ref — no payload or deliveries on it.
+    expect(all.data[0]).not.toHaveProperty("payload");
+    expect(all.data[0]).not.toHaveProperty("deliveries");
+
+    const first = await client.listMessages({ limit: 2 });
+    expect(first.data.map((m) => m.id)).toEqual(expected.slice(0, 2));
+    expect(first.nextCursor).not.toBeNull();
+    const second = await client.listMessages({ limit: 2, cursor: first.nextCursor });
+    expect(second.data.map((m) => m.id)).toEqual(expected.slice(2));
+    expect(second.nextCursor).toBeNull();
+  });
+
   it("tolerates a trailing slash in baseUrl", async () => {
     const { base, apiKey } = await startServer();
     const client = new PosthornClient({ baseUrl: `${base}///`, apiKey });
@@ -336,6 +362,32 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(err).toBeInstanceOf(PosthornError);
     expect(err).not.toBeInstanceOf(PosthornTimeoutError);
     expect((err as PosthornError).cause).toBe(boom);
+  });
+
+  it("builds the list query string from limit + cursor (url-encoded)", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages({ limit: 2, cursor: "c2=" });
+    expect(seenUrl).toContain("/v1/messages?");
+    expect(seenUrl).toContain("limit=2");
+    expect(seenUrl).toContain("cursor=c2%3D"); // '=' is percent-encoded
+  });
+
+  it("omits the query string when listMessages gets no params", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages();
+    expect(seenUrl.endsWith("/v1/messages")).toBe(true);
   });
 
   it("raises PosthornTimeoutError when a request exceeds the timeout", async () => {

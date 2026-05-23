@@ -98,4 +98,40 @@ describe("createHttpServer (node:http adapter)", () => {
     });
     expect(res.status).toBe(413);
   });
+
+  it("parses the query string so list pagination works over a real socket", async () => {
+    const { base, secret } = await startServer();
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${secret}`,
+    };
+    for (let i = 0; i < 2; i += 1) {
+      await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ eventType: "e", payload: { i } }),
+      });
+    }
+
+    const first = await fetch(`${base}/v1/messages?limit=1`, { headers });
+    expect(first.status).toBe(200);
+    const page1 = (await first.json()) as {
+      data: { id: string }[];
+      nextCursor: string | null;
+    };
+    expect(page1.data).toHaveLength(1); // ?limit=1 reached the handler
+    expect(page1.nextCursor).not.toBeNull();
+
+    const second = await fetch(
+      `${base}/v1/messages?limit=1&cursor=${encodeURIComponent(page1.nextCursor!)}`,
+      { headers },
+    );
+    const page2 = (await second.json()) as { data: { id: string }[] };
+    expect(page2.data).toHaveLength(1);
+    expect(page2.data[0]!.id).not.toBe(page1.data[0]!.id); // distinct page
+
+    // A bad ?limit= surfaces as a 400 through the adapter.
+    const bad = await fetch(`${base}/v1/messages?limit=999`, { headers });
+    expect(bad.status).toBe(400);
+  });
 });

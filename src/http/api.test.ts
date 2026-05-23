@@ -31,7 +31,7 @@ async function setup(): Promise<Fixture> {
 
 /** Build a request, defaulting the unset fields. */
 function request(partial: Partial<ApiRequest>): ApiRequest {
-  return { method: "GET", path: "/", headers: {}, rawBody: "", ...partial };
+  return { method: "GET", path: "/", headers: {}, query: {}, rawBody: "", ...partial };
 }
 
 /** Build an authenticated JSON request. */
@@ -622,6 +622,132 @@ describe("createApi — GET /v1/messages/:id (delivery status)", () => {
     );
     expect(bRead.status).toBe(200);
     expect(body(bRead).id).toBe(bMessageId);
+  });
+});
+
+describe("createApi — GET /v1/messages (list)", () => {
+  /** Send `n` messages and return their refs ({ id, createdAt }) in send order. */
+  async function send(
+    api: ApiHandler,
+    secret: string,
+    n: number,
+  ): Promise<{ id: string; createdAt: number }[]> {
+    const refs: { id: string; createdAt: number }[] = [];
+    for (let i = 0; i < n; i += 1) {
+      const res = await api(
+        jsonRequest("POST", "/v1/messages", { eventType: "e", payload: { i } }, secret),
+      );
+      refs.push({ id: body(res).message.id, createdAt: body(res).message.createdAt });
+    }
+    return refs;
+  }
+
+  /** Newest-first id order by the store's rule (createdAt desc, then id desc). */
+  function expectedOrder(refs: { id: string; createdAt: number }[]): string[] {
+    return [...refs]
+      .sort((a, b) =>
+        b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      )
+      .map((m) => m.id);
+  }
+
+  function authedGet(
+    api: ApiHandler,
+    secret: string,
+    query: Record<string, string> = {},
+  ): Promise<ApiResponse> {
+    return api(
+      request({
+        method: "GET",
+        path: "/v1/messages",
+        query,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+  }
+
+  it("rejects an unauthenticated list with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/messages" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns an empty page when the tenant has no messages", async () => {
+    const { api, secret } = await setup();
+    const res = await authedGet(api, secret);
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ data: [], nextCursor: null });
+  });
+
+  it("lists the tenant's messages newest-first as lightweight summaries", async () => {
+    const { api, secret } = await setup();
+    const refs = await send(api, secret, 3);
+    const res = await authedGet(api, secret);
+    expect(res.status).toBe(200);
+    expect(body(res).data.map((m: any) => m.id)).toEqual(expectedOrder(refs));
+    expect(body(res).nextCursor).toBeNull();
+    // A list item is a summary: no payload, no per-endpoint deliveries.
+    const item = body(res).data[0];
+    expect(item).toHaveProperty("eventType", "e");
+    expect(item).toHaveProperty("createdAt");
+    expect(item).not.toHaveProperty("payload");
+    expect(item).not.toHaveProperty("deliveries");
+  });
+
+  it("pages through with limit + cursor, covering every message once", async () => {
+    const { api, secret } = await setup();
+    const refs = await send(api, secret, 5);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const res = await authedGet(
+        api,
+        secret,
+        cursor !== undefined ? { limit: "2", cursor } : { limit: "2" },
+      );
+      expect(res.status).toBe(200);
+      seen.push(...body(res).data.map((m: any) => m.id));
+      cursor = body(res).nextCursor ?? undefined;
+      pages += 1;
+      expect(pages).toBeLessThanOrEqual(5);
+    } while (cursor !== undefined);
+
+    expect(pages).toBe(3);
+    expect(seen).toEqual(expectedOrder(refs));
+  });
+
+  it("rejects an invalid ?limit= with 400", async () => {
+    const { api, secret } = await setup();
+    for (const limit of ["0", "-1", "abc", "1.5", "201"]) {
+      const res = await authedGet(api, secret, { limit });
+      expect(res.status).toBe(400);
+      expect(body(res).error.code).toBe("invalid_request");
+    }
+  });
+
+  it("rejects a malformed ?cursor= with 400", async () => {
+    const { api, secret } = await setup();
+    const res = await authedGet(api, secret, { cursor: "not-a-cursor!!" });
+    expect(res.status).toBe(400);
+  });
+
+  it("never lists another tenant's messages", async () => {
+    const { api, apps } = await setup();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+
+    const aRefs = await send(api, aKey, 2);
+    await send(api, bKey, 3);
+
+    const aList = await authedGet(api, aKey);
+    expect(aList.status).toBe(200);
+    expect(body(aList).data.map((m: any) => m.id).sort()).toEqual(
+      aRefs.map((r) => r.id).sort(),
+    );
   });
 });
 

@@ -88,6 +88,17 @@ function normalizeHeaders(
   return out;
 }
 
+/** Flatten a URL's query string to a single value per key (first wins for repeats). */
+function normalizeQuery(params: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of params) {
+    if (!(key in out)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 /** Write an {@link ApiResponse} (and any extra `close` headers) to the socket. */
 function writeResponse(
   res: ServerResponse,
@@ -152,6 +163,7 @@ async function serve(
       method: req.method ?? "GET",
       path: url.pathname,
       headers: normalizeHeaders(req.headers),
+      query: normalizeQuery(url.searchParams),
       rawBody,
     });
   } catch {
