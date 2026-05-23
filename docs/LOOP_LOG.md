@@ -4,6 +4,78 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 15: P3 — the first-class TS/JS SDK (the consumer's touchpoint)
+
+**Repo truth at start:** clean main @ `f1a7608`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **420/420**, `npm run build` clean, integrity + local gate both exit 0.
+Node 24 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands; repo is far past the
+GOAL's "decide a project" stage. Verified a *product* fact before choosing: iter 14's `GET
+/v1/messages/:id` is reachable — `POST /v1/messages` does return `message.id` in its 202 (`api.ts`
+:319), so the read API is not stranded. The glaring gap after iter 14: the server surface is
+feature-complete and observable, but there was **no client SDK** — a consumer had to hand-roll
+`fetch`, header construction, error parsing, *and* the receiver-side signature verification. Yet
+"first-class TS/JS SDK" is the named DX differentiator in PROJECT.md's wedge table and the #1
+deferred item.
+
+**High-leverage move chosen:** Build the **TypeScript/JavaScript SDK** (`src/sdk/`). Highest-leverage
+(checklist #3) because it is the *consumer's entire touchpoint* (send → observe → verify received
+webhooks) — the move that most advances adoption / "beyond-market DX," the product's stated goal.
+Chosen over the **Dockerfile** (a `docker build` pulls a base image needing network egress this
+sandbox blocks → it cannot be *validated* green, violating "Force Absolute Validation"; iter 14
+already judged it "convenience over an already-runnable process") and over the **per-attempt audit
+log / `GET /v1/messages` list** (incremental observability over what iter 14 already made gating; the
+SDK is the higher consumer-value unit). Exactly the loop's strongest regime: fully deterministic,
+in-process testable against the real server on an ephemeral port, **zero new runtime dependencies**
+(platform `fetch` + the existing verifier), preserving the zero-dep wedge.
+
+**Built this tick (`src/sdk/`):**
+- **`client.ts` — `PosthornClient`.** A typed wrapper over the whole v1 surface
+  (`health`/`sendMessage`/`getMessage`/`listEndpoints`/`createEndpoint`/`getEndpoint`/`updateEndpoint`/
+  `deleteEndpoint`). Errors are mapped: a non-2xx → **`PosthornApiError`** (carries HTTP `status` + the
+  `{error:{code,message}}` envelope's machine `code`, falling back to `http_<status>` for a non-envelope
+  body), a transport failure → **`PosthornError`** (with `cause`), a request past `timeoutMs` →
+  **`PosthornTimeoutError`** (via an internal `AbortController`; default 30s, `0` disables). `fetch` is
+  injectable (the `PosthornFetch` structural subset the platform global satisfies) so error/timeout/
+  parse paths are unit-testable with no socket. The wire types are **SDK-owned views**, not the server's
+  domain types, because the HTTP surface returns reduced shapes (endpoint `secret` write-only; delivery
+  `leaseToken` never exposed) — the SDK models exactly what crosses the wire.
+- **`verify.ts` — the receiver half.** `verifyWebhook(secret, headers, rawBody, opts?)` and the
+  non-throwing `isValidWebhook(...)` extract the three Standard Webhooks headers from a raw header bag
+  (case-insensitive, collapsing node's array-valued headers) and delegate to the library `verify` — no
+  crypto duplicated, so SDK and core can't drift. Docstring hammers the one footgun: verify the **raw
+  bytes as received**, before any JSON round-trip.
+- Re-exported the whole SDK surface from `src/index.ts` (client + types + the three error classes +
+  `verifyWebhook`/`isValidWebhook`/`IncomingHeaders`). README gained a status bullet + a "Quickstart (TS
+  SDK)" (send + receive); PROJECT.md P3 gained the SDK bullet and the deferred list dropped "TS SDK".
+
+**Key decisions (honest tradeoffs):**
+- **`getMessage().payload` is the raw signed JSON *string*, not a parsed value.** It is the exact bytes
+  delivered/signed; the SDK surfaces it losslessly and documents `JSON.parse` to recover the value.
+  Parsing for the caller would hide what was actually on the wire.
+- **SDK-owned wire types over re-exporting domain types.** Slightly more type code, but it can't lie
+  about secret/leaseToken being absent from reads, and it decouples the SDK from internal store shapes.
+- **OpenAPI deferred (not bundled).** The SDK serves typed TS consumers now; an OpenAPI spec (other-
+  language clients + interactive docs) is a distinct, larger artifact and a separate tick. Logged.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **450/450** (was 420; +30: verify 10
+[authentic/tampered/wrong-secret/missing-header/case-insensitive/array-valued/replay-window +
+isValid×3], client 20 [in-process CRUD + send + status-read + idempotency + secret-never-leaked +
+401/404 mapping + trailing-slash + 3 construction guards + injected-fetch envelope/`http_<status>`/204/
+parse-error/transport-error/timeout + a full **end-to-end driven entirely through the SDK**: send →
+running worker delivers → receiver verifies with the SDK's own `verifyWebhook` → `getMessage` observes
+`succeeded`]). `npm run build` clean. **Smoke-tested the compiled `dist`**: the same full SDK loop
+(health → create [secret once, never leaked on get] → send → deliver → `verifyWebhook` passes, tampered
+rejected → poll `getMessage` to `succeeded` → idempotency dedup → unknown-id `404` PosthornApiError)
+through production ESM incl. the `node:sqlite` `createRequire` path. Integrity + local gate: exit 0.
+The three hash-protected files were not touched.
+
+**State:** GREEN → committing to main. A consumer's whole integration — send, observe, and verify
+received webhooks — is now one typed, zero-dependency import. Next tick: the **OpenAPI** spec (other-
+language clients + docs) over this surface; the single **Dockerfile** to finish P4 packaging; or a
+per-attempt audit log + `GET /v1/messages` list for richer observability.
+
+---
+
 ## 2026-05-23 — Iteration 14: P3 — delivery-status read API (the "observable" promise made real)
 
 **Repo truth at start:** clean main @ `24400c4`. Baseline re-verified before any change:

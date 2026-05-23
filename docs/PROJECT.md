@@ -249,11 +249,32 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     to the endpoint routes. Internal queue plumbing (`leaseToken`) is omitted from the view. Proven by
     a deterministic unit path (ingest → `worker.processOnce` → status flips `pending`→`succeeded`), a
     real-socket gateway end-to-end, and a compiled-`dist` SQLite smoke run.
-  - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface (now including the
-    status read); a **list** endpoint (`GET /v1/messages`) once a `MessageStore.listByApp` exists;
-    an admin/control-plane *HTTP* route for app/key provisioning (the CLI now covers local bootstrap);
-    a full per-attempt audit log (one record per HTTP attempt with response detail — richer than the
-    current latest-state-per-endpoint view); and per-key `lastUsedAt`.
+  - **TypeScript/JavaScript SDK ✅ (this tick):** the headline DX differentiator from the wedge —
+    `src/sdk/`. A *consumer* now imports a typed client instead of hand-rolling `fetch`, header
+    construction, and error parsing. `PosthornClient({ baseUrl, apiKey })` covers the full v1 surface
+    (`health`/`sendMessage`/`getMessage`/`listEndpoints`/`createEndpoint`/`getEndpoint`/
+    `updateEndpoint`/`deleteEndpoint`); a non-2xx becomes a `PosthornApiError` carrying the HTTP
+    `status` + the envelope's machine `code` (falling back to `http_<status>`), a transport failure a
+    `PosthornError`, and a request past `timeoutMs` a `PosthornTimeoutError` (via an `AbortController`).
+    The wire types are **SDK-owned views**, not the server's domain types, because the HTTP surface
+    returns deliberately reduced shapes (an endpoint's `secret` is write-only; a delivery's internal
+    `leaseToken` is never exposed) — the SDK models exactly what crosses the wire. **Zero runtime
+    dependencies:** it speaks over the platform `fetch`, injectable for tests/exotic runtimes. It also
+    ships the **receiver** half so a consumer's whole integration is one import: `verifyWebhook(secret,
+    headers, rawBody)` / `isValidWebhook(...)` (`src/sdk/verify.ts`) extract the three Standard Webhooks
+    headers from a raw header bag (case-insensitive, array-tolerant) and delegate to the proven library
+    `verify` — no crypto duplicated, so the two can't drift. Proven by a pure receiver-verify suite, an
+    in-process client suite against the real `node:http` server (CRUD, idempotency, secret-never-leaked,
+    401/404 mapping, injected-fetch error/timeout/parse paths), and a **full end-to-end test driven
+    entirely through the SDK** (send → running worker delivers → the receiver verifies with the SDK's
+    own `verifyWebhook` → the SDK's `getMessage` observes `succeeded`), plus a compiled-`dist` smoke run
+    of that same loop through production ESM.
+  - **Deferred (next ticks):** an **OpenAPI** spec over this surface (the SDK now covers typed TS
+    consumers; OpenAPI would serve other-language clients + interactive docs); a **list** endpoint
+    (`GET /v1/messages`) once a `MessageStore.listByApp` exists; an admin/control-plane *HTTP* route
+    for app/key provisioning (the CLI now covers local bootstrap); a full per-attempt audit log (one
+    record per HTTP attempt with response detail — richer than the current latest-state-per-endpoint
+    view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) — so a deployed instance can be bootstrapped

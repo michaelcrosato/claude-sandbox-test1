@@ -231,3 +231,31 @@ export {
   ADMIN_USAGE,
   type AdminDeps,
 } from "./runtime/admin.js";
+
+export {
+  PosthornClient,
+  PosthornError,
+  PosthornApiError,
+  PosthornTimeoutError,
+  DEFAULT_TIMEOUT_MS,
+  type PosthornClientOptions,
+  type PosthornFetch,
+  type PosthornRequestInit,
+  type PosthornResponse,
+  type SendMessageInput,
+  type SendMessageResult,
+  type MessageRef,
+  type FanoutSummary,
+  type MessageWithDeliveries,
+  type DeliveryView,
+  type EndpointView,
+  type CreatedEndpoint,
+  type CreateEndpointInput,
+  type UpdateEndpointInput,
+} from "./sdk/client.js";
+
+export {
+  verifyWebhook,
+  isValidWebhook,
+  type IncomingHeaders,
+} from "./sdk/verify.js";

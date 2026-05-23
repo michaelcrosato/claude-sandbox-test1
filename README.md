@@ -85,6 +85,14 @@ Early foundation. Implemented so far:
   (another tenant's message is `404`, never revealed), and proven end-to-end (ingest → worker delivers
   → the status flips to `succeeded`).
 
+- ✅ **First-class TypeScript/JavaScript SDK** — the typed client a producer imports instead of
+  hand-rolling `fetch`: `PosthornClient` covers the whole surface (send messages, manage endpoints,
+  read delivery status) with mapped errors (`PosthornApiError` carries the HTTP status + machine
+  code) and a configurable per-request timeout — over the platform `fetch`, **zero dependencies**.
+  It ships the matching **receiver-side** helper too: `verifyWebhook(secret, headers, rawBody)` pulls
+  the Standard Webhooks headers out of a raw HTTP header bag (case-insensitive) and verifies the
+  signature, so a consumer's whole integration — send and receive — is one import.
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)
@@ -350,6 +358,60 @@ curl -s localhost:3000/v1/messages/$MESSAGE_ID -H "authorization: Bearer $SECRET
 | GET    | `/v1/endpoints/:id` | Bearer | Fetch one endpoint.                    |
 | PATCH  | `/v1/endpoints/:id` | Bearer | Update an endpoint.                    |
 | DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`).            |
+
+## Quickstart (TypeScript SDK)
+
+The typed alternative to the `curl` calls above. Construct one `PosthornClient` with your gateway
+URL + API key, then send, manage endpoints, and read delivery status — no `fetch` plumbing, no
+hand-built headers. Errors arrive as `PosthornApiError` (with the HTTP `status` and machine `code`).
+
+```ts
+import { PosthornClient, PosthornApiError } from "posthorn";
+
+const client = new PosthornClient({
+  baseUrl: "https://posthorn.acme.example",
+  apiKey: process.env.POSTHORN_API_KEY!, // a "phk_..." key from `posthorn admin create-key`
+});
+
+// Register a destination. The signing `secret` is returned ONCE — store it now.
+const endpoint = await client.createEndpoint({
+  url: "https://acme.example/hook",
+  eventTypes: ["user.created"], // omit/null = all events
+});
+
+// Send an event (accepted + fanned out):
+const { message, fanout } = await client.sendMessage({
+  eventType: "user.created",
+  payload: { id: 42 },          // any JSON value
+  idempotencyKey: "req_abc123", // optional; a retry won't double-send
+});
+fanout?.matched; // endpoints a delivery was enqueued for
+
+// Ask what happened to it — per-endpoint delivery status:
+const status = await client.getMessage(message.id);
+status.deliveries[0]?.status; // "pending" | "delivering" | "succeeded" | "dead_letter"
+
+try {
+  await client.getMessage("msg_does_not_exist");
+} catch (err) {
+  if (err instanceof PosthornApiError) err.status; // 404
+}
+```
+
+On the **receiving** end, verify each delivered webhook against the raw body — the SDK pulls the
+Standard Webhooks headers for you (verify the bytes as received, before any JSON re-serialize):
+
+```ts
+import { verifyWebhook } from "posthorn";
+
+// inside your webhook receiver, with the raw body string in hand:
+try {
+  verifyWebhook(endpointSecret, req.headers, rawBody);
+  // authentic — handle the event
+} catch {
+  // reject: missing header, replayed timestamp, or bad signature
+}
+```
 
 ## Development
 
