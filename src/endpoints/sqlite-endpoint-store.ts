@@ -26,6 +26,7 @@ import {
   UnknownEndpointError,
   type DeliveryHealthOutcome,
   type Endpoint,
+  type EndpointOutcomeResult,
   type EndpointStore,
   type EndpointUpdate,
   type ExpiringSecret,
@@ -332,13 +333,13 @@ export class SqliteEndpointStore implements EndpointStore {
     outcome: DeliveryHealthOutcome,
     nowMs: number,
     autoDisableAfterMs?: number,
-  ): Promise<Endpoint | null> {
+  ): Promise<EndpointOutcomeResult> {
     // Fast path: a successful delivery to a healthy endpoint changes nothing, so read
     // without taking a write lock and skip the transaction entirely. This is the
     // steady state (most deliveries succeed), so the hot path stays a single read.
     const row = this.#selectEndpoint.get(id) as EndpointRow | undefined;
     if (row === undefined) {
-      return null; // deleted/unknown endpoint → no-op
+      return { endpoint: null, autoDisabled: false }; // deleted/unknown endpoint → no-op
     }
     const firstEval = evaluateEndpointHealth(
       rowToEndpoint(row),
@@ -347,14 +348,14 @@ export class SqliteEndpointStore implements EndpointStore {
       autoDisableAfterMs,
     );
     if (!firstEval.changed) {
-      return firstEval.endpoint;
+      return { endpoint: firstEval.endpoint, autoDisabled: firstEval.autoDisabled };
     }
     // A write is needed: re-evaluate inside a transaction so the read-modify-write is
     // atomic against a concurrent outcome for the same endpoint (no lost update).
     return this.#transaction(() => {
       const current = this.#selectEndpoint.get(id) as EndpointRow | undefined;
       if (current === undefined) {
-        return null;
+        return { endpoint: null, autoDisabled: false };
       }
       const result = evaluateEndpointHealth(
         rowToEndpoint(current),
@@ -372,7 +373,7 @@ export class SqliteEndpointStore implements EndpointStore {
           id,
         );
       }
-      return result.endpoint;
+      return { endpoint: result.endpoint, autoDisabled: result.autoDisabled };
     });
   }
 

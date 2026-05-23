@@ -225,7 +225,7 @@ describe("SqliteEndpointStore — durability", () => {
       await store.recordDeliveryOutcome("ep_old", "failed", clock.now(), window);
       clock.advance(window);
       const tripped = await store.recordDeliveryOutcome("ep_old", "failed", clock.now(), window);
-      expect(tripped!.disabled).toBe(true);
+      expect(tripped.endpoint!.disabled).toBe(true);
       expect((await store.get("ep_old"))!.disabled).toBe(true);
     } finally {
       store.close();

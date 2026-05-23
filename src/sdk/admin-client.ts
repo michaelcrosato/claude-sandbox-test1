@@ -77,10 +77,31 @@ export interface AdminApp {
    * this many messages in the current month; `0` suspends the tenant.
    */
   readonly monthlyMessageQuota: number | null;
+  /**
+   * The URL Posthorn POSTs system events (e.g. `endpoint.disabled`) to, or `null`
+   * if system webhooks are not configured. The signing secret is not included in the
+   * app snapshot — use {@link PosthornAdminClient.rotateSystemWebhookSecret} to obtain
+   * or rotate it.
+   */
+  readonly systemWebhookUrl: string | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
   /** Time of the last mutation, epoch ms. */
   readonly updatedAt: number;
+}
+
+/**
+ * The result of {@link PosthornAdminClient.createApp}: the full tenant snapshot
+ * plus the one-time plaintext system webhook signing secret. The secret is returned
+ * **exactly once** — persist it now; it cannot be retrieved again. `null` when no
+ * `systemWebhookUrl` was supplied at creation.
+ */
+export interface CreatedAdminApp extends AdminApp {
+  /**
+   * The plaintext system webhook signing secret (`sws_…`). Returned once, never
+   * recoverable. `null` when `systemWebhookUrl` was not set at creation.
+   */
+  readonly systemWebhookSecret: string | null;
 }
 
 /** Input to {@link PosthornAdminClient.createApp}; all fields optional. */
@@ -92,6 +113,12 @@ export interface CreateAppInput {
    * limit (the default). See {@link AdminApp.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
+  /**
+   * URL to receive system events (e.g. `endpoint.disabled`). Must be http/https.
+   * When set, a signing secret is auto-generated and returned once in the response.
+   * Omit or `null` to disable system webhooks.
+   */
+  readonly systemWebhookUrl?: string | null;
 }
 
 /** A patch for {@link PosthornAdminClient.updateApp}; only provided fields change. */
@@ -103,6 +130,11 @@ export interface UpdateAppInput {
    * remove the limit. Omit to leave it unchanged — the plan upgrade/downgrade lever.
    */
   readonly monthlyMessageQuota?: number | null;
+  /**
+   * Replace the system webhook URL (null disables system webhooks and clears the
+   * stored signing secret). Omit to leave it unchanged.
+   */
+  readonly systemWebhookUrl?: string | null;
 }
 
 /** The non-secret metadata of an API key, as returned by the admin key routes. */
@@ -230,14 +262,19 @@ export class PosthornAdminClient {
   /**
    * Create a tenant — `POST /v1/admin/apps`. Omit `input` (or fields) for an unnamed,
    * unlimited tenant; set `monthlyMessageQuota` to provision it on a capped plan.
+   * When `systemWebhookUrl` is provided, the response includes the one-time
+   * `systemWebhookSecret` — persist it now, it is never recoverable again.
    */
-  async createApp(input: CreateAppInput = {}): Promise<AdminApp> {
+  async createApp(input: CreateAppInput = {}): Promise<CreatedAdminApp> {
     const body: Record<string, unknown> = {};
     if (input.name !== undefined) body["name"] = input.name;
     if (input.monthlyMessageQuota !== undefined) {
       body["monthlyMessageQuota"] = input.monthlyMessageQuota;
     }
-    return this.#transport.request<AdminApp>("POST", "/v1/admin/apps", body);
+    if (input.systemWebhookUrl !== undefined) {
+      body["systemWebhookUrl"] = input.systemWebhookUrl;
+    }
+    return this.#transport.request<CreatedAdminApp>("POST", "/v1/admin/apps", body);
   }
 
   /** List all tenants, oldest-first — `GET /v1/admin/apps`. */
@@ -259,8 +296,9 @@ export class PosthornAdminClient {
 
   /**
    * Update a tenant — `PATCH /v1/admin/apps/:id`. Only provided fields change; set
-   * `monthlyMessageQuota` to change the plan limit (or `null` to remove it). Rejects
-   * `404` if the tenant is unknown.
+   * `monthlyMessageQuota` to change the plan limit (or `null` to remove it). Set
+   * `systemWebhookUrl` to configure or clear system webhooks. Rejects `404` if the
+   * tenant is unknown.
    */
   async updateApp(id: string, patch: UpdateAppInput): Promise<AdminApp> {
     const body: Record<string, unknown> = {};
@@ -268,11 +306,29 @@ export class PosthornAdminClient {
     if (patch.monthlyMessageQuota !== undefined) {
       body["monthlyMessageQuota"] = patch.monthlyMessageQuota;
     }
+    if (patch.systemWebhookUrl !== undefined) {
+      body["systemWebhookUrl"] = patch.systemWebhookUrl;
+    }
     return this.#transport.request<AdminApp>(
       "PATCH",
       `/v1/admin/apps/${encodeURIComponent(id)}`,
       body,
     );
+  }
+
+  /**
+   * Rotate the system webhook signing secret for a tenant —
+   * `POST /v1/admin/apps/:id/rotate-system-secret`. The new plaintext secret is
+   * returned **once** — persist it now. Use this to obtain the secret when the
+   * system webhook URL was added via {@link updateApp} rather than at create time,
+   * or to rotate an existing secret. Rejects `404` if the tenant is unknown.
+   */
+  async rotateSystemWebhookSecret(appId: string): Promise<string> {
+    const res = await this.#transport.request<{ secret: string }>(
+      "POST",
+      `/v1/admin/apps/${encodeURIComponent(appId)}/rotate-system-secret`,
+    );
+    return res.secret;
   }
 
   /**

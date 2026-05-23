@@ -25,6 +25,7 @@ import {
   createApiKeyId,
   createAppId,
   generateApiKeySecret,
+  generateSystemWebhookSecret,
   hashApiKey,
   normalizeNewApp,
   UnknownAppError,
@@ -33,6 +34,7 @@ import {
   type AppStore,
   type AppUpdate,
   type CreatedApiKey,
+  type CreatedApp,
   type NewApp,
 } from "./app.js";
 
@@ -67,6 +69,8 @@ interface AppRow {
   readonly id: string;
   readonly name: string;
   readonly monthly_message_quota: number | null;
+  readonly system_webhook_url: string | null;
+  readonly system_webhook_secret: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -88,6 +92,7 @@ function rowToApp(row: AppRow): App {
     name: row.name,
     monthlyMessageQuota:
       row.monthly_message_quota === null ? null : Number(row.monthly_message_quota),
+    systemWebhookUrl: row.system_webhook_url ?? null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -123,6 +128,9 @@ export class SqliteAppStore implements AppStore {
   readonly #revokeKey: StatementSync;
   readonly #updateKeyLastUsed: StatementSync;
   readonly #countApps: StatementSync;
+  readonly #selectWebhookConfig: StatementSync;
+  readonly #clearWebhookSecret: StatementSync;
+  readonly #setWebhookSecret: StatementSync;
 
   constructor(options: SqliteAppStoreOptions = {}) {
     const {
@@ -148,16 +156,26 @@ export class SqliteAppStore implements AppStore {
     // fresh database these columns are in SCHEMA and each call is a no-op.
     this.#migrateQuotaColumn();
     this.#migrateLastUsedAtColumn();
+    this.#migrateSystemWebhookColumns();
 
     this.#selectApp = this.#db.prepare("SELECT * FROM apps WHERE id = ?");
     // rowid order is insertion order → oldest-first, matching the in-memory backend.
     this.#listApps = this.#db.prepare("SELECT * FROM apps ORDER BY rowid");
     this.#insertApp = this.#db.prepare(
-      `INSERT INTO apps (id, name, monthly_message_quota, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO apps (id, name, monthly_message_quota, system_webhook_url, system_webhook_secret, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateApp = this.#db.prepare(
-      "UPDATE apps SET name = ?, monthly_message_quota = ?, updated_at = ? WHERE id = ?",
+      "UPDATE apps SET name = ?, monthly_message_quota = ?, system_webhook_url = ?, updated_at = ? WHERE id = ?",
+    );
+    this.#selectWebhookConfig = this.#db.prepare(
+      "SELECT system_webhook_url, system_webhook_secret FROM apps WHERE id = ?",
+    );
+    this.#clearWebhookSecret = this.#db.prepare(
+      "UPDATE apps SET system_webhook_secret = NULL WHERE id = ?",
+    );
+    this.#setWebhookSecret = this.#db.prepare(
+      "UPDATE apps SET system_webhook_secret = ? WHERE id = ?",
     );
     this.#deleteApp = this.#db.prepare("DELETE FROM apps WHERE id = ?");
     this.#insertKey = this.#db.prepare(
@@ -211,12 +229,30 @@ export class SqliteAppStore implements AppStore {
     this.#db.exec("ALTER TABLE api_keys ADD COLUMN last_used_at INTEGER");
   }
 
+  /**
+   * Add the `system_webhook_url` and `system_webhook_secret` columns to `apps` for
+   * databases created before system webhook support. Existing rows default to `NULL`
+   * (no system webhook configured), so an upgrade is seamless. For a fresh database
+   * these columns are in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateSystemWebhookColumns(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(apps)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "system_webhook_url")) {
+      this.#db.exec("ALTER TABLE apps ADD COLUMN system_webhook_url TEXT");
+    }
+    if (!columns.some((c) => c.name === "system_webhook_secret")) {
+      this.#db.exec("ALTER TABLE apps ADD COLUMN system_webhook_secret TEXT");
+    }
+  }
+
   /** Number of apps currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countApps.get() as { n: number }).n);
   }
 
-  async create(input?: NewApp): Promise<App> {
+  async create(input?: NewApp): Promise<CreatedApp> {
     const normalized = normalizeNewApp(input);
     const nowMs = this.#now();
     const id = this.#generateAppId();
@@ -224,6 +260,7 @@ export class SqliteAppStore implements AppStore {
       id,
       name: normalized.name,
       monthlyMessageQuota: normalized.monthlyMessageQuota,
+      systemWebhookUrl: normalized.systemWebhookUrl,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
@@ -232,10 +269,12 @@ export class SqliteAppStore implements AppStore {
       app.id,
       app.name,
       app.monthlyMessageQuota,
+      app.systemWebhookUrl,
+      normalized.systemWebhookSecret,
       app.createdAt,
       app.updatedAt,
     );
-    return app;
+    return { ...app, systemWebhookSecret: normalized.systemWebhookSecret };
   }
 
   async get(id: string): Promise<App | null> {
@@ -255,7 +294,18 @@ export class SqliteAppStore implements AppStore {
         throw new UnknownAppError(id);
       }
       const next = applyAppUpdate(rowToApp(row), patch, this.#now());
-      this.#updateApp.run(next.name, next.monthlyMessageQuota, next.updatedAt, next.id);
+      this.#updateApp.run(next.name, next.monthlyMessageQuota, next.systemWebhookUrl, next.updatedAt, next.id);
+      // Keep the stored signing secret in sync with URL changes.
+      if ("systemWebhookUrl" in patch) {
+        if (next.systemWebhookUrl === null) {
+          // URL was cleared → clear the secret too.
+          this.#clearWebhookSecret.run(id);
+        } else if (row.system_webhook_secret === null) {
+          // URL was newly added (was null) and no secret stored yet → auto-generate.
+          this.#setWebhookSecret.run(generateSystemWebhookSecret(), id);
+        }
+        // If URL changed to a different non-null value, keep the existing secret.
+      }
       return next;
     });
   }
@@ -316,6 +366,28 @@ export class SqliteAppStore implements AppStore {
     return this.get(row.app_id);
   }
 
+  async getSystemWebhookConfig(appId: string): Promise<{ url: string; secret: string } | null> {
+    const row = this.#selectWebhookConfig.get(appId) as
+      | { system_webhook_url: string | null; system_webhook_secret: string | null }
+      | undefined;
+    if (row === undefined || row.system_webhook_url === null || row.system_webhook_secret === null) {
+      return null;
+    }
+    return { url: row.system_webhook_url, secret: row.system_webhook_secret };
+  }
+
+  async rotateSystemWebhookSecret(appId: string): Promise<string> {
+    return this.#transaction(() => {
+      const row = this.#selectApp.get(appId) as AppRow | undefined;
+      if (row === undefined) {
+        throw new UnknownAppError(appId);
+      }
+      const newSecret = generateSystemWebhookSecret();
+      this.#setWebhookSecret.run(newSecret, appId);
+      return newSecret;
+    });
+  }
+
   /** Close the underlying database handle. */
   close(): void {
     this.#db.close();
@@ -354,6 +426,8 @@ CREATE TABLE IF NOT EXISTS apps (
   id                    TEXT    PRIMARY KEY,
   name                  TEXT    NOT NULL,
   monthly_message_quota INTEGER,
+  system_webhook_url    TEXT,
+  system_webhook_secret TEXT,
   created_at            INTEGER NOT NULL,
   updated_at            INTEGER NOT NULL
 ) STRICT;

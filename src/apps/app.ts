@@ -28,6 +28,9 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
+/** Prefix on generated system webhook secrets. */
+export const SYSTEM_WEBHOOK_SECRET_PREFIX = "sws_";
+
 /**
  * A tenant. Immutable snapshot; every mutation produces a new one with a bumped
  * `updatedAt`.
@@ -46,10 +49,34 @@ export interface App {
    * A non-negative integer; `0` blocks all sends (a suspended tenant).
    */
   readonly monthlyMessageQuota: number | null;
+  /**
+   * The URL Posthorn POSTs system events (e.g. `endpoint.disabled`) to, or `null`
+   * if system webhooks are not configured. Must be an http/https URL. The matching
+   * signing secret is never included in the app snapshot; use
+   * {@link AppStore.getSystemWebhookConfig} to read both together, or
+   * {@link AppStore.rotateSystemWebhookSecret} to rotate the secret.
+   */
+  readonly systemWebhookUrl: string | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
   /** Time of the last mutation, epoch ms. */
   readonly updatedAt: number;
+}
+
+/**
+ * The result of {@link AppStore.create} — an {@link App} snapshot plus the
+ * one-time plaintext system webhook secret (if a URL was configured). The
+ * secret is returned exactly once here and never again retrievable (only its
+ * stored form is kept for signing); the operator must persist it now, or call
+ * {@link AppStore.rotateSystemWebhookSecret} to get a fresh one.
+ */
+export interface CreatedApp extends App {
+  /**
+   * The plaintext system webhook signing secret (`sws_…`), returned once on
+   * creation when {@link App.systemWebhookUrl} was configured. `null` when no
+   * URL was supplied, meaning there is nothing to sign with yet.
+   */
+  readonly systemWebhookSecret: string | null;
 }
 
 /** The fields a caller provides to create an app. */
@@ -61,6 +88,12 @@ export interface NewApp {
    * limit (the default). See {@link App.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
+  /**
+   * The URL to send system events (e.g. `endpoint.disabled`) to. Must be an
+   * http/https URL, or `null`/absent to disable system webhooks. When set, a signing
+   * secret is auto-generated and returned once in the {@link CreatedApp} response.
+   */
+  readonly systemWebhookUrl?: string | null;
 }
 
 /** A patch applied to an existing app. Only the provided fields change. */
@@ -72,6 +105,11 @@ export interface AppUpdate {
    * remove the limit. Omit to leave it unchanged. See {@link App.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
+  /**
+   * Replace the system webhook URL, or set `null` to disable system webhooks
+   * (which also clears the stored signing secret). Omit to leave it unchanged.
+   */
+  readonly systemWebhookUrl?: string | null;
 }
 
 /**
@@ -121,8 +159,8 @@ export interface CreatedApiKey {
  * eagerly.
  */
 export interface AppStore {
-  /** Create an app, returning the freshly created snapshot. */
-  create(input?: NewApp): Promise<App>;
+  /** Create an app, returning the freshly created snapshot plus the one-time system webhook secret (if configured). */
+  create(input?: NewApp): Promise<CreatedApp>;
   /** Fetch an app by id, or `null` if unknown. */
   get(id: string): Promise<App | null>;
   /** List all apps, oldest-first (the control-plane view). */
@@ -161,6 +199,22 @@ export interface AppStore {
    * side effect).
    */
   authenticate(presentedSecret: string): Promise<App | null>;
+
+  /**
+   * Fetch the system webhook URL and plaintext signing secret for an app, or `null`
+   * if no URL is configured or the app is unknown. Used by the delivery gateway
+   * immediately after an auto-disable to determine whether to emit the
+   * `endpoint.disabled` system event.
+   */
+  getSystemWebhookConfig(appId: string): Promise<{ url: string; secret: string } | null>;
+
+  /**
+   * Generate a fresh system webhook signing secret for an app, store it (replacing
+   * any existing one), and return the plaintext. Throws {@link UnknownAppError} if
+   * the app does not exist. Use this to obtain (or rotate) the secret when the URL
+   * was added via {@link update} rather than at create time.
+   */
+  rotateSystemWebhookSecret(appId: string): Promise<string>;
 }
 
 /** Thrown when an operation references an app id the store does not hold. */
@@ -172,6 +226,41 @@ export class UnknownAppError extends Error {
     this.name = "UnknownAppError";
     this.appId = appId;
   }
+}
+
+/**
+ * The default system webhook secret generator: a `sws_`-prefixed, URL-safe token
+ * with 144 bits of CSPRNG entropy. Inject a deterministic generator in tests.
+ */
+export function generateSystemWebhookSecret(): string {
+  return SYSTEM_WEBHOOK_SECRET_PREFIX + randomBytes(24).toString("base64url");
+}
+
+/**
+ * Validate and normalize a `systemWebhookUrl` value. Accepts `undefined`/`null`
+ * (returns `null`, meaning disabled). A non-null, non-empty string must parse as
+ * a valid `http:` or `https:` URL; anything else throws {@link TypeError}.
+ *
+ * Shared by every backend so the intake contract is identical across stores and
+ * the HTTP layer does not need to re-validate.
+ */
+export function normalizeSystemWebhookUrl(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError("systemWebhookUrl must be an http/https URL or null");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError(`systemWebhookUrl is not a valid URL: "${value}"`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new TypeError("systemWebhookUrl must use http or https");
+  }
+  return parsed.toString();
 }
 
 /** Prefix on generated app ids. */
@@ -300,6 +389,14 @@ export function quotaRemaining(currentUsage: number, quota: number | null): numb
 export interface NormalizedNewApp {
   readonly name: string;
   readonly monthlyMessageQuota: number | null;
+  /** Normalized system webhook URL (`null` = not configured). */
+  readonly systemWebhookUrl: string | null;
+  /**
+   * Auto-generated system webhook signing secret (`sws_…`), or `null` when
+   * `systemWebhookUrl` is `null`. Stored by backends; returned once to callers
+   * via {@link CreatedApp.systemWebhookSecret}.
+   */
+  readonly systemWebhookSecret: string | null;
 }
 
 /**
@@ -307,9 +404,12 @@ export interface NormalizedNewApp {
  * input. Shared by every backend so they enforce an identical intake contract.
  */
 export function normalizeNewApp(input: NewApp = {}): NormalizedNewApp {
+  const url = normalizeSystemWebhookUrl(input.systemWebhookUrl);
   return {
     name: normalizeName(input.name),
     monthlyMessageQuota: normalizeQuota(input.monthlyMessageQuota),
+    systemWebhookUrl: url,
+    systemWebhookSecret: url !== null ? generateSystemWebhookSecret() : null,
   };
 }
 
@@ -327,6 +427,10 @@ export function applyAppUpdate(current: App, patch: AppUpdate, nowMs: number): A
       "monthlyMessageQuota" in patch
         ? normalizeQuota(patch.monthlyMessageQuota)
         : current.monthlyMessageQuota,
+    systemWebhookUrl:
+      "systemWebhookUrl" in patch
+        ? normalizeSystemWebhookUrl(patch.systemWebhookUrl)
+        : current.systemWebhookUrl,
     createdAt: current.createdAt,
     updatedAt: nowMs,
   };

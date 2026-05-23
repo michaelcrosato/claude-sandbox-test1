@@ -1580,6 +1580,7 @@ describe("createApi — admin / control-plane API", () => {
         ["DELETE", "/v1/admin/apps/app_x"],
         ["POST", "/v1/admin/apps/app_x/keys"],
         ["GET", "/v1/admin/apps/app_x/keys"],
+        ["POST", "/v1/admin/apps/app_x/rotate-system-secret"],
         ["DELETE", "/v1/admin/keys/ak_x"],
       ];
       for (const [method, path] of probes) {
@@ -1640,6 +1641,7 @@ describe("createApi — admin / control-plane API", () => {
         id: appId,
         name: "Acme",
         monthlyMessageQuota: null,
+        systemWebhookUrl: null,
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
       });

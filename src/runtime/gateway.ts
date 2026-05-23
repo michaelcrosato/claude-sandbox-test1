@@ -41,6 +41,7 @@ import type { MessageStore } from "../storage/message-store.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { DeliveryAttemptStore } from "../attempts/delivery-attempt.js";
 import { MEMORY_DATA_DIR, type GatewayConfig } from "./config.js";
+import { emitEndpointDisabledEvent, type SystemEventTransport } from "../system-events/index.js";
 
 /** The address the gateway's HTTP server actually bound to (after `start`). */
 export interface GatewayAddress {
@@ -155,6 +156,17 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
+  /** Simple fetch-based transport for system webhook delivery. */
+  const systemEventTransport: SystemEventTransport = async (url, init) => {
+    const res = await fetch(url, {
+      method: init.method,
+      headers: init.headers,
+      body: init.body,
+      ...(init.signal !== undefined ? { signal: init.signal } : {}),
+    });
+    return { status: res.status };
+  };
+
   const worker = new DeliveryWorker({
     queue,
     store: messages,
@@ -172,15 +184,26 @@ export function createGateway(config: GatewayConfig): Gateway {
     },
     // Fold each terminal delivery outcome into the target endpoint's health, so an
     // endpoint that fails continuously is automatically disabled (capping wasted
-    // attempts/operations). Best-effort: a failed health write is routed to the
-    // worker's onError and never blocks a delivery.
+    // attempts/operations). When an auto-disable occurs, emit an `endpoint.disabled`
+    // system webhook event to the app's configured system webhook URL (if any).
+    // Best-effort: a failed health write is routed to the worker's onError and never
+    // blocks a delivery.
     onDeliveryOutcome: async (endpointId, outcome, nowMs) => {
-      await endpoints.recordDeliveryOutcome(
+      const result = await endpoints.recordDeliveryOutcome(
         endpointId,
         outcome,
         nowMs,
         config.endpointAutoDisableAfterMs,
       );
+      if (result.autoDisabled && result.endpoint !== null) {
+        const webhookConfig = await apps.getSystemWebhookConfig(result.endpoint.appId);
+        if (webhookConfig !== null) {
+          await emitEndpointDisabledEvent(webhookConfig, result.endpoint, {
+            transport: systemEventTransport,
+            now: () => nowMs,
+          });
+        }
+      }
     },
   });
 

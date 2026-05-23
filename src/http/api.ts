@@ -106,6 +106,7 @@ import {
   type App,
   type AppStore,
   type AppUpdate,
+  type CreatedApp,
   type NewApp,
 } from "../apps/app.js";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -522,8 +523,24 @@ function appView(app: App): Record<string, unknown> {
     // The tenant's monthly message quota (null = no limit) — operator-visible so a
     // dashboard can show the plan; not secret material.
     monthlyMessageQuota: app.monthlyMessageQuota,
+    // The system webhook URL is operator-visible (not secret). The signing secret is
+    // never included in the standard app view — use the create response or rotate
+    // endpoint to obtain it.
+    systemWebhookUrl: app.systemWebhookUrl,
     createdAt: app.createdAt,
     updatedAt: app.updatedAt,
+  };
+}
+
+/**
+ * The create-time view of a tenant — extends {@link appView} with the one-time
+ * system webhook signing secret. The secret is returned here and never again;
+ * the store keeps only its stored form for signing.
+ */
+function createdAppView(createdApp: CreatedApp): Record<string, unknown> {
+  return {
+    ...appView(createdApp),
+    systemWebhookSecret: createdApp.systemWebhookSecret,
   };
 }
 
@@ -656,6 +673,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/admin/apps/:id/keys",
   "GET /v1/admin/apps/:id/keys",
   "GET /v1/admin/apps/:id/usage",
+  "POST /v1/admin/apps/:id/rotate-system-secret",
   "DELETE /v1/admin/keys/:id",
 ] as const;
 
@@ -1006,17 +1024,21 @@ export function createApi(deps: ApiDeps): ApiHandler {
 
   const createApp: RouteHandler = async (ctx) => {
     // The body is optional: no body creates an unnamed, unlimited app. When present,
-    // `name` and `monthlyMessageQuota` are validated by the store's normalizeNewApp
-    // (TypeError → 400).
+    // `name`, `monthlyMessageQuota`, and `systemWebhookUrl` are validated by the
+    // store's normalizeNewApp (TypeError → 400).
     const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
     const input: NewApp = {
       ...("name" in body ? { name: body["name"] as string } : {}),
       ...("monthlyMessageQuota" in body
         ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
         : {}),
+      ...("systemWebhookUrl" in body
+        ? { systemWebhookUrl: body["systemWebhookUrl"] as string | null }
+        : {}),
     };
     const app = await deps.apps.create(input);
-    return json(201, appView(app));
+    // Return the create view — includes the one-time systemWebhookSecret.
+    return json(201, createdAppView(app));
   };
 
   const updateApp: RouteHandler = async (ctx) => {
@@ -1024,11 +1046,15 @@ export function createApi(deps: ApiDeps): ApiHandler {
     const body = parseJsonObject(ctx.req);
     // Only the patchable fields are forwarded; values are validated by applyAppUpdate
     // (TypeError → 400). Setting `monthlyMessageQuota` is the plan upgrade/downgrade
-    // path (null removes the limit). An unknown app throws UnknownAppError → 404.
+    // path (null removes the limit). `systemWebhookUrl` null clears the system webhook.
+    // An unknown app throws UnknownAppError → 404.
     const patch: AppUpdate = {
       ...("name" in body ? { name: body["name"] as string } : {}),
       ...("monthlyMessageQuota" in body
         ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
+        : {}),
+      ...("systemWebhookUrl" in body
+        ? { systemWebhookUrl: body["systemWebhookUrl"] as string | null }
         : {}),
     };
     const app = await deps.apps.update(id, patch);
@@ -1091,6 +1117,14 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return { status: 204, body: undefined };
   };
 
+  const rotateSystemWebhookSecret: RouteHandler = async (ctx) => {
+    const appId = requireParam(ctx.params, "id");
+    // Unknown app throws UnknownAppError → 404.
+    const newSecret = await deps.apps.rotateSystemWebhookSecret(appId);
+    // Return the new secret once — the store keeps only its stored form.
+    return json(201, { secret: newSecret });
+  };
+
   const getAppUsage: RouteHandler = async (ctx) => {
     const appId = requireParam(ctx.params, "id");
     // An unknown tenant is 404; a known tenant with no traffic is a 200 with total 0
@@ -1131,6 +1165,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/admin/apps/:id/keys": adminAuthed(createApiKey),
     "GET /v1/admin/apps/:id/keys": adminAuthed(listApiKeys),
     "GET /v1/admin/apps/:id/usage": adminAuthed(getAppUsage),
+    "POST /v1/admin/apps/:id/rotate-system-secret": adminAuthed(rotateSystemWebhookSecret),
     "DELETE /v1/admin/keys/:id": adminAuthed(revokeApiKey),
   };
 

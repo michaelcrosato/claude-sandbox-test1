@@ -471,7 +471,10 @@ export function buildOpenApiDocument(): OpenApiDocument {
             content: { "application/json": { schema: ref("NewApp") } },
           },
           responses: {
-            "201": jsonResponse("The created tenant.", ref("App")),
+            "201": jsonResponse(
+              "The created tenant, including the one-time system webhook secret (if a URL was set).",
+              ref("CreatedApp"),
+            ),
             "400": errorResponse("Malformed request body."),
             "401": errorResponse("Missing or invalid admin token."),
             "404": errorResponse("The admin API is not enabled on this instance."),
@@ -533,6 +536,28 @@ export function buildOpenApiDocument(): OpenApiDocument {
           parameters: [idParam("The app id.")],
           responses: {
             "204": { description: "Deleted; no content." },
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+      },
+      "/v1/admin/apps/{id}/rotate-system-secret": {
+        post: {
+          operationId: "rotateSystemWebhookSecret",
+          tags: ["Admin"],
+          summary: "Rotate the app's system webhook signing secret",
+          description:
+            "Generate a new system webhook signing secret for this app and return it **once** — " +
+            "the store keeps only its stored form. Use this to obtain the secret when the system " +
+            "webhook URL was added via `PATCH` rather than at create time, or to rotate an existing " +
+            "secret. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          responses: {
+            "201": jsonResponse(
+              "The new system webhook signing secret (one-time).",
+              ref("RotateSystemSecretResult"),
+            ),
             "401": errorResponse("Missing or invalid admin token."),
             "404": errorResponse("No such app (or the admin API is not enabled)."),
           },
@@ -967,7 +992,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         App: {
           type: "object",
           description: "A tenant. The unit a single instance serves, owns endpoints/messages, and (in the hosted plane) is metered/billed.",
-          required: ["id", "name", "monthlyMessageQuota", "createdAt", "updatedAt"],
+          required: ["id", "name", "monthlyMessageQuota", "systemWebhookUrl", "createdAt", "updatedAt"],
           properties: {
             id: { type: "string", examples: ["app_2Yx9..."], description: "The `appId` endpoints and messages reference." },
             name: { type: "string", description: "Human-readable label; empty string when none." },
@@ -979,9 +1004,40 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "When set, `POST /v1/messages` returns `429` once it is reached (the freemium/" +
                 "usage-pricing gate); a deduplicated replay is exempt and never counts.",
             },
+            systemWebhookUrl: {
+              type: ["string", "null"],
+              format: "uri",
+              description:
+                "The URL Posthorn POSTs system events (e.g. `endpoint.disabled`) to, or null " +
+                "if system webhooks are not configured. The signing secret is never included " +
+                "in the app snapshot; use `POST /v1/admin/apps/{id}/rotate-system-secret` to " +
+                "obtain or rotate it.",
+            },
             createdAt: epochMs("Creation time, epoch ms."),
             updatedAt: epochMs("Last mutation time, epoch ms."),
           },
+        },
+        CreatedApp: {
+          description:
+            "A freshly created tenant: its full `App` snapshot plus the one-time system webhook " +
+            "signing secret. The secret is returned exactly once here — it is never recoverable " +
+            "afterward (only its stored form is kept for signing). `null` when no `systemWebhookUrl` " +
+            "was supplied at creation.",
+          allOf: [
+            ref("App"),
+            {
+              type: "object",
+              required: ["systemWebhookSecret"],
+              properties: {
+                systemWebhookSecret: {
+                  type: ["string", "null"],
+                  description:
+                    "The plaintext system webhook signing secret (`sws_…`). Returned once, never " +
+                    "recoverable — persist it now. `null` when `systemWebhookUrl` was not configured.",
+                },
+              },
+            },
+          ],
         },
         NewApp: {
           type: "object",
@@ -992,6 +1048,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["integer", "null"],
               minimum: 0,
               description: "Optional monthly message quota; omit or null for no limit (the default).",
+            },
+            systemWebhookUrl: {
+              type: ["string", "null"],
+              format: "uri",
+              description:
+                "URL to receive system events (e.g. `endpoint.disabled`). Must be http/https. " +
+                "When set, a signing secret is auto-generated and returned once in the response.",
             },
           },
         },
@@ -1006,6 +1069,24 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["integer", "null"],
               minimum: 0,
               description: "Replace the monthly message quota; null removes the limit.",
+            },
+            systemWebhookUrl: {
+              type: ["string", "null"],
+              format: "uri",
+              description:
+                "Replace the system webhook URL (null disables system webhooks and clears " +
+                "the stored signing secret). Omit to leave it unchanged.",
+            },
+          },
+        },
+        RotateSystemSecretResult: {
+          type: "object",
+          description: "The result of rotating a system webhook secret: the new plaintext secret, returned once.",
+          required: ["secret"],
+          properties: {
+            secret: {
+              type: "string",
+              description: "The new plaintext system webhook signing secret (`sws_…`). Returned once — persist it now.",
             },
           },
         },

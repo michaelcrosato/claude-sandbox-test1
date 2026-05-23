@@ -13,7 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { UnknownAppError, hashApiKey, type AppStore } from "./app.js";
+import { UnknownAppError, hashApiKey, type AppStore, SYSTEM_WEBHOOK_SECRET_PREFIX } from "./app.js";
 
 /** Controllable clock + deterministic id/secret generators. */
 export interface AppConformanceClock {
@@ -104,13 +104,19 @@ export function describeAppStoreContract(
         expect(app.name).toBe("Acme");
         expect(app.createdAt).toBe(clock.now());
         expect(app.updatedAt).toBe(clock.now());
-        expect(await store.get(app.id)).toEqual(app);
+        // get() returns App (no systemWebhookSecret); compare the App fields only.
+        const fetched = await store.get(app.id);
+        expect(fetched?.id).toBe(app.id);
+        expect(fetched?.name).toBe(app.name);
+        expect(fetched?.createdAt).toBe(app.createdAt);
+        expect(fetched?.updatedAt).toBe(app.updatedAt);
       });
 
       it("defaults an absent name to the empty string", async () => {
         const app = await store.create();
         expect(app.name).toBe("");
-        expect(await store.get(app.id)).toEqual(app);
+        const fetched = await store.get(app.id);
+        expect(fetched?.name).toBe("");
       });
 
       it("rejects a non-string name", async () => {
@@ -143,6 +149,33 @@ export function describeAppStoreContract(
         // @ts-expect-error — quota must be a number or null
         await expect(store.create({ monthlyMessageQuota: "100" })).rejects.toThrow(TypeError);
       });
+
+      it("creates an app without systemWebhookUrl → both fields are null", async () => {
+        const result = await store.create({ name: "no-webhook" });
+        expect(result.systemWebhookUrl).toBeNull();
+        expect(result.systemWebhookSecret).toBeNull();
+        // The app snapshot also has null URL.
+        const fetched = await store.get(result.id);
+        expect(fetched?.systemWebhookUrl).toBeNull();
+      });
+
+      it("creates an app with systemWebhookUrl → URL persisted, secret returned once", async () => {
+        const result = await store.create({ name: "with-webhook", systemWebhookUrl: "https://example.com/hook" });
+        expect(result.systemWebhookUrl).toBe("https://example.com/hook");
+        expect(result.systemWebhookSecret).not.toBeNull();
+        expect(typeof result.systemWebhookSecret).toBe("string");
+        expect(result.systemWebhookSecret!.startsWith(SYSTEM_WEBHOOK_SECRET_PREFIX)).toBe(true);
+        // The URL is visible on the App snapshot.
+        const fetched = await store.get(result.id);
+        expect(fetched?.systemWebhookUrl).toBe("https://example.com/hook");
+      });
+
+      it("rejects an invalid systemWebhookUrl", async () => {
+        await expect(store.create({ systemWebhookUrl: "not-a-url" })).rejects.toThrow(TypeError);
+        await expect(store.create({ systemWebhookUrl: "ftp://bad.scheme" })).rejects.toThrow(TypeError);
+        // @ts-expect-error — must be a string or null
+        await expect(store.create({ systemWebhookUrl: 123 })).rejects.toThrow(TypeError);
+      });
     });
 
     describe("list", () => {
@@ -152,6 +185,89 @@ export function describeAppStoreContract(
         const b = await store.create({ name: "b" });
         const c = await store.create({ name: "c" });
         expect((await store.list()).map((x) => x.id)).toEqual([a.id, b.id, c.id]);
+      });
+    });
+
+    describe("systemWebhookUrl update", () => {
+      it("sets, changes, and clears systemWebhookUrl via update", async () => {
+        const app = await store.create({ name: "Acme" });
+        expect(app.systemWebhookUrl).toBeNull();
+
+        // Set a URL for the first time.
+        const withUrl = await store.update(app.id, { systemWebhookUrl: "https://a.example/hook" });
+        expect(withUrl.systemWebhookUrl).toBe("https://a.example/hook");
+        expect((await store.get(app.id))?.systemWebhookUrl).toBe("https://a.example/hook");
+
+        // Change to a different URL (secret stays, not rotated).
+        const changed = await store.update(app.id, { systemWebhookUrl: "https://b.example/hook" });
+        expect(changed.systemWebhookUrl).toBe("https://b.example/hook");
+
+        // Clear the URL → secret also cleared.
+        const cleared = await store.update(app.id, { systemWebhookUrl: null });
+        expect(cleared.systemWebhookUrl).toBeNull();
+        expect(await store.getSystemWebhookConfig(app.id)).toBeNull();
+      });
+
+      it("leaves systemWebhookUrl unchanged when the field is omitted from the patch", async () => {
+        const app = await store.create({ systemWebhookUrl: "https://c.example/hook" });
+        const updated = await store.update(app.id, { name: "New Name" });
+        expect(updated.systemWebhookUrl).toBe("https://c.example/hook");
+      });
+    });
+
+    describe("getSystemWebhookConfig", () => {
+      it("returns null for an unknown app", async () => {
+        expect(await store.getSystemWebhookConfig("app_nope")).toBeNull();
+      });
+
+      it("returns null for an app without a system webhook URL", async () => {
+        const app = await store.create({ name: "no-hook" });
+        expect(await store.getSystemWebhookConfig(app.id)).toBeNull();
+      });
+
+      it("returns url and secret after create with URL", async () => {
+        const created = await store.create({ systemWebhookUrl: "https://example.com/sys" });
+        const config = await store.getSystemWebhookConfig(created.id);
+        expect(config).not.toBeNull();
+        expect(config!.url).toBe("https://example.com/sys");
+        // The secret should match what was returned at create time.
+        expect(config!.secret).toBe(created.systemWebhookSecret);
+      });
+
+      it("returns null after URL is cleared via update", async () => {
+        const app = await store.create({ systemWebhookUrl: "https://example.com/sys" });
+        await store.update(app.id, { systemWebhookUrl: null });
+        expect(await store.getSystemWebhookConfig(app.id)).toBeNull();
+      });
+    });
+
+    describe("rotateSystemWebhookSecret", () => {
+      it("throws UnknownAppError for an unknown app", async () => {
+        await expect(store.rotateSystemWebhookSecret("app_nope")).rejects.toBeInstanceOf(UnknownAppError);
+      });
+
+      it("generates a new secret and replaces the old one", async () => {
+        const created = await store.create({ systemWebhookUrl: "https://example.com/sys" });
+        const oldConfig = await store.getSystemWebhookConfig(created.id);
+        expect(oldConfig?.secret).toBe(created.systemWebhookSecret);
+
+        const newSecret = await store.rotateSystemWebhookSecret(created.id);
+        expect(newSecret).not.toBe(created.systemWebhookSecret);
+        expect(newSecret.startsWith(SYSTEM_WEBHOOK_SECRET_PREFIX)).toBe(true);
+
+        // The new secret is now what getSystemWebhookConfig returns.
+        const newConfig = await store.getSystemWebhookConfig(created.id);
+        expect(newConfig?.secret).toBe(newSecret);
+      });
+
+      it("also works on an app that had no URL (sets a secret even without a URL)", async () => {
+        // rotateSystemWebhookSecret doesn't require a URL — it just sets the secret.
+        // The caller can then set the URL via update, and the secret is ready.
+        const app = await store.create({ name: "no-url-yet" });
+        const newSecret = await store.rotateSystemWebhookSecret(app.id);
+        expect(newSecret.startsWith(SYSTEM_WEBHOOK_SECRET_PREFIX)).toBe(true);
+        // getSystemWebhookConfig still returns null (no URL set yet).
+        expect(await store.getSystemWebhookConfig(app.id)).toBeNull();
       });
     });
 
@@ -255,7 +371,8 @@ export function describeAppStoreContract(
       it("authenticates a presented secret to its owning app", async () => {
         const app = await store.create({ name: "Acme" });
         const { secret } = await store.createApiKey(app.id);
-        expect(await store.authenticate(secret)).toEqual(app);
+        // authenticate returns App (no systemWebhookSecret); compare via get().
+        expect(await store.authenticate(secret)).toEqual(await store.get(app.id));
       });
 
       it("returns null for an unknown, empty, or wrong secret", async () => {
@@ -269,12 +386,13 @@ export function describeAppStoreContract(
         const app = await store.create();
         const k1 = await store.createApiKey(app.id);
         const k2 = await store.createApiKey(app.id);
-        expect(await store.authenticate(k1.secret)).toEqual(app);
-        expect(await store.authenticate(k2.secret)).toEqual(app);
+        const fetched = await store.get(app.id);
+        expect(await store.authenticate(k1.secret)).toEqual(fetched);
+        expect(await store.authenticate(k2.secret)).toEqual(fetched);
         expect(await store.revokeApiKey(k1.apiKey.id)).toBe(true);
         // k1 no longer authenticates; k2 is unaffected.
         expect(await store.authenticate(k1.secret)).toBeNull();
-        expect(await store.authenticate(k2.secret)).toEqual(app);
+        expect(await store.authenticate(k2.secret)).toEqual(fetched);
       });
 
       it("records the revocation time and makes re-revoke a no-op", async () => {
@@ -295,8 +413,10 @@ export function describeAppStoreContract(
         const b = await store.create({ name: "b" });
         const ka = await store.createApiKey(a.id);
         const kb = await store.createApiKey(b.id);
-        expect(await store.authenticate(ka.secret)).toEqual(a);
-        expect(await store.authenticate(kb.secret)).toEqual(b);
+        const fetchedA = await store.get(a.id);
+        const fetchedB = await store.get(b.id);
+        expect(await store.authenticate(ka.secret)).toEqual(fetchedA);
+        expect(await store.authenticate(kb.secret)).toEqual(fetchedB);
         expect((await store.listApiKeys(a.id)).map((k) => k.id)).toEqual([
           ka.apiKey.id,
         ]);
@@ -316,7 +436,7 @@ export function describeAppStoreContract(
         // The shared hash of the known injected secret authenticates; this also
         // pins that every backend hashes identically (cross-backend key validity).
         expect(hashApiKey(secret)).toHaveLength(64);
-        expect(await store.authenticate(secret)).toEqual(app);
+        expect(await store.authenticate(secret)).toEqual(await store.get(app.id));
       });
     });
   });

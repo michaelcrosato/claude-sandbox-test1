@@ -74,8 +74,13 @@ describe("SqliteAppStore — durability", () => {
     // revocation all survive intact.
     const after = new SqliteAppStore({ location: dbPath, ...opts });
     try {
-      expect(await after.get(app.id)).toEqual(app);
-      expect(await after.authenticate(live.secret)).toEqual(app);
+      // get() returns App (no systemWebhookSecret); fetch first then compare.
+      const fetched = await after.get(app.id);
+      expect(fetched?.id).toBe(app.id);
+      expect(fetched?.name).toBe(app.name);
+      expect(fetched?.monthlyMessageQuota).toBe(app.monthlyMessageQuota);
+      expect(fetched?.systemWebhookUrl).toBe(app.systemWebhookUrl);
+      expect(await after.authenticate(live.secret)).toEqual(fetched);
       expect(await after.authenticate(revoked.secret)).toBeNull(); // still revoked
       const keys = await after.listApiKeys(app.id);
       expect(keys.map((k) => k.id)).toEqual([live.apiKey.id, revoked.apiKey.id]);

@@ -25,6 +25,7 @@ import {
   UnknownEndpointError,
   type DeliveryHealthOutcome,
   type Endpoint,
+  type EndpointOutcomeResult,
   type EndpointStore,
   type EndpointUpdate,
   type NewEndpoint,
@@ -139,16 +140,16 @@ export class InMemoryEndpointStore implements EndpointStore {
     outcome: DeliveryHealthOutcome,
     nowMs: number,
     autoDisableAfterMs?: number,
-  ): Promise<Endpoint | null> {
+  ): Promise<EndpointOutcomeResult> {
     const current = this.#endpoints.get(id);
     if (current === undefined) {
-      return null; // deleted/unknown endpoint → no-op
+      return { endpoint: null, autoDisabled: false }; // deleted/unknown endpoint → no-op
     }
     const result = evaluateEndpointHealth(current, outcome, nowMs, autoDisableAfterMs);
     if (result.changed) {
       this.#endpoints.set(id, result.endpoint); // same key → keeps insertion order
     }
-    return result.endpoint;
+    return { endpoint: result.endpoint, autoDisabled: result.autoDisabled };
   }
 
   async delete(id: string): Promise<boolean> {

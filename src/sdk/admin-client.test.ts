@@ -167,7 +167,10 @@ describe("PosthornAdminClient (against the in-process HTTP server)", () => {
     expect(created.monthlyMessageQuota).toBe(100);
 
     const fetched = await admin.getApp(created.id);
-    expect(fetched).toEqual(created);
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.name).toBe(created.name);
+    expect(fetched.monthlyMessageQuota).toBe(created.monthlyMessageQuota);
+    expect(fetched.systemWebhookUrl).toBe(created.systemWebhookUrl);
 
     const list = await admin.listApps();
     expect(list.map((a) => a.id)).toContain(created.id);

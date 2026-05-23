@@ -25,9 +25,10 @@ describe("InMemoryAppStore — extras", () => {
     const k2 = await store.createApiKey(app.id);
     expect(k1.secret).not.toBe(k2.secret);
     expect(k1.secret.startsWith("phk_")).toBe(true);
-    // Both authenticate to the same app.
-    expect(await store.authenticate(k1.secret)).toEqual(app);
-    expect(await store.authenticate(k2.secret)).toEqual(app);
+    // Both authenticate to the same app (compare via get() which returns App, not CreatedApp).
+    const fetched = await store.get(app.id);
+    expect(await store.authenticate(k1.secret)).toEqual(fetched);
+    expect(await store.authenticate(k2.secret)).toEqual(fetched);
   });
 
   it("never stores or lists the full plaintext secret (only a short prefix)", async () => {

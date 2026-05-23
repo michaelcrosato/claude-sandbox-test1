@@ -24,6 +24,7 @@ import {
   createApiKeyId,
   createAppId,
   generateApiKeySecret,
+  generateSystemWebhookSecret,
   hashApiKey,
   normalizeNewApp,
   UnknownAppError,
@@ -32,6 +33,7 @@ import {
   type AppStore,
   type AppUpdate,
   type CreatedApiKey,
+  type CreatedApp,
   type NewApp,
 } from "./app.js";
 
@@ -65,6 +67,8 @@ export class InMemoryAppStore implements AppStore {
   readonly #keys = new Map<string, StoredApiKey>();
   /** keyHash → keyId, the authenticate lookup index. */
   readonly #byHash = new Map<string, string>();
+  /** appId → plaintext system webhook signing secret. */
+  readonly #webhookSecrets = new Map<string, string>();
 
   constructor(options: InMemoryAppStoreOptions = {}) {
     const {
@@ -84,7 +88,7 @@ export class InMemoryAppStore implements AppStore {
     return this.#apps.size;
   }
 
-  async create(input?: NewApp): Promise<App> {
+  async create(input?: NewApp): Promise<CreatedApp> {
     const normalized = normalizeNewApp(input);
     const nowMs = this.#now();
     const id = this.#generateAppId();
@@ -95,11 +99,15 @@ export class InMemoryAppStore implements AppStore {
       id,
       name: normalized.name,
       monthlyMessageQuota: normalized.monthlyMessageQuota,
+      systemWebhookUrl: normalized.systemWebhookUrl,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
     this.#apps.set(id, app);
-    return app;
+    if (normalized.systemWebhookSecret !== null) {
+      this.#webhookSecrets.set(id, normalized.systemWebhookSecret);
+    }
+    return { ...app, systemWebhookSecret: normalized.systemWebhookSecret };
   }
 
   async get(id: string): Promise<App | null> {
@@ -118,6 +126,17 @@ export class InMemoryAppStore implements AppStore {
     }
     const next = applyAppUpdate(current, patch, this.#now());
     this.#apps.set(id, next); // same key → keeps insertion order
+    // Keep webhook secret in sync with URL changes.
+    if ("systemWebhookUrl" in patch) {
+      if (next.systemWebhookUrl === null) {
+        // URL was cleared → secret no longer needed.
+        this.#webhookSecrets.delete(id);
+      } else if (!this.#webhookSecrets.has(id)) {
+        // URL was newly set (was null before) and no secret exists yet.
+        this.#webhookSecrets.set(id, generateSystemWebhookSecret());
+      }
+      // If URL was changed to a different non-null value, keep the existing secret.
+    }
     return next;
   }
 
@@ -125,14 +144,36 @@ export class InMemoryAppStore implements AppStore {
     if (!this.#apps.delete(id)) {
       return false;
     }
-    // Cascade: drop the app's keys and their hash-index entries.
+    // Cascade: drop the app's keys, hash-index entries, and webhook secret.
     for (const [keyId, stored] of this.#keys) {
       if (stored.key.appId === id) {
         this.#keys.delete(keyId);
         this.#byHash.delete(stored.keyHash);
       }
     }
+    this.#webhookSecrets.delete(id);
     return true;
+  }
+
+  async getSystemWebhookConfig(appId: string): Promise<{ url: string; secret: string } | null> {
+    const app = this.#apps.get(appId);
+    if (app === undefined || app.systemWebhookUrl === null) {
+      return null;
+    }
+    const secret = this.#webhookSecrets.get(appId);
+    if (secret === undefined) {
+      return null;
+    }
+    return { url: app.systemWebhookUrl, secret };
+  }
+
+  async rotateSystemWebhookSecret(appId: string): Promise<string> {
+    if (!this.#apps.has(appId)) {
+      throw new UnknownAppError(appId);
+    }
+    const newSecret = generateSystemWebhookSecret();
+    this.#webhookSecrets.set(appId, newSecret);
+    return newSecret;
   }
 
   async createApiKey(appId: string): Promise<CreatedApiKey> {

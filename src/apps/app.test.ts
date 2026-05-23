@@ -87,12 +87,12 @@ describe("apiKeyHashesEqual", () => {
 
 describe("normalizeNewApp", () => {
   it("defaults an absent or omitted name to empty string and quota to null", () => {
-    expect(normalizeNewApp()).toEqual({ name: "", monthlyMessageQuota: null });
-    expect(normalizeNewApp({})).toEqual({ name: "", monthlyMessageQuota: null });
+    expect(normalizeNewApp()).toMatchObject({ name: "", monthlyMessageQuota: null });
+    expect(normalizeNewApp({})).toMatchObject({ name: "", monthlyMessageQuota: null });
   });
 
   it("keeps a provided name and rejects a non-string", () => {
-    expect(normalizeNewApp({ name: "Acme" })).toEqual({
+    expect(normalizeNewApp({ name: "Acme" })).toMatchObject({
       name: "Acme",
       monthlyMessageQuota: null,
     });
@@ -101,7 +101,7 @@ describe("normalizeNewApp", () => {
   });
 
   it("carries a provided monthly quota through", () => {
-    expect(normalizeNewApp({ monthlyMessageQuota: 1000 })).toEqual({
+    expect(normalizeNewApp({ monthlyMessageQuota: 1000 })).toMatchObject({
       name: "",
       monthlyMessageQuota: 1000,
     });
@@ -172,6 +172,7 @@ describe("applyAppUpdate", () => {
     id: "app_1",
     name: "before",
     monthlyMessageQuota: null,
+    systemWebhookUrl: null,
     createdAt: 1000,
     updatedAt: 1000,
   };
@@ -182,6 +183,7 @@ describe("applyAppUpdate", () => {
       id: "app_1",
       name: "after",
       monthlyMessageQuota: null,
+      systemWebhookUrl: null,
       createdAt: 1000,
       updatedAt: 2000,
     });

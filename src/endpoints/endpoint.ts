@@ -140,6 +140,23 @@ export interface EndpointUpdate {
 }
 
 /**
+ * The result of {@link EndpointStore.recordDeliveryOutcome}. Surfaces both the
+ * resulting endpoint snapshot and whether this call triggered an auto-disable,
+ * so callers (the delivery worker via the gateway) can emit the
+ * `endpoint.disabled` system webhook event without a separate read.
+ */
+export interface EndpointOutcomeResult {
+  /** The resulting endpoint snapshot, or `null` if the id is unknown/deleted. */
+  readonly endpoint: Endpoint | null;
+  /**
+   * `true` only when this specific call transitioned the endpoint from enabled to
+   * automatically disabled (i.e. the failure streak just crossed the threshold).
+   * Always `false` when `endpoint` is `null` or when the endpoint was already disabled.
+   */
+  readonly autoDisabled: boolean;
+}
+
+/**
  * Durable storage for endpoints, scoped by tenant.
  *
  * Asynchronous so one contract spans synchronous engines (in-memory, SQLite via
@@ -183,7 +200,7 @@ export interface EndpointStore {
     outcome: DeliveryHealthOutcome,
     nowMs: number,
     autoDisableAfterMs?: number,
-  ): Promise<Endpoint | null>;
+  ): Promise<EndpointOutcomeResult>;
   /** Delete an endpoint. Returns `true` if it existed, `false` otherwise. */
   delete(id: string): Promise<boolean>;
 }

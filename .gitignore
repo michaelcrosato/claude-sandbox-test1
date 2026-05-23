@@ -5,6 +5,10 @@ coverage/
 .DS_Store
 *.sqlite
 *.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+posthorn-data/
 .env
 .env.*
 !.env.example
