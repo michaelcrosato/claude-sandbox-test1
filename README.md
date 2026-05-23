@@ -49,6 +49,13 @@ Early foundation. Implemented so far:
   delivery per match; `ingest` accepts a message and fans it out in one call, suppressing
   re-delivery on an idempotent (deduplicated) retry. Idempotency keys are **scoped per tenant**, so
   one app's key never dedups against — or leaks — another app's message.
+- ✅ **Crash-safe fan-out (transactional outbox)** — accepting a message and recording that it
+  *owes a fan-out* is one atomic step in the store (a `fanned_out_at` outbox marker, written in the
+  same transaction). So a crash between "accepted" and "fanned out" can no longer strand a message:
+  a producer's retry re-drives the owed fan-out, and a background **`FanoutDispatcher`** sweeps any
+  message left pending (the path for fire-and-forget producers). Delivery is now guaranteed
+  *at-least-once* end-to-end — closing the one window where an accepted message could have been
+  delivered *zero* times.
 - ✅ **Apps + API-key authentication** — the tenancy/identity layer that turns `appId` from an
   opaque string into an authenticated tenant. An `App` owns one or more API keys; presenting a key's
   secret authenticates a request as that app (`authenticate` → the owning `App`). Secrets are stored

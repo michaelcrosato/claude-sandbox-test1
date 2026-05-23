@@ -42,9 +42,11 @@ export {
   IdempotencyConflictError,
   messageFingerprint,
   createMessageId,
+  DEFAULT_PENDING_FANOUT_LIMIT,
   type Message,
   type NewMessage,
   type CreateMessageResult,
+  type ListPendingFanoutOptions,
   type MessageStore,
 } from "./storage/message-store.js";
 
@@ -141,6 +143,15 @@ export {
 } from "./fanout/fanout.js";
 
 export {
+  FanoutDispatcher,
+  DEFAULT_FANOUT_GRACE_MS,
+  DEFAULT_FANOUT_BATCH_SIZE,
+  DEFAULT_FANOUT_IDLE_POLL_MS,
+  type FanoutDispatcherOptions,
+  type SweepResult,
+} from "./fanout/fanout-dispatcher.js";
+
+export {
   UnknownAppError,
   createAppId,
   createApiKeyId,
@@ -203,6 +214,7 @@ export {
   MEMORY_DATA_DIR,
   type GatewayConfig,
   type WorkerConfig,
+  type FanoutConfig,
   type Env,
 } from "./runtime/config.js";
 

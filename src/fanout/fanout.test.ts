@@ -229,6 +229,55 @@ describe("ingest", () => {
     expect(second.fanout).toBeNull();
   });
 
+  it("clears the outbox marker after a normal fan-out", async () => {
+    const env = setup();
+    await env.addEndpoint();
+    await ingest(
+      { appId: APP, eventType: "user.created", payload: "{}" },
+      { endpoints: env.endpoints, queue: env.queue, messages: env.messages },
+    );
+    // ingest fanned out and recorded it done, so nothing is left for the dispatcher.
+    expect(await env.messages.listPendingFanout()).toEqual([]);
+  });
+
+  it("re-fans a deduplicated retry whose original create never completed fan-out", async () => {
+    const env = setup();
+    const ep = await env.addEndpoint();
+    const input = {
+      appId: APP,
+      eventType: "user.created",
+      payload: "{}",
+      idempotencyKey: "k-orphan",
+    };
+
+    // Simulate a crash between accept and fan-out: accept the message directly
+    // via the store (which records it pending) with no fan-out performed.
+    const accepted = await env.messages.create(input);
+    expect(accepted.fanoutPending).toBe(true);
+    expect(await env.queue.claimDue({ nowMs: env.now(), limit: 10 })).toEqual([]);
+
+    // The producer retries the same key. ingest dedups *and* recovers the
+    // fan-out the crash skipped — rather than dropping the deliveries.
+    const retry = await ingest(input, {
+      endpoints: env.endpoints,
+      queue: env.queue,
+      messages: env.messages,
+    });
+    expect(retry.deduplicated).toBe(true);
+    expect(retry.message.id).toBe(accepted.message.id);
+    expect(retry.fanout?.matched).toBe(1);
+    expect(retry.fanout?.tasks[0]?.endpointId).toBe(ep.id);
+
+    // The marker is now cleared: a further retry does not fan out a third time.
+    const third = await ingest(input, {
+      endpoints: env.endpoints,
+      queue: env.queue,
+      messages: env.messages,
+    });
+    expect(third.deduplicated).toBe(true);
+    expect(third.fanout).toBeNull();
+  });
+
   it("delivers an ingested message end-to-end with a verifiable signature", async () => {
     const env = setup();
     const ep = await env.addEndpoint({ url: "https://hook.test/in" });

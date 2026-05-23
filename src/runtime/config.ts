@@ -18,6 +18,11 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WORKER_BATCH_SIZE,
 } from "../worker/delivery-worker.js";
+import {
+  DEFAULT_FANOUT_BATCH_SIZE,
+  DEFAULT_FANOUT_GRACE_MS,
+  DEFAULT_FANOUT_IDLE_POLL_MS,
+} from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 
 /**
@@ -55,6 +60,16 @@ export interface WorkerConfig {
   readonly visibilityTimeoutMs: number;
 }
 
+/** Validated fan-out dispatcher tunables. Mirrors the `FanoutDispatcher` options. */
+export interface FanoutConfig {
+  /** How old (ms) a pending message must be before the dispatcher treats it as an orphan. */
+  readonly graceMs: number;
+  /** Messages drained per dispatcher sweep. */
+  readonly batchSize: number;
+  /** Pause between idle dispatcher polls, in ms. */
+  readonly idlePollMs: number;
+}
+
 /** The fully-resolved, validated configuration a {@link createGateway} consumes. */
 export interface GatewayConfig {
   /** Interface to bind. See {@link DEFAULT_HOST}. */
@@ -70,6 +85,8 @@ export interface GatewayConfig {
   readonly maxBodyBytes: number;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
+  /** Fan-out dispatcher (transactional-outbox relay) tunables. */
+  readonly fanout: FanoutConfig;
 }
 
 /** A configuration value was missing-but-required or malformed. */
@@ -133,7 +150,9 @@ function readString(env: Env, key: string, fallback: string): string {
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
  * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
- * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`.
+ * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
+ * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
+ * `POSTHORN_FANOUT_IDLE_POLL_MS`.
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -164,6 +183,20 @@ export function loadConfig(env: Env): GatewayConfig {
         "POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS",
         DEFAULT_VISIBILITY_TIMEOUT_MS,
         { min: 1 },
+      ),
+    }),
+    fanout: Object.freeze<FanoutConfig>({
+      graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
+        min: 0,
+      }),
+      batchSize: readInt(env, "POSTHORN_FANOUT_BATCH_SIZE", DEFAULT_FANOUT_BATCH_SIZE, {
+        min: 1,
+      }),
+      idlePollMs: readInt(
+        env,
+        "POSTHORN_FANOUT_IDLE_POLL_MS",
+        DEFAULT_FANOUT_IDLE_POLL_MS,
+        { min: 0 },
       ),
     }),
   };

@@ -26,6 +26,7 @@ import { SqliteMessageStore } from "../storage/sqlite-store.js";
 import { SqliteDeliveryQueue } from "../queue/sqlite-queue.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
+import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { createHttpServer } from "../http/server.js";
 import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
@@ -57,6 +58,12 @@ export interface Gateway {
   readonly queue: DeliveryQueue;
   /** The delivery loop (started by {@link Gateway.start}, halted by {@link Gateway.stop}). */
   readonly worker: DeliveryWorker;
+  /**
+   * The fan-out dispatcher: the transactional-outbox relay that recovers any
+   * message accepted but not yet fanned out (e.g. a crash between the two).
+   * Started/halted alongside the worker.
+   */
+  readonly dispatcher: FanoutDispatcher;
   /** The `node:http` server (already constructed; {@link Gateway.start} makes it listen). */
   readonly httpServer: Server;
   /**
@@ -130,12 +137,22 @@ export function createGateway(config: GatewayConfig): Gateway {
     idlePollMs: config.worker.idlePollMs,
   });
 
+  const dispatcher = new FanoutDispatcher({
+    messages,
+    endpoints,
+    queue,
+    graceMs: config.fanout.graceMs,
+    batchSize: config.fanout.batchSize,
+    idlePollMs: config.fanout.idlePollMs,
+  });
+
   const httpServer = createHttpServer(
     { apps, endpoints, messages, queue },
     { maxBodyBytes: config.maxBodyBytes },
   );
 
   let runPromise: Promise<void> | null = null;
+  let dispatcherRunPromise: Promise<void> | null = null;
   let started = false;
   let stopped = false;
 
@@ -152,10 +169,12 @@ export function createGateway(config: GatewayConfig): Gateway {
         resolve();
       });
     });
-    // Start the delivery loop. run() resolves only when stop() is called; hold the
-    // promise so stop() can await a clean drain. Its own resilience routes tick
-    // errors to onError, so this never rejects under normal operation.
+    // Start the delivery loop and the outbox dispatcher. Each run() resolves only
+    // when its stop() is called; hold the promises so stop() can await a clean
+    // drain. Their resilience routes errors to onError, so they never reject under
+    // normal operation.
     runPromise = worker.run();
+    dispatcherRunPromise = dispatcher.run();
 
     const address = httpServer.address();
     if (address === null || typeof address === "string") {
@@ -171,11 +190,14 @@ export function createGateway(config: GatewayConfig): Gateway {
     }
     stopped = true;
     worker.stop();
-    if (runPromise !== null) {
-      // run() swallows tick errors via its onError path; guard anyway so a stray
-      // rejection never masks the rest of shutdown.
-      await runPromise.catch(() => undefined);
-    }
+    dispatcher.stop();
+    // run() swallows errors via its onError path; guard anyway so a stray
+    // rejection never masks the rest of shutdown.
+    await Promise.all(
+      [runPromise, dispatcherRunPromise].map((p) =>
+        p === null ? Promise.resolve() : p.catch(() => undefined),
+      ),
+    );
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());
       // Force-close idle keep-alive sockets so close() does not hang waiting on them.
@@ -189,5 +211,15 @@ export function createGateway(config: GatewayConfig): Gateway {
     queue.close();
   };
 
-  return { apps, endpoints, messages, queue, worker, httpServer, start, stop };
+  return {
+    apps,
+    endpoints,
+    messages,
+    queue,
+    worker,
+    dispatcher,
+    httpServer,
+    start,
+    stop,
+  };
 }

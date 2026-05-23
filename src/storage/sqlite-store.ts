@@ -29,7 +29,9 @@ import {
   isIdempotencyExpired,
   messageFingerprint,
   normalizeNewMessage,
+  resolvePendingFanoutQuery,
   type CreateMessageResult,
+  type ListPendingFanoutOptions,
   type Message,
   type MessageStore,
   type NewMessage,
@@ -71,6 +73,8 @@ interface MessageRow {
   readonly event_type: string;
   readonly payload: string;
   readonly created_at: number;
+  /** Outbox marker: NULL while the message still owes a fan-out, else the time it was fanned out. */
+  readonly fanned_out_at: number | null;
 }
 
 /** Shape of a row from the `idempotency_keys` table. */
@@ -104,6 +108,8 @@ export class SqliteMessageStore implements MessageStore {
   readonly #insertIdempotency: StatementSync;
   readonly #deleteIdempotency: StatementSync;
   readonly #countMessages: StatementSync;
+  readonly #markFannedOut: StatementSync;
+  readonly #listPendingFanout: StatementSync;
 
   constructor(options: SqliteStoreOptions = {}) {
     const {
@@ -124,9 +130,13 @@ export class SqliteMessageStore implements MessageStore {
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec("PRAGMA foreign_keys = ON");
     this.#db.exec(SCHEMA);
+    // Bring a database created by a pre-outbox version up to schema, then build
+    // the index that depends on the (now-guaranteed) outbox column.
+    this.#migrateFanoutColumn();
+    this.#db.exec(INDEXES);
 
     this.#selectMessage = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at FROM messages WHERE id = ?",
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at FROM messages WHERE id = ?",
     );
     this.#selectIdempotency = this.#db.prepare(
       "SELECT message_id, fingerprint, stored_at FROM idempotency_keys WHERE app_id = ? AND key = ?",
@@ -142,6 +152,38 @@ export class SqliteMessageStore implements MessageStore {
     );
     this.#countMessages = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM messages",
+    );
+    // Set the marker once: `fanned_out_at IS NULL` makes a repeated call a no-op
+    // (idempotent) and preserves the first fan-out time.
+    this.#markFannedOut = this.#db.prepare(
+      "UPDATE messages SET fanned_out_at = ? WHERE id = ? AND fanned_out_at IS NULL",
+    );
+    // Oldest-first; the partial index on (created_at, id) WHERE fanned_out_at IS
+    // NULL keeps this cheap even as `messages` grows unbounded.
+    this.#listPendingFanout = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+        " FROM messages WHERE fanned_out_at IS NULL AND created_at <= ?" +
+        " ORDER BY created_at ASC, id ASC LIMIT ?",
+    );
+  }
+
+  /**
+   * Ensure the `fanned_out_at` outbox column exists. A database created by a
+   * pre-outbox build has the column missing (its `CREATE TABLE IF NOT EXISTS` is
+   * a no-op on the existing table); add it, then backfill existing rows as
+   * **already fanned out** so an upgrade does not re-deliver the entire history.
+   * For a fresh database the column is in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateFanoutColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(messages)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "fanned_out_at")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE messages ADD COLUMN fanned_out_at INTEGER");
+    this.#db.exec(
+      "UPDATE messages SET fanned_out_at = created_at WHERE fanned_out_at IS NULL",
     );
   }
 
@@ -205,7 +247,13 @@ export class SqliteMessageStore implements MessageStore {
         // messages is never pruned, so a live binding always resolves; guard
         // anyway rather than assert.
         if (row !== undefined) {
-          return { message: rowToMessage(row), deduplicated: true };
+          // A retry of an orphaned create (accepted, but its fan-out never
+          // completed) still owes a fan-out; report it so ingest can recover.
+          return {
+            message: rowToMessage(row),
+            deduplicated: true,
+            fanoutPending: row.fanned_out_at === null,
+          };
         }
       }
       // Absent or expired: drop any stale binding and fall through to create.
@@ -218,6 +266,9 @@ export class SqliteMessageStore implements MessageStore {
         `generated message id "${id}" collides with an existing one`,
       );
     }
+    // fanned_out_at is left unset (NULL) — the message owes a fan-out. Inserting
+    // it in this same transaction as the message makes "accepted" and "needs
+    // fan-out" a single atomic fact: the read side of the transactional outbox.
     this.#insertMessage.run(id, appId, key, eventType, payload, nowMs);
     if (key !== null) {
       this.#insertIdempotency.run(appId, key, id, fingerprint, nowMs);
@@ -232,6 +283,7 @@ export class SqliteMessageStore implements MessageStore {
         createdAt: nowMs,
       },
       deduplicated: false,
+      fanoutPending: true,
     };
   }
 
@@ -259,6 +311,24 @@ export class SqliteMessageStore implements MessageStore {
     return row === undefined ? null : rowToMessage(row);
   }
 
+  async markFannedOut(id: string): Promise<void> {
+    this.#markFannedOut.run(this.#now(), id);
+  }
+
+  async listPendingFanout(
+    options?: ListPendingFanoutOptions,
+  ): Promise<Message[]> {
+    const { limit, createdAtOrBefore } = resolvePendingFanoutQuery(options);
+    // SQLite has no Infinity for an INTEGER column; cap at the largest safe
+    // integer, which dwarfs any epoch-ms timestamp ("no age cap").
+    const cutoff = Number.isFinite(createdAtOrBefore)
+      ? Math.floor(createdAtOrBefore)
+      : Number.MAX_SAFE_INTEGER;
+    const rows = this.#listPendingFanout.all(cutoff, limit) as unknown as
+      | MessageRow[];
+    return rows.map(rowToMessage);
+  }
+
   /** Close the underlying database handle. Idempotent-safe to call once. */
   close(): void {
     this.#db.close();
@@ -273,6 +343,11 @@ export class SqliteMessageStore implements MessageStore {
  * Idempotency keys are scoped per tenant: the binding's primary key is the
  * composite `(app_id, key)`, so the same key in two apps is two independent
  * rows and one tenant's key can never resolve another tenant's message.
+ *
+ * `messages.fanned_out_at` is the transactional outbox marker: NULL means the
+ * message still owes a fan-out (it is recorded NULL in the same insert that
+ * accepts the message); a timestamp means its fan-out was enqueued. A database
+ * created before this column existed is migrated by {@link SqliteMessageStore.#migrateFanoutColumn}.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -281,7 +356,8 @@ CREATE TABLE IF NOT EXISTS messages (
   idempotency_key TEXT,
   event_type      TEXT    NOT NULL,
   payload         TEXT    NOT NULL,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  fanned_out_at   INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -293,4 +369,15 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   PRIMARY KEY (app_id, key),
   FOREIGN KEY (message_id) REFERENCES messages (id)
 ) STRICT;
+`;
+
+/**
+ * Indexes, created after {@link SqliteMessageStore.#migrateFanoutColumn} so the
+ * `fanned_out_at` column is guaranteed to exist. A **partial** index over only
+ * the unfanned rows keeps `listPendingFanout` (and the outbox sweep) an indexed
+ * lookup over a near-empty set, even though `messages` itself grows unbounded.
+ */
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_messages_pending_fanout
+  ON messages (created_at, id) WHERE fanned_out_at IS NULL;
 `;

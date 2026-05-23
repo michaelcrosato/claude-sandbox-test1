@@ -197,10 +197,26 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     a real socket, and a full provision→ingest→deliver→**verify** round-trip runs through the built
     ESM (incl. the `node:sqlite` `createRequire` path); an in-process suite adds durability across a
     restart (an endpoint created before `stop()` survives a fresh `createGateway`).
+  - **Transactional outbox ✅ (this tick):** the fix that closes the one known correctness gap in
+    the core path — `src/fanout/fanout-dispatcher.ts` + outbox state in the message store. Accepting
+    a message and recording that it *owes a fan-out* is now a single atomic step in the store (a
+    `fanned_out_at` marker, written in the same transaction that inserts the message — exposed as
+    `CreateMessageResult.fanoutPending` + `MessageStore.markFannedOut`/`listPendingFanout`). So the
+    old window — message stored, but its idempotent retry dedups and *skips* fan-out, stranding
+    deliveries — is gone: the marker survives a crash. It is drained two ways: (1) a producer's retry
+    sees `fanoutPending` and re-drives the owed fan-out (`ingest`); (2) a **`FanoutDispatcher`** (the
+    structural twin of the delivery worker — `sweepOnce`/`run`/`stop`, fully fake-clock-testable)
+    sweeps any message left pending past a grace period, the path for fire-and-forget producers that
+    never retry. The dispatcher reuses the pure `fanOut`, so routing can't drift; it is wired into the
+    gateway and runs alongside the worker. A SQLite **migration** brings a pre-outbox database up to
+    schema, backfilling existing rows as already-fanned-out so an upgrade never re-delivers history.
+    **Net guarantee:** end-to-end delivery is now *at-least-once* (the residual being a possible
+    duplicate if a crash strikes between the queue enqueue and the cross-store marker-clear — the
+    queue's existing at-least-once contract, covered by receiver-side dedup on the stable message id);
+    the previous gap allowed *zero*-once. Proven through the compiled `dist` (orphan → dispatcher
+    sweep → worker → **verify**) and a running-gateway end-to-end test.
   - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface; an admin/
-    control-plane route for app/key provisioning; per-key `lastUsedAt`; and the **transactional
-    outbox** that makes ingest's accept-and-fan-out atomic (a crash between create and fan-out can
-    still strand deliveries — the one known correctness gap in the core path).
+    control-plane route for app/key provisioning; and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ landed with the
   runnable gateway above. Remaining: a single **Dockerfile** image, a metrics endpoint, and operator

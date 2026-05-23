@@ -24,7 +24,6 @@ import {
 } from "../endpoints/endpoint.js";
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import type {
-  CreateMessageResult,
   Message,
   MessageStore,
   NewMessage,
@@ -161,37 +160,62 @@ export interface IngestDeps extends FanoutDeps {
 }
 
 /** The outcome of {@link ingest}: the accepted message and what fan-out did. */
-export interface IngestResult extends CreateMessageResult {
+export interface IngestResult {
+  /** The stored message — freshly created, or the one a prior call created. */
+  readonly message: Message;
+  /** `true` when an existing message was returned for a repeated idempotency key. */
+  readonly deduplicated: boolean;
   /**
-   * The fan-out result, or `null` when the create was a **deduplicated** replay
-   * — in that case the message was already fanned out by the original create, so
-   * it is deliberately *not* fanned out again (re-fanning would double-deliver).
+   * What this call's fan-out did, or `null` when no fan-out was performed —
+   * which happens only for a deduplicated replay of a message that was *already*
+   * fanned out (re-fanning would double-deliver). A first create always fans
+   * out; a deduplicated replay of an **orphaned** create (accepted but never
+   * fanned out, e.g. a crash struck between the two) is fanned out here too, so
+   * `fanout` is non-`null` even though `deduplicated` is `true`.
    */
   readonly fanout: FanoutResult | null;
 }
 
 /**
  * Accept a message and fan it out — the product's headline operation, and the
- * single call a future HTTP `POST /messages` sits on. Creates the message via
- * the store (so caller idempotency keys dedup as usual), then fans it out **only
- * when the create was new**: a deduplicated create is a producer retry of an
- * already-accepted message, and the first create already fanned it out, so
- * re-fanning would double-deliver.
+ * call HTTP `POST /messages` sits on. Creates the message via the store (so
+ * caller idempotency keys dedup as usual), then fans it out exactly when the
+ * store reports the fan-out is **still owed** (`fanoutPending`): always for a
+ * fresh create, and for a deduplicated retry whose original was accepted but
+ * never completed its fan-out. A deduplicated retry of an already-fanned message
+ * is *not* re-fanned (that would double-deliver).
  *
- * Honest limitation (v1): the create and the fan-out are not a single atomic
- * unit. A crash *after* the message is stored but *before* fan-out finishes
- * leaves a message whose retry will dedup and skip fan-out — i.e. some of its
- * deliveries are never enqueued. The robust fix is a transactional outbox
- * (enqueue within the create's transaction); it is deferred. Until then, fan-out
- * is best-effort-after-accept, which is the right default for the common path
- * (no crash) and never *double*-creates a message.
+ * ## Crash consistency (the transactional outbox)
+ *
+ * Accepting the message and recording that it *owes a fan-out* is a single
+ * atomic step inside the store (the message row carries the outbox marker,
+ * written in the same transaction). So the old crash window — message stored,
+ * but its retry dedups and skips fan-out, stranding deliveries — is closed: the
+ * marker survives the crash. It is drained two ways: (1) a producer's retry sees
+ * `fanoutPending` and re-drives fan-out here; (2) a {@link FanoutDispatcher}
+ * sweeps any message left pending (the path for fire-and-forget producers that
+ * never retry). After a successful fan-out the marker is cleared via
+ * {@link MessageStore.markFannedOut}.
+ *
+ * Residual (inherent, not a regression): fan-out enqueues into the queue and
+ * then clears the marker in the store — two different databases, so a crash
+ * *between* them re-fans on recovery and can enqueue a duplicate delivery. That
+ * is the queue's existing **at-least-once** contract, which is exactly why every
+ * message carries a stable id for the receiver to dedup on (Standard Webhooks).
+ * What is now guaranteed is *at-least*-once; the previous gap allowed
+ * *zero*-once.
  */
 export async function ingest(
   input: NewMessage,
   deps: IngestDeps,
   options: FanoutOptions = {},
 ): Promise<IngestResult> {
-  const { message, deduplicated } = await deps.messages.create(input);
-  const fanout = deduplicated ? null : await fanOut(message, deps, options);
+  const { message, deduplicated, fanoutPending } =
+    await deps.messages.create(input);
+  if (!fanoutPending) {
+    return { message, deduplicated, fanout: null };
+  }
+  const fanout = await fanOut(message, deps, options);
+  await deps.messages.markFannedOut(message.id);
   return { message, deduplicated, fanout };
 }

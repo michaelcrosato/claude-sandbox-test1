@@ -162,6 +162,55 @@ describe("createGateway", () => {
     15_000,
   );
 
+  it(
+    "recovers an orphaned (accepted-but-unfanned) message via the dispatcher, end-to-end",
+    async () => {
+      // grace 0 so the running dispatcher sweeps the orphan immediately (no
+      // concurrent inline ingest to race in this test).
+      const gateway = createGateway(
+        memoryConfig({ POSTHORN_FANOUT_GRACE_MS: "0", POSTHORN_FANOUT_IDLE_POLL_MS: "5" }),
+      );
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const app = await gateway.apps.create({ name: "Acme" });
+      const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+      const receiver = await startReceiver();
+      receivers.push(receiver);
+
+      const createRes = await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["user.created"] }),
+      });
+      expect(createRes.status).toBe(201);
+      const { secret: endpointSecret } = (await createRes.json()) as { secret: string };
+
+      // Simulate a crash between accept and fan-out: a message accepted directly
+      // in the store (so it is pending fan-out) with nothing enqueued. No producer
+      // retry follows — only the dispatcher can save this delivery.
+      const payload = JSON.stringify({ orphan: true });
+      const accepted = await gateway.messages.create({
+        appId: app.id,
+        eventType: "user.created",
+        payload,
+      });
+      expect(accepted.fanoutPending).toBe(true);
+
+      const delivered = await receiver.received;
+      expect(delivered.body).toBe(payload);
+      expect(() =>
+        verify(endpointSecret, {
+          id: delivered.headers[HEADERS.id] as string,
+          timestamp: delivered.headers[HEADERS.timestamp] as string,
+          signature: delivered.headers[HEADERS.signature] as string,
+        }, delivered.body),
+      ).not.toThrow();
+    },
+    15_000,
+  );
+
   it("persists durable state across a restart (file-backed, no Redis)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "posthorn-gw-"));
     tempDirs.push(dir);

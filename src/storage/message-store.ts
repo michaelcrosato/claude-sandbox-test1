@@ -63,6 +63,41 @@ export interface CreateMessageResult {
    * had already been seen; `false` when a new message was created.
    */
   readonly deduplicated: boolean;
+  /**
+   * `true` when the message still owes a fan-out (its durable outbox marker is
+   * set). It is always `true` for a freshly created message, and `true` for a
+   * *deduplicated* replay whose original create was accepted but had **not** yet
+   * recorded its fan-out as done — i.e. a crash struck between accept and
+   * fan-out. It is `false` once the message has been {@link MessageStore.markFannedOut}.
+   *
+   * {@link import("../fanout/fanout.js").ingest} uses this to drive fan-out
+   * exactly when it is owed: a normal create fans out and clears the marker; a
+   * deduplicated retry of an *orphaned* create re-drives the fan-out the crash
+   * skipped, instead of silently dropping it. This is the read side of the
+   * transactional outbox — the marker is written in the same transaction that
+   * accepts the message, so "accepted" and "needs fan-out" can never disagree.
+   */
+  readonly fanoutPending: boolean;
+}
+
+/** Default page size for {@link MessageStore.listPendingFanout}. */
+export const DEFAULT_PENDING_FANOUT_LIMIT = 100;
+
+/** Filters for {@link MessageStore.listPendingFanout}. */
+export interface ListPendingFanoutOptions {
+  /**
+   * Maximum number of messages to return. Defaults to
+   * {@link DEFAULT_PENDING_FANOUT_LIMIT}. Must be a positive integer.
+   */
+  readonly limit?: number;
+  /**
+   * When set, only return messages created at or before this epoch-ms cutoff. A
+   * fan-out dispatcher passes `now - graceMs` so it never races a *healthy*
+   * in-flight ingest whose own inline fan-out is about to clear the marker — it
+   * recovers only genuine orphans older than the grace period. Omit to return
+   * all pending messages regardless of age.
+   */
+  readonly createdAtOrBefore?: number;
 }
 
 /**
@@ -93,6 +128,22 @@ export interface MessageStore {
    * leaks — another tenant's message.
    */
   getByIdempotencyKey(appId: string, key: string): Promise<Message | null>;
+  /**
+   * Mark a message's fan-out as done, clearing its outbox marker so it is no
+   * longer reported by {@link listPendingFanout} and a later deduplicated retry
+   * sees `fanoutPending: false`. Called immediately after a message's fan-out
+   * has been enqueued. Idempotent: a no-op for an unknown id or one whose marker
+   * is already cleared.
+   */
+  markFannedOut(id: string): Promise<void>;
+  /**
+   * List messages that still owe a fan-out (outbox marker set), **oldest-first**,
+   * for a fan-out dispatcher to drain. This is the durable record that closes the
+   * accept→fan-out crash window: because the marker is written in the same
+   * transaction that accepts the message, a crash before fan-out completes leaves
+   * the message here to be recovered, rather than silently undelivered.
+   */
+  listPendingFanout(options?: ListPendingFanoutOptions): Promise<Message[]>;
 }
 
 /**
@@ -206,4 +257,23 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
     );
   }
   return { appId, eventType, payload, idempotencyKey };
+}
+
+/**
+ * Resolve {@link ListPendingFanoutOptions} into a concrete `(limit, cutoff)`
+ * pair, shared by every backend so they page and filter identically. `limit`
+ * defaults to {@link DEFAULT_PENDING_FANOUT_LIMIT} and must be a positive
+ * integer; an absent `createdAtOrBefore` becomes `+Infinity` (no age cap).
+ */
+export function resolvePendingFanoutQuery(
+  options: ListPendingFanoutOptions = {},
+): { limit: number; createdAtOrBefore: number } {
+  const limit = options.limit ?? DEFAULT_PENDING_FANOUT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new RangeError("limit must be a positive integer");
+  }
+  return {
+    limit,
+    createdAtOrBefore: options.createdAtOrBefore ?? Number.POSITIVE_INFINITY,
+  };
 }

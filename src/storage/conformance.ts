@@ -385,5 +385,114 @@ export function describeMessageStoreContract(
         expect(repeat.message.id).toBe(first.message.id);
       });
     });
+
+    describe("outbox — fan-out tracking", () => {
+      it("marks a new message as pending fan-out and lists it (oldest-first)", async () => {
+        const { message, fanoutPending } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+        });
+        expect(fanoutPending).toBe(true);
+        const pending = await store.listPendingFanout();
+        expect(pending.map((m) => m.id)).toEqual([message.id]);
+        expect(pending[0]).toEqual(message); // the full message, not a marker view
+      });
+
+      it("clears the marker on markFannedOut, idempotently and safely on unknown ids", async () => {
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+        });
+        await store.markFannedOut(message.id);
+        expect(await store.listPendingFanout()).toEqual([]);
+        // A repeat call, and an unknown id, are harmless no-ops.
+        await store.markFannedOut(message.id);
+        await store.markFannedOut("msg_does_not_exist");
+        expect(await store.listPendingFanout()).toEqual([]);
+      });
+
+      it("reports a deduplicated retry as still pending until fan-out is marked done", async () => {
+        const input = {
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+          idempotencyKey: "k",
+        };
+        const first = await store.create(input);
+        expect(first.fanoutPending).toBe(true);
+
+        // A retry before the original's fan-out completed still owes one — this
+        // is the crash-window recovery signal ingest acts on.
+        const retry = await store.create(input);
+        expect(retry.deduplicated).toBe(true);
+        expect(retry.fanoutPending).toBe(true);
+
+        // Once the fan-out is recorded done, a further retry reports it settled
+        // and the message leaves the outbox.
+        await store.markFannedOut(first.message.id);
+        const afterDone = await store.create(input);
+        expect(afterDone.deduplicated).toBe(true);
+        expect(afterDone.fanoutPending).toBe(false);
+        expect(await store.listPendingFanout()).toEqual([]);
+      });
+
+      it("tracks messages with no idempotency key too", async () => {
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+        });
+        expect((await store.listPendingFanout()).map((m) => m.id)).toContain(
+          message.id,
+        );
+        await store.markFannedOut(message.id);
+        expect(await store.listPendingFanout()).toEqual([]);
+      });
+
+      it("honours the limit, returning the oldest pending first", async () => {
+        const ids: string[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          const { message } = await store.create({
+            appId: APP,
+            eventType: "e",
+            payload: "{}",
+          });
+          ids.push(message.id);
+          clock.advance(1);
+        }
+        expect((await store.listPendingFanout()).map((m) => m.id)).toEqual(ids);
+        expect(
+          (await store.listPendingFanout({ limit: 2 })).map((m) => m.id),
+        ).toEqual(ids.slice(0, 2));
+      });
+
+      it("filters by createdAtOrBefore so a dispatcher can skip too-fresh messages", async () => {
+        const old = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        clock.advance(10_000);
+        const fresh = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+
+        // Cutoff at the older message's creation time excludes the fresher one.
+        expect(
+          (
+            await store.listPendingFanout({
+              createdAtOrBefore: old.message.createdAt,
+            })
+          ).map((m) => m.id),
+        ).toEqual([old.message.id]);
+        // No cutoff: both, oldest-first.
+        expect((await store.listPendingFanout()).map((m) => m.id)).toEqual([
+          old.message.id,
+          fresh.message.id,
+        ]);
+      });
+
+      it("rejects a non-positive limit", async () => {
+        await expect(store.listPendingFanout({ limit: 0 })).rejects.toThrow(
+          RangeError,
+        );
+      });
+    });
   });
 }

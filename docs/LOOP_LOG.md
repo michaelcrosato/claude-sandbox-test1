@@ -4,6 +4,82 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 12: P3 — transactional outbox (close the accept→fan-out crash window)
+
+**Repo truth at start:** clean main @ `4beaa66`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **355/355**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 11: the gateway is now *runnable*, but `ingest` had **one known correctness hole** —
+its create-then-fan-out was not atomic. A crash after the message is stored but before fan-out
+completes leaves a message whose idempotent retry **dedups and skips fan-out** → some/all of its
+deliveries are *never enqueued*. For a product whose entire value is *reliable* delivery, an
+accepted message that is silently delivered **zero** times is the worst possible failure. Every
+prior tick (5×) deferred this "on principle" — runnability was upstream. Iter 11 explicitly named
+the outbox "the clearly-named next correctness tick." So it was now the unambiguous highest-leverage
+move (checklist #3: maximize systemic value), and it is exactly the deterministic, in-process-
+testable regime this loop is strongest in (Axiom 2). Chosen over the Dockerfile/SDK (additive
+packaging/DX, no correctness gain) because closing a *zero-once* delivery bug in a reliability
+product dominates.
+
+**Design — transactional outbox, faithful to the cross-store reality.** The four stores are
+separate SQLite files, so you cannot enqueue into the queue *inside* the message's transaction.
+The outbox pattern bridges exactly that: record the **intent** ("this message owes a fan-out") in
+the *same* transaction that accepts the message, then relay it. So the message store *becomes* the
+outbox.
+
+**Built this tick:**
+- **`MessageStore` contract + both backends** — `CreateMessageResult` gains `fanoutPending`; the
+  interface gains `markFannedOut(id)` (idempotent marker-clear) + `listPendingFanout({limit,
+  createdAtOrBefore})` (oldest-first drain). In-memory: a `#pendingFanout` set. SQLite: a
+  `fanned_out_at` column (NULL = owed), written NULL **in the same `BEGIN IMMEDIATE` txn** as the
+  insert (the atomic accept-and-record), a **partial index** `WHERE fanned_out_at IS NULL` so the
+  sweep stays cheap as `messages` grows unbounded, and a guarded **migration** (`PRAGMA table_info`
+  → `ALTER ADD COLUMN` + one-time backfill of pre-existing rows as *already*-fanned so an upgrade
+  never re-delivers history). Both held to the same new **conformance** block (7 cases) so semantics
+  can't drift; SQLite adds a migration test + a crash-safe outbox-replay-across-reopen test.
+- **`ingest` reworked** (`src/fanout/fanout.ts`) — fans out **iff** the store reports `fanoutPending`
+  (always for a fresh create; **true for a deduplicated retry of an orphaned create** → the retry now
+  *recovers* the skipped fan-out instead of dropping it), then `markFannedOut`. The old "honest
+  limitation: not atomic" docstring is replaced by the outbox guarantee + the residual at-least-once
+  note. `IngestResult` no longer extends `CreateMessageResult` (so it doesn't leak a stale
+  `fanoutPending`).
+- **`FanoutDispatcher`** (`src/fanout/fanout-dispatcher.ts`) — the relay, the structural twin of the
+  delivery worker: `sweepOnce()` (deterministic unit — list pending older than `graceMs`, `fanOut` +
+  `markFannedOut` each) + `run()`/`stop()` (poll loop, **backs off on no-progress** so a persistently
+  failing message can't hot-loop), every seam (clock/sleep) injected. Reuses the pure `fanOut` so
+  routing can't drift. A `graceMs` window keeps it from racing a healthy in-flight inline ingest
+  (duplicate fan-out is *safe* — at-least-once + receiver dedup — so grace is an efficiency guard, not
+  a correctness one; logged). Wired into `createGateway` (runs alongside the worker; `start`/`stop`
+  manage both) and `loadConfig` (`POSTHORN_FANOUT_GRACE_MS/_BATCH_SIZE/_IDLE_POLL_MS`).
+
+**Key decisions (honest tradeoffs):**
+- **Inline fan-out kept for the common path; dispatcher is the safety net.** ingest still fans out
+  synchronously (low latency, the HTTP 202 can report fan-out counts); the dispatcher only recovers
+  orphans. This is least-disruptive (no API contract change) and the grace period prevents the two
+  racing on the happy path.
+- **Residual at-least-once, not exactly-once.** fan-out enqueues into the queue (one DB) then clears
+  the marker (another DB); a crash between them re-fans on recovery → a possible duplicate delivery.
+  That is the queue's pre-existing at-least-once contract (receiver dedups on the stable message id).
+  What changed: the floor moved from *zero*-once to *at-least*-once. Logged, not hidden.
+- **Migration backfills old rows as fanned-out.** Adding a NULL column would mark all history "owed"
+  → a re-delivery storm on upgrade. The one-time backfill (inside the column-add branch only, never
+  on subsequent boots) prevents that.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **385/385** (was 355; +30: store conformance
+outbox ×2 backends +14, sqlite migration/replay +2, ingest +3, dispatcher +9, config +2, gateway +1
+[orphan recovered end-to-end in a *running* gateway, signature verifies]). `npm run build` clean.
+**Smoke-tested the compiled `dist`**: simulated a crash (accept, no fan-out) → `listPendingFanout`
+sees it → `FanoutDispatcher.sweepOnce` recovers it → worker delivers → signature **verifies**, all
+through production ESM incl. the `node:sqlite` `createRequire` path. Integrity + local gate: exit 0.
+The three hash-protected files were not touched.
+
+**State:** GREEN → committing to main. The core delivery path is now crash-consistent: an accepted
+message is guaranteed to be fanned out (at-least-once) even across a crash, by retry **or** by the
+dispatcher. The one known correctness gap is closed. Next tick: the **TS SDK** + **OpenAPI** over the
+HTTP surface, or the single **Dockerfile** to finish the P4 self-host packaging story.
+
+---
+
 ## 2026-05-22 — Iteration 11: P3/P4 — composition root + `posthorn` bin (the gateway actually boots)
 
 **Repo truth at start:** clean main @ `5e25f91`. Baseline re-verified before any change:

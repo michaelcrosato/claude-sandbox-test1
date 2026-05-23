@@ -19,7 +19,9 @@ import {
   isIdempotencyExpired,
   messageFingerprint,
   normalizeNewMessage,
+  resolvePendingFanoutQuery,
   type CreateMessageResult,
+  type ListPendingFanoutOptions,
   type Message,
   type MessageStore,
   type NewMessage,
@@ -58,6 +60,13 @@ export class InMemoryMessageStore implements MessageStore {
    * never dedups against, or leaks, another tenant's message.
    */
   readonly #idempotency = new Map<string, Map<string, IdempotencyEntry>>();
+  /**
+   * The outbox: ids of messages still owing a fan-out. A message joins on create
+   * and leaves on {@link markFannedOut}. The mirror of the SQLite backend's
+   * `fanned_out_at IS NULL` rows; iteration order follows `#messages` (creation
+   * order), so {@link listPendingFanout} is oldest-first.
+   */
+  readonly #pendingFanout = new Set<string>();
 
   constructor(options: InMemoryStoreOptions = {}) {
     const {
@@ -96,7 +105,13 @@ export class InMemoryMessageStore implements MessageStore {
         // The message map is the source of truth and is never pruned, so a live
         // index entry always resolves; guard anyway rather than assert.
         if (message !== undefined) {
-          return { message, deduplicated: true };
+          // A retry of an orphaned create (accepted, but its fan-out never
+          // completed) still owes a fan-out; report it so ingest can recover.
+          return {
+            message,
+            deduplicated: true,
+            fanoutPending: this.#pendingFanout.has(message.id),
+          };
         }
       }
       // Absent or expired: drop any stale binding and fall through to create.
@@ -116,6 +131,9 @@ export class InMemoryMessageStore implements MessageStore {
       createdAt: nowMs,
     };
     this.#messages.set(id, message);
+    // A new message is accepted and recorded as owing a fan-out atomically (one
+    // synchronous step here; one transaction in the SQLite backend).
+    this.#pendingFanout.add(id);
     if (key !== null) {
       this.#setIdempotency(appId, key, {
         messageId: id,
@@ -123,11 +141,33 @@ export class InMemoryMessageStore implements MessageStore {
         storedAt: nowMs,
       });
     }
-    return { message, deduplicated: false };
+    return { message, deduplicated: false, fanoutPending: true };
   }
 
   async get(id: string): Promise<Message | null> {
     return this.#messages.get(id) ?? null;
+  }
+
+  async markFannedOut(id: string): Promise<void> {
+    this.#pendingFanout.delete(id);
+  }
+
+  async listPendingFanout(
+    options?: ListPendingFanoutOptions,
+  ): Promise<Message[]> {
+    const { limit, createdAtOrBefore } = resolvePendingFanoutQuery(options);
+    const pending: Message[] = [];
+    // #messages preserves insertion (creation) order, so this is oldest-first.
+    for (const message of this.#messages.values()) {
+      if (pending.length >= limit) break;
+      if (
+        this.#pendingFanout.has(message.id) &&
+        message.createdAt <= createdAtOrBefore
+      ) {
+        pending.push(message);
+      }
+    }
+    return pending;
   }
 
   async getByIdempotencyKey(

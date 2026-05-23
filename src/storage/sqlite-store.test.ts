@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -86,6 +87,72 @@ describe("SqliteMessageStore — durability", () => {
       expect(retry.deduplicated).toBe(true);
       expect(retry.message.id).toBe(message.id);
       expect(after.size).toBe(1); // still no duplicate
+    } finally {
+      after.close();
+    }
+  });
+
+  it("migrates a pre-outbox database: adds the marker, backfilling old rows as fanned-out", async () => {
+    const dbPath = join(dir, "legacy.sqlite");
+    // Build a database with the *pre-outbox* messages schema (no fanned_out_at).
+    const { DatabaseSync } = createRequire(import.meta.url)(
+      "node:sqlite",
+    ) as typeof import("node:sqlite");
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(
+      `CREATE TABLE messages (
+         id TEXT PRIMARY KEY, app_id TEXT NOT NULL, idempotency_key TEXT,
+         event_type TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL
+       ) STRICT;`,
+    );
+    legacy
+      .prepare(
+        "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("msg_legacy", "app_1", null, "e", "{}", 1_000);
+    legacy.close();
+
+    // Opening with the current store migrates the schema in place.
+    const store = new SqliteMessageStore({ location: dbPath });
+    try {
+      // The pre-existing message is treated as already fanned out — an upgrade
+      // must not re-deliver the entire backlog.
+      expect(await store.listPendingFanout()).toEqual([]);
+      expect(await store.get("msg_legacy")).not.toBeNull();
+      // A message created after migration is pending fan-out as normal.
+      const { message, fanoutPending } = await store.create({
+        appId: "app_1",
+        eventType: "e",
+        payload: "{}",
+      });
+      expect(fanoutPending).toBe(true);
+      expect((await store.listPendingFanout()).map((m) => m.id)).toEqual([
+        message.id,
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("recovers a pending fan-out across a reopen (crash-safe outbox replay)", async () => {
+    const dbPath = join(dir, "outbox.sqlite");
+    // Accept a message, then "crash" before its fan-out is recorded done.
+    const before = new SqliteMessageStore({ location: dbPath });
+    const { message } = await before.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    before.close();
+
+    // Reattach: the message still owes a fan-out, so a dispatcher can recover it.
+    const after = new SqliteMessageStore({ location: dbPath });
+    try {
+      expect((await after.listPendingFanout()).map((m) => m.id)).toEqual([
+        message.id,
+      ]);
+      await after.markFannedOut(message.id);
+      expect(await after.listPendingFanout()).toEqual([]);
     } finally {
       after.close();
     }

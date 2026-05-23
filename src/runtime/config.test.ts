@@ -14,6 +14,11 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WORKER_BATCH_SIZE,
 } from "../worker/delivery-worker.js";
+import {
+  DEFAULT_FANOUT_BATCH_SIZE,
+  DEFAULT_FANOUT_GRACE_MS,
+  DEFAULT_FANOUT_IDLE_POLL_MS,
+} from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 
 describe("loadConfig", () => {
@@ -29,6 +34,11 @@ describe("loadConfig", () => {
         requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
         idlePollMs: DEFAULT_IDLE_POLL_MS,
         visibilityTimeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
+      },
+      fanout: {
+        graceMs: DEFAULT_FANOUT_GRACE_MS,
+        batchSize: DEFAULT_FANOUT_BATCH_SIZE,
+        idlePollMs: DEFAULT_FANOUT_IDLE_POLL_MS,
       },
     });
   });
@@ -90,6 +100,27 @@ describe("loadConfig", () => {
     });
   });
 
+  it("parses fan-out dispatcher tunables", () => {
+    const config = loadConfig({
+      POSTHORN_FANOUT_GRACE_MS: "5000",
+      POSTHORN_FANOUT_BATCH_SIZE: "250",
+      POSTHORN_FANOUT_IDLE_POLL_MS: "100",
+    });
+    expect(config.fanout).toEqual({
+      graceMs: 5000,
+      batchSize: 250,
+      idlePollMs: 100,
+    });
+  });
+
+  it("allows a fan-out grace/idle poll of 0 but rejects a zero fan-out batch size", () => {
+    expect(loadConfig({ POSTHORN_FANOUT_GRACE_MS: "0" }).fanout.graceMs).toBe(0);
+    expect(loadConfig({ POSTHORN_FANOUT_IDLE_POLL_MS: "0" }).fanout.idlePollMs).toBe(0);
+    expect(() => loadConfig({ POSTHORN_FANOUT_BATCH_SIZE: "0" })).toThrow(
+      /POSTHORN_FANOUT_BATCH_SIZE/,
+    );
+  });
+
   it("allows an idle poll of 0 but rejects a zero batch size or timeout", () => {
     expect(loadConfig({ POSTHORN_WORKER_IDLE_POLL_MS: "0" }).worker.idlePollMs).toBe(0);
     expect(() => loadConfig({ POSTHORN_WORKER_BATCH_SIZE: "0" })).toThrow(
@@ -109,6 +140,7 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.worker)).toBe(true);
+    expect(Object.isFrozen(config.fanout)).toBe(true);
     expect(() => {
       (config as { port: number }).port = 1;
     }).toThrow(TypeError);
