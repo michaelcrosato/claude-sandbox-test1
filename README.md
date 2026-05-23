@@ -166,11 +166,14 @@ Early foundation. Implemented so far:
   as a valid OpenAPI 3.1 document, with **zero runtime dependencies** (a pure builder over `node:*`).
 
 - ✅ **Per-tenant usage metering** — the metering read model a hosted control plane bills and enforces
-  quotas on (this market prices per message). `GET /v1/admin/apps/:id/usage?from=&to=` (admin-token-gated)
-  returns a tenant's message volume over an inclusive `YYYY-MM-DD` UTC date range, broken down by day,
-  with a total. Counts are **exact** — computed directly from the messages table (the source of truth),
-  riding the same index that backs message listing, rather than a separate rollup that could drift — and
-  a deduplicated retry is never double-counted. The span is capped (≤ 366 days) so a query stays bounded.
+  quotas on. It meters **both** units this market prices on: **accepted messages** *and* **delivery
+  attempts** (operations — every HTTP send, retries included, the real resource/cost unit). Both
+  `GET /v1/usage` (a tenant's own) and `GET /v1/admin/apps/:id/usage` (admin-token-gated) return, over
+  an inclusive `YYYY-MM-DD` UTC range broken down by day: a message `total`/`daily`, plus a
+  `deliveries` block (`total`/`succeeded`/`failed` + per-day). Counts are **exact** — computed directly
+  from the messages and append-only delivery-attempt logs (the sources of truth), each riding its own
+  index, rather than separate rollups that could drift — and a deduplicated retry is never
+  double-counted. The span is capped (≤ 366 days) so a query stays bounded.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -581,7 +584,8 @@ const { secret } = await admin.createApiKey(app.id); // hand `secret` to the ten
 // Change the plan later (null removes the limit); meter usage for billing:
 await admin.updateApp(app.id, { monthlyMessageQuota: 500_000 });
 const usage = await admin.getAppUsage(app.id, { from: "2026-05-01", to: "2026-05-31" });
-usage.total; // messages accepted in the (inclusive, required) UTC-day range
+usage.total;              // messages accepted in the (inclusive, required) UTC-day range
+usage.deliveries.total;   // delivery attempts (operations) made — succeeded + failed
 
 // Off-board: revoke a key, or delete the tenant (cascades its keys):
 await admin.revokeApiKey(/* keyId */ "ak_…");

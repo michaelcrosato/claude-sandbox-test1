@@ -26,6 +26,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import type { UsageRange } from "../storage/message-store.js";
 
 /**
  * The outcome of a single attempt. Narrower than the delivery {@link DeliveryStatus}
@@ -50,6 +51,16 @@ export interface DeliveryAttempt {
    * through the task table.
    */
   readonly messageId: string;
+  /**
+   * The tenant (application) this attempt was made on behalf of, mirrored from the
+   * delivered message. Denormalized onto the attempt — exactly like `messageId` and
+   * `endpointId` — so per-tenant **delivery usage** ({@link DeliveryAttemptStore.summarizeAttemptsByApp})
+   * is a single indexed range scan rather than a join through the message table. It
+   * is `null` only when the message could not be loaded at delivery time (a vanished
+   * message); such an attempt belongs to no tenant and is excluded from every
+   * per-tenant summary.
+   */
+  readonly appId: string | null;
   /** The destination endpoint, mirrored from the task; `null` if the task had none. */
   readonly endpointId: string | null;
   /**
@@ -83,6 +94,12 @@ export interface DeliveryAttempt {
 export interface NewDeliveryAttempt {
   readonly taskId: string;
   readonly messageId: string;
+  /**
+   * The tenant the delivered message belongs to. Defaults to `null` when omitted —
+   * the worker passes the loaded message's `appId`, or `null` if the message had
+   * vanished. A `null`-tenant attempt is excluded from per-tenant usage.
+   */
+  readonly appId?: string | null;
   readonly endpointId?: string | null;
   readonly attemptNumber: number;
   readonly outcome: DeliveryAttemptOutcome;
@@ -110,6 +127,63 @@ export interface DeliveryAttemptStore {
    * `GET /v1/messages/:id/attempts`.
    */
   listByMessage(messageId: string): Promise<readonly DeliveryAttempt[]>;
+  /**
+   * Summarize a tenant's **delivery-attempt usage** over the half-open epoch-ms range
+   * `[range.fromMs, range.toMs)`, broken down by **UTC calendar day** — the *operations*
+   * read model a hosted control plane bills on, the companion to
+   * {@link import("../storage/message-store.js").MessageStore.summarizeUsageByApp}
+   * (accepted messages). Where messages count what a tenant *sent*, this counts what
+   * Posthorn actually *did* — every HTTP delivery attempt, retries included — which is
+   * the real resource/cost unit incumbents meter ("operations").
+   *
+   * Each recorded attempt counts once; the per-day and grand totals split into
+   * `succeeded` / `failed` so a dashboard shows both volume and delivery health.
+   * Scoped to `appId` via the denormalized {@link DeliveryAttempt.appId}: attempts with
+   * a `null` tenant (a vanished message) belong to no app and are never counted.
+   * Computed straight from the append-only attempts log — the source of truth, so the
+   * count is always exact with no separate rollup to drift — riding a `(app_id,
+   * attempted_at)` index so it stays a bounded range scan as the log grows. Shares the
+   * message store's {@link UsageRange} and UTC-day bucketing, so the two usage views
+   * line up day-for-day and cannot drift.
+   */
+  summarizeAttemptsByApp(
+    appId: string,
+    range: UsageRange,
+  ): Promise<AttemptUsageSummary>;
+}
+
+/** One UTC calendar day's delivery-attempt counts for a tenant. */
+export interface AttemptUsageDay {
+  /** The UTC day, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Total delivery attempts made for the tenant on this day (within the range). */
+  readonly attempts: number;
+  /** Of those, attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Of those, attempts that failed (non-2xx, transport, or pre-flight). */
+  readonly failed: number;
+}
+
+/**
+ * A tenant's delivery-attempt usage over a range — the *operations* metering/billing
+ * read model (the delivery-side companion to the message-side
+ * {@link import("../storage/message-store.js").UsageSummary}).
+ */
+export interface AttemptUsageSummary {
+  /** The tenant the summary is for. */
+  readonly appId: string;
+  /** The query's inclusive lower bound (epoch ms), echoed back. */
+  readonly fromMs: number;
+  /** The query's exclusive upper bound (epoch ms), echoed back. */
+  readonly toMs: number;
+  /** Total attempts across the whole range (the billable operations count). */
+  readonly total: number;
+  /** Of `total`, attempts that succeeded. */
+  readonly succeeded: number;
+  /** Of `total`, attempts that failed. */
+  readonly failed: number;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
+  readonly daily: readonly AttemptUsageDay[];
 }
 
 /** Prefix on generated attempt ids. */
@@ -128,6 +202,7 @@ export function createAttemptId(): string {
 export interface NormalizedNewAttempt {
   readonly taskId: string;
   readonly messageId: string;
+  readonly appId: string | null;
   readonly endpointId: string | null;
   readonly attemptNumber: number;
   readonly outcome: DeliveryAttemptOutcome;
@@ -149,6 +224,10 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
   }
   if (typeof messageId !== "string" || messageId.length === 0) {
     throw new TypeError("messageId must be a non-empty string");
+  }
+  const appId = input.appId ?? null;
+  if (appId !== null && (typeof appId !== "string" || appId.length === 0)) {
+    throw new TypeError("appId must be a non-empty string when provided");
   }
   const endpointId = input.endpointId ?? null;
   if (
@@ -180,6 +259,7 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
   return {
     taskId,
     messageId,
+    appId,
     endpointId,
     attemptNumber: input.attemptNumber,
     outcome: input.outcome,

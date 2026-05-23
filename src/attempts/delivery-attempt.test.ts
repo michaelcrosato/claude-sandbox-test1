@@ -32,6 +32,7 @@ describe("normalizeNewAttempt", () => {
     expect(normalizeNewAttempt(input())).toEqual({
       taskId: "dtask_1",
       messageId: "msg_1",
+      appId: null,
       endpointId: null,
       attemptNumber: 1,
       outcome: "succeeded",
@@ -60,6 +61,13 @@ describe("normalizeNewAttempt", () => {
   it("rejects an empty endpointId but allows null", () => {
     expect(() => normalizeNewAttempt(input({ endpointId: "" }))).toThrow(TypeError);
     expect(normalizeNewAttempt(input({ endpointId: null })).endpointId).toBeNull();
+  });
+
+  it("rejects an empty appId but allows null or a value", () => {
+    expect(() => normalizeNewAttempt(input({ appId: "" }))).toThrow(TypeError);
+    expect(normalizeNewAttempt(input({ appId: null })).appId).toBeNull();
+    expect(normalizeNewAttempt(input()).appId).toBeNull();
+    expect(normalizeNewAttempt(input({ appId: "app_42" })).appId).toBe("app_42");
   });
 
   it("rejects a non-positive or non-integer attemptNumber", () => {

@@ -20,11 +20,17 @@ import type {
 import {
   createAttemptId,
   normalizeNewAttempt,
+  type AttemptUsageDay,
+  type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptOutcome,
   type DeliveryAttemptStore,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
+import {
+  resolveUsageRange,
+  type UsageRange,
+} from "../storage/message-store.js";
 
 // Loaded through createRequire rather than a static `import ... from
 // "node:sqlite"`: it is a genuine Node builtin, but bundlers whose builtin lists
@@ -50,6 +56,7 @@ interface AttemptRow {
   readonly id: string;
   readonly task_id: string;
   readonly message_id: string;
+  readonly app_id: string | null;
   readonly endpoint_id: string | null;
   readonly attempt_number: number;
   readonly outcome: string;
@@ -64,6 +71,7 @@ function rowToAttempt(row: AttemptRow): DeliveryAttempt {
     id: row.id,
     taskId: row.task_id,
     messageId: row.message_id,
+    appId: row.app_id,
     endpointId: row.endpoint_id,
     attemptNumber: Number(row.attempt_number),
     outcome: row.outcome as DeliveryAttemptOutcome,
@@ -82,6 +90,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
   readonly #insert: StatementSync;
   readonly #selectByMessage: StatementSync;
   readonly #countAll: StatementSync;
+  readonly #summarizeByApp: StatementSync;
 
   constructor(options: SqliteDeliveryAttemptStoreOptions = {}) {
     const { location = ":memory:", generateId = createAttemptId } = options;
@@ -93,12 +102,13 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#db.exec("PRAGMA journal_mode = WAL");
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec(SCHEMA);
+    this.#migrateAppIdColumn();
 
     this.#insert = this.#db.prepare(
       `INSERT INTO delivery_attempts
-         (id, task_id, message_id, endpoint_id, attempt_number, outcome,
+         (id, task_id, message_id, app_id, endpoint_id, attempt_number, outcome,
           response_status, error, duration_ms, attempted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // All attempts for one message, oldest-first (rowid = record order). Backed by
     // idx_delivery_attempts_message so it stays cheap as the log grows unbounded.
@@ -107,6 +117,49 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     );
     this.#countAll = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM delivery_attempts",
+    );
+    // Per-tenant delivery-attempt usage grouped by UTC day, split by outcome. Integer
+    // division `attempted_at / 1000` yields epoch seconds (attempted_at is INTEGER ms);
+    // `date(…, 'unixepoch')` renders the UTC `YYYY-MM-DD`, mirroring the shared utcDayKey
+    // rule. `app_id = ?` excludes NULL-tenant rows (a vanished message) — SQL NULL never
+    // equals a value — matching the in-memory `=== appId`. The half-open [from, to) range
+    // rides idx_delivery_attempts_app (app_id, attempted_at).
+    this.#summarizeByApp = this.#db.prepare(
+      "SELECT date(attempted_at / 1000, 'unixepoch') AS day, COUNT(*) AS n," +
+        " SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) AS ok," +
+        " SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS bad" +
+        " FROM delivery_attempts" +
+        " WHERE app_id = ? AND attempted_at >= ? AND attempted_at < ?" +
+        " GROUP BY day ORDER BY day ASC",
+    );
+  }
+
+  /**
+   * Ensure the `app_id` column and its per-tenant index exist. A database created by a
+   * pre-tenant-usage build has the column missing (its `CREATE TABLE IF NOT EXISTS` was
+   * a no-op on the existing table); add it nullable so the upgrade is seamless. Existing
+   * rows keep `app_id = NULL` — they predate per-tenant delivery metering and are simply
+   * never counted in a per-tenant summary (honest: the data to attribute them was never
+   * recorded). For a fresh database the column is already in {@link SCHEMA} and the ALTER
+   * is skipped.
+   *
+   * The companion `(app_id, attempted_at)` index is deliberately **not** in {@link SCHEMA}
+   * and is created here, unconditionally and idempotently, *after* the column is
+   * guaranteed to exist — because on a pre-existing table SCHEMA runs before this ALTER,
+   * so an index DDL there would reference a not-yet-existing column and fail.
+   */
+  #migrateAppIdColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_attempts)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "app_id")) {
+      this.#db.exec("ALTER TABLE delivery_attempts ADD COLUMN app_id TEXT");
+    }
+    // app_id now exists (fresh: from SCHEMA; upgraded: from the ALTER above), so the
+    // per-tenant range-scan index can be created safely on both paths.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_app" +
+        " ON delivery_attempts (app_id, attempted_at)",
     );
   }
 
@@ -123,6 +176,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
       id,
       n.taskId,
       n.messageId,
+      n.appId,
       n.endpointId,
       n.attemptNumber,
       n.outcome,
@@ -137,6 +191,32 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
   async listByMessage(messageId: string): Promise<readonly DeliveryAttempt[]> {
     const rows = this.#selectByMessage.all(messageId) as unknown as AttemptRow[];
     return rows.map(rowToAttempt);
+  }
+
+  async summarizeAttemptsByApp(
+    appId: string,
+    range: UsageRange,
+  ): Promise<AttemptUsageSummary> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const rows = this.#summarizeByApp.all(appId, fromMs, toMs) as unknown as {
+      day: string;
+      n: number;
+      ok: number;
+      bad: number;
+    }[];
+    let total = 0;
+    let succeeded = 0;
+    let failed = 0;
+    const daily: AttemptUsageDay[] = rows.map((row) => {
+      const attempts = Number(row.n);
+      const ok = Number(row.ok);
+      const bad = Number(row.bad);
+      total += attempts;
+      succeeded += ok;
+      failed += bad;
+      return { date: row.day, attempts, succeeded: ok, failed: bad };
+    });
+    return { appId, fromMs, toMs, total, succeeded, failed, daily };
   }
 
   /** Close the underlying database handle. */
@@ -155,6 +235,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   id              TEXT    PRIMARY KEY,
   task_id         TEXT    NOT NULL,
   message_id      TEXT    NOT NULL,
+  app_id          TEXT,
   endpoint_id     TEXT,
   attempt_number  INTEGER NOT NULL,
   outcome         TEXT    NOT NULL,
@@ -169,4 +250,8 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
 -- the read cheap as the log grows unbounded.
 CREATE INDEX IF NOT EXISTS idx_delivery_attempts_message
   ON delivery_attempts (message_id);
+
+-- The (app_id, attempted_at) index that backs the per-tenant usage range scan is
+-- created in #migrateAppIdColumn, not here: on a pre-tenant-usage database this SCHEMA
+-- runs before the app_id column is added, so an index DDL referencing it would fail.
 `;

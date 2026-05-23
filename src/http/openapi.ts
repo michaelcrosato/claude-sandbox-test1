@@ -1005,8 +1005,10 @@ export function buildOpenApiDocument(): OpenApiDocument {
         },
         Usage: {
           type: "object",
-          description: "A tenant's message usage over a date range — the metering/billing read model.",
-          required: ["appId", "from", "to", "total", "daily"],
+          description:
+            "A tenant's usage over a date range — the metering/billing read model: accepted " +
+            "messages (`total`/`daily`) plus delivery-attempt operations (`deliveries`).",
+          required: ["appId", "from", "to", "total", "daily", "deliveries"],
           properties: {
             appId: { type: "string" },
             from: { type: "string", format: "date", description: "Inclusive start day (UTC), echoed back." },
@@ -1019,8 +1021,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
             daily: {
               type: "array",
               items: ref("UsageDay"),
-              description: "Per-UTC-day breakdown, oldest day first; only days with at least one message.",
+              description: "Per-UTC-day message breakdown, oldest day first; only days with at least one message.",
             },
+            deliveries: ref("DeliveryUsage"),
           },
         },
         UsageDay: {
@@ -1030,6 +1033,38 @@ export function buildOpenApiDocument(): OpenApiDocument {
           properties: {
             date: { type: "string", format: "date", description: "The UTC day, `YYYY-MM-DD`." },
             messages: { type: "integer", minimum: 0, description: "Messages accepted on this day." },
+          },
+        },
+        DeliveryUsage: {
+          type: "object",
+          description:
+            "A tenant's delivery-attempt (operations) usage over the same range — every HTTP " +
+            "delivery attempt Posthorn made, retries included, split by outcome.",
+          required: ["total", "succeeded", "failed", "daily"],
+          properties: {
+            total: {
+              type: "integer",
+              minimum: 0,
+              description: "Total delivery attempts across the range (the billable operations count).",
+            },
+            succeeded: { type: "integer", minimum: 0, description: "Of `total`, attempts that reached a 2xx." },
+            failed: { type: "integer", minimum: 0, description: "Of `total`, attempts that failed." },
+            daily: {
+              type: "array",
+              items: ref("DeliveryUsageDay"),
+              description: "Per-UTC-day attempt breakdown, oldest day first; only days with at least one attempt.",
+            },
+          },
+        },
+        DeliveryUsageDay: {
+          type: "object",
+          description: "One UTC day's delivery-attempt counts.",
+          required: ["date", "attempts", "succeeded", "failed"],
+          properties: {
+            date: { type: "string", format: "date", description: "The UTC day, `YYYY-MM-DD`." },
+            attempts: { type: "integer", minimum: 0, description: "Total delivery attempts on this day." },
+            succeeded: { type: "integer", minimum: 0, description: "Of those, attempts that reached a 2xx." },
+            failed: { type: "integer", minimum: 0, description: "Of those, attempts that failed." },
           },
         },
         QuotaStatus: {

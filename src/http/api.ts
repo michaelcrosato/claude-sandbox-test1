@@ -28,7 +28,7 @@
  * | PATCH  | /v1/endpoints/:id    | Bearer | Update an endpoint (tenant-scoped).      |
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
  * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
- * | GET    | /v1/usage            | Bearer | The tenant's own message usage + quota status. |
+ * | GET    | /v1/usage            | Bearer | The tenant's own message + delivery usage and quota status. |
  * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
  * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
  * | GET    | /v1/admin/apps/:id   | Admin  | Fetch one tenant.                        |
@@ -36,7 +36,7 @@
  * | DELETE | /v1/admin/apps/:id   | Admin  | Delete a tenant (204; cascades its keys).|
  * | POST   | /v1/admin/apps/:id/keys | Admin | Mint an API key (201, secret once).     |
  * | GET    | /v1/admin/apps/:id/keys | Admin | List a tenant's keys (metadata only).   |
- * | GET    | /v1/admin/apps/:id/usage | Admin | Per-tenant message usage (metering/billing). |
+ * | GET    | /v1/admin/apps/:id/usage | Admin | Per-tenant message + delivery usage (metering/billing). |
  * | DELETE | /v1/admin/keys/:id   | Admin  | Revoke an API key (204).                 |
  *
  * `Bearer` = a tenant API key; `Admin` = the operator admin token
@@ -92,6 +92,7 @@ import {
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import type {
+  AttemptUsageSummary,
   DeliveryAttempt,
   DeliveryAttemptStore,
 } from "../attempts/delivery-attempt.js";
@@ -508,12 +509,19 @@ function apiKeyView(key: ApiKey): Record<string, unknown> {
 }
 
 /**
- * The admin view of a tenant's message usage over a date range — the metering /
- * billing read model. `from`/`to` are echoed back as the inclusive `YYYY-MM-DD` UTC
- * days the caller queried (the store works in epoch ms internally), and `daily` is
- * the per-day breakdown a usage dashboard renders.
+ * The view of a tenant's usage over a date range — the metering / billing read model,
+ * shared by the admin (`GET /v1/admin/apps/:id/usage`) and tenant (`GET /v1/usage`)
+ * routes. `from`/`to` are echoed back as the inclusive `YYYY-MM-DD` UTC days the caller
+ * queried (the store works in epoch ms internally); `total`/`daily` are the **accepted
+ * message** counts, and the `deliveries` block is the **delivery-attempt (operations)**
+ * counts — what Posthorn actually *did* (every HTTP attempt, retries included), the
+ * other half this market bills on. Both cover the same range and share the UTC-day
+ * bucketing, so a dashboard lines them up day-for-day.
  */
-function usageView(summary: UsageSummary): Record<string, unknown> {
+function usageView(
+  summary: UsageSummary,
+  deliveries: AttemptUsageSummary,
+): Record<string, unknown> {
   return {
     appId: summary.appId,
     from: utcDayKey(summary.fromMs),
@@ -521,6 +529,17 @@ function usageView(summary: UsageSummary): Record<string, unknown> {
     to: utcDayKey(summary.toMs - 1),
     total: summary.total,
     daily: summary.daily.map((day) => ({ date: day.date, messages: day.messages })),
+    deliveries: {
+      total: deliveries.total,
+      succeeded: deliveries.succeeded,
+      failed: deliveries.failed,
+      daily: deliveries.daily.map((day) => ({
+        date: day.date,
+        attempts: day.attempts,
+        succeeded: day.succeeded,
+        failed: day.failed,
+      })),
+    },
   };
 }
 
@@ -537,12 +556,13 @@ function usageView(summary: UsageSummary): Record<string, unknown> {
  */
 function tenantUsageView(
   summary: UsageSummary,
+  deliveries: AttemptUsageSummary,
   app: App,
   monthUsed: number,
   monthRange: UsageRange,
 ): Record<string, unknown> {
   return {
-    ...usageView(summary),
+    ...usageView(summary, deliveries),
     quota: {
       monthlyMessageQuota: app.monthlyMessageQuota,
       used: monthUsed,
@@ -931,13 +951,16 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ctx.req.query["from"] !== undefined || ctx.req.query["to"] !== undefined;
     const range = hasRangeQuery ? parseUsageRangeParams(ctx.req.query) : monthRange;
     const summary = await deps.messages.summarizeUsageByApp(ctx.app.id, range);
+    // The delivery-attempt (operations) breakdown over the same range — what Posthorn
+    // actually delivered for this tenant, retries included.
+    const deliveries = await deps.attempts.summarizeAttemptsByApp(ctx.app.id, range);
     // The quota block always reflects the *current* month. Reuse the summary's total
     // when the queried range already is the current month (the default — one store
     // call); only a custom range needs a second count.
     const monthUsed = hasRangeQuery
       ? (await deps.messages.summarizeUsageByApp(ctx.app.id, monthRange)).total
       : summary.total;
-    return json(200, tenantUsageView(summary, ctx.app, monthUsed, monthRange));
+    return json(200, tenantUsageView(summary, deliveries, ctx.app, monthUsed, monthRange));
   };
 
   // --- Admin / control-plane handlers ---------------------------------------
@@ -1038,11 +1061,10 @@ export function createApi(deps: ApiDeps): ApiHandler {
     if ((await deps.apps.get(appId)) === null) {
       throw new HttpError(404, "not_found", `no app with id "${appId}"`);
     }
-    const summary = await deps.messages.summarizeUsageByApp(
-      appId,
-      parseUsageRangeParams(ctx.req.query),
-    );
-    return json(200, usageView(summary));
+    const range = parseUsageRangeParams(ctx.req.query);
+    const summary = await deps.messages.summarizeUsageByApp(appId, range);
+    const deliveries = await deps.attempts.summarizeAttemptsByApp(appId, range);
+    return json(200, usageView(summary, deliveries));
   };
 
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this

@@ -37,6 +37,7 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
     await before.record({
       taskId: "t1",
       messageId: "m1",
+      appId: "app_xyz",
       endpointId: "ep_1",
       attemptNumber: 1,
       outcome: "failed",
@@ -48,7 +49,7 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
     expect(before.size).toBe(1);
     before.close();
 
-    // Reattach to the same file: the audit record survives.
+    // Reattach to the same file: the audit record survives, tenant attribution included.
     const after = new SqliteDeliveryAttemptStore({ location: dbPath });
     try {
       expect(after.size).toBe(1);
@@ -57,6 +58,7 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
         id: "datt_test_1",
         taskId: "t1",
         messageId: "m1",
+        appId: "app_xyz",
         endpointId: "ep_1",
         attemptNumber: 1,
         outcome: "failed",
@@ -65,6 +67,13 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
         durationMs: 9,
         attemptedAt: 1_700_000_000_000,
       });
+      // And per-tenant delivery usage reads back across the reopen.
+      const usage = await after.summarizeAttemptsByApp("app_xyz", {
+        fromMs: 1_700_000_000_000,
+        toMs: 1_700_000_000_001,
+      });
+      expect(usage.total).toBe(1);
+      expect(usage.failed).toBe(1);
     } finally {
       after.close();
     }

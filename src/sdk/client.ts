@@ -263,6 +263,34 @@ export interface UsageDay {
   readonly messages: number;
 }
 
+/** One UTC day's delivery-attempt counts in a {@link DeliveryUsage} breakdown. */
+export interface DeliveryUsageDay {
+  /** The UTC day, `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Total delivery attempts on this day (within the queried range). */
+  readonly attempts: number;
+  /** Of those, attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Of those, attempts that failed. */
+  readonly failed: number;
+}
+
+/**
+ * A tenant's delivery-attempt (operations) usage over the queried range — every HTTP
+ * delivery attempt Posthorn made on the tenant's behalf, retries included, the
+ * delivery-side companion to the accepted-message `total`/`daily` of {@link TenantUsage}.
+ */
+export interface DeliveryUsage {
+  /** Total delivery attempts across the range (the billable operations count). */
+  readonly total: number;
+  /** Of `total`, attempts that succeeded. */
+  readonly succeeded: number;
+  /** Of `total`, attempts that failed. */
+  readonly failed: number;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
+  readonly daily: readonly DeliveryUsageDay[];
+}
+
 /**
  * The current-month quota status block of {@link TenantUsage} — the window the
  * gateway enforces a monthly message quota over (`POST /v1/messages` → `429`).
@@ -289,8 +317,10 @@ export interface TenantUsage {
   readonly to: string;
   /** Total messages across the queried range. */
   readonly total: number;
-  /** Per-UTC-day breakdown, oldest day first; only days with at least one message. */
+  /** Per-UTC-day message breakdown, oldest day first; only days with at least one message. */
   readonly daily: readonly UsageDay[];
+  /** Delivery-attempt (operations) usage over the same range. */
+  readonly deliveries: DeliveryUsage;
   /** Live current-month quota status (independent of the queried range). */
   readonly quota: QuotaStatus;
 }

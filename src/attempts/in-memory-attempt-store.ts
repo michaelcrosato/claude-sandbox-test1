@@ -14,10 +14,17 @@
 import {
   createAttemptId,
   normalizeNewAttempt,
+  type AttemptUsageDay,
+  type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptStore,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
+import {
+  resolveUsageRange,
+  utcDayKey,
+  type UsageRange,
+} from "../storage/message-store.js";
 
 /** Construction options for {@link InMemoryDeliveryAttemptStore}. */
 export interface InMemoryDeliveryAttemptStoreOptions {
@@ -57,5 +64,39 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
       if (attempt.messageId === messageId) out.push(attempt);
     }
     return out;
+  }
+
+  async summarizeAttemptsByApp(
+    appId: string,
+    range: UsageRange,
+  ): Promise<AttemptUsageSummary> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const byDay = new Map<string, { attempts: number; succeeded: number; failed: number }>();
+    let total = 0;
+    let succeeded = 0;
+    let failed = 0;
+    for (const attempt of this.#attempts.values()) {
+      // A null-tenant attempt (vanished message) belongs to no app; `=== appId`
+      // excludes it, matching the SQLite `app_id = ?` predicate (NULL never equals).
+      if (attempt.appId !== appId) continue;
+      // Half-open [fromMs, toMs): an attempt exactly at fromMs counts; one at toMs does not.
+      if (attempt.attemptedAt < fromMs || attempt.attemptedAt >= toMs) continue;
+      const day = utcDayKey(attempt.attemptedAt);
+      const bucket = byDay.get(day) ?? { attempts: 0, succeeded: 0, failed: 0 };
+      bucket.attempts += 1;
+      total += 1;
+      if (attempt.outcome === "succeeded") {
+        bucket.succeeded += 1;
+        succeeded += 1;
+      } else {
+        bucket.failed += 1;
+        failed += 1;
+      }
+      byDay.set(day, bucket);
+    }
+    const daily: AttemptUsageDay[] = [...byDay.entries()]
+      .map(([date, c]) => ({ date, attempts: c.attempts, succeeded: c.succeeded, failed: c.failed }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    return { appId, fromMs, toMs, total, succeeded, failed, daily };
   }
 }

@@ -111,6 +111,8 @@ export {
   type NewDeliveryAttempt,
   type NormalizedNewAttempt,
   type DeliveryAttemptStore,
+  type AttemptUsageDay,
+  type AttemptUsageSummary,
 } from "./attempts/delivery-attempt.js";
 
 export {
@@ -317,6 +319,8 @@ export {
   type UpdateEndpointInput,
   type RotateEndpointSecretInput,
   type TenantUsage,
+  type DeliveryUsage,
+  type DeliveryUsageDay,
   type QuotaStatus,
   type GetUsageParams,
 } from "./sdk/client.js";
@@ -331,6 +335,8 @@ export {
   type CreatedAdminApiKey,
   type AdminUsage,
   type AdminUsageDay,
+  type AdminDeliveryUsage,
+  type AdminDeliveryUsageDay,
   type GetAppUsageParams,
 } from "./sdk/admin-client.js";
 

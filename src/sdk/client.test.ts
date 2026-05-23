@@ -341,6 +341,9 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(usage.quota.periodStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(usage.quota.resetsAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(Array.isArray(usage.daily)).toBe(true);
+    // No endpoint is configured, so nothing was delivered → an all-zero operations block,
+    // surfaced through the SDK's typed `deliveries` field.
+    expect(usage.deliveries).toEqual({ total: 0, succeeded: 0, failed: 0, daily: [] });
   });
 
   it("tolerates a trailing slash in baseUrl", async () => {

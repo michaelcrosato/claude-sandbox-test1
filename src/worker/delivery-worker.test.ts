@@ -777,6 +777,7 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
     expect(attempts[0]).toMatchObject({
       taskId: "dtask_0",
       messageId: message.id,
+      appId: "app_1",
       endpointId: "ep_1",
       attemptNumber: 1,
       outcome: "succeeded",
@@ -785,6 +786,42 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
       attemptedAt: 1_700_000_000_000,
     });
     expect(attempts[0]!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("records the delivered message's tenant (appId) on the attempt", async () => {
+    const env = setup();
+    // A message owned by a specific tenant.
+    const { message } = await env.store.create({
+      appId: "app_tenant_7",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id, endpointId: "ep_1" });
+    const { recordAttempt, attempts } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      recordAttempt,
+    }).processOnce();
+
+    expect(attempts[0]!.appId).toBe("app_tenant_7");
+  });
+
+  it("records a null tenant when the message has vanished (no appId to attribute)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    // A task whose message was never stored: #deliver loads null, so the attempt
+    // belongs to no tenant (and is excluded from per-tenant delivery usage).
+    await env.queue.enqueue({ messageId: "msg_gone", endpointId: "ep_1" });
+    const { recordAttempt, attempts } = collector();
+
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      recordAttempt,
+    }).processOnce();
+
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ appId: null, outcome: "failed" });
+    expect(attempts[0]!.error).toContain("not found");
   });
 
   it("records a failed (non-2xx) attempt with the status and error", async () => {

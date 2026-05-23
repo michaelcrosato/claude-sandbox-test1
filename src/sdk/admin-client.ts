@@ -138,9 +138,37 @@ export interface AdminUsageDay {
   readonly messages: number;
 }
 
+/** One UTC day's delivery-attempt counts in an {@link AdminDeliveryUsage} breakdown. */
+export interface AdminDeliveryUsageDay {
+  /** The UTC day, `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Total delivery attempts on this day (within the queried range). */
+  readonly attempts: number;
+  /** Of those, attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Of those, attempts that failed. */
+  readonly failed: number;
+}
+
 /**
- * A tenant's message usage over a date range — the metering / billing read model
- * returned by {@link PosthornAdminClient.getAppUsage}.
+ * A tenant's delivery-attempt (operations) usage over the queried range — the
+ * delivery-side companion to the accepted-message counts of {@link AdminUsage}.
+ */
+export interface AdminDeliveryUsage {
+  /** Total delivery attempts across the range (the billable operations count). */
+  readonly total: number;
+  /** Of `total`, attempts that succeeded. */
+  readonly succeeded: number;
+  /** Of `total`, attempts that failed. */
+  readonly failed: number;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
+  readonly daily: readonly AdminDeliveryUsageDay[];
+}
+
+/**
+ * A tenant's usage over a date range — the metering / billing read model returned by
+ * {@link PosthornAdminClient.getAppUsage}: accepted messages (`total`/`daily`) plus
+ * delivery-attempt operations (`deliveries`).
  */
 export interface AdminUsage {
   readonly appId: string;
@@ -150,8 +178,10 @@ export interface AdminUsage {
   readonly to: string;
   /** Total messages across the queried range. */
   readonly total: number;
-  /** Per-UTC-day breakdown, oldest day first; only days with at least one message. */
+  /** Per-UTC-day message breakdown, oldest day first; only days with at least one message. */
   readonly daily: readonly AdminUsageDay[];
+  /** Delivery-attempt (operations) usage over the same range. */
+  readonly deliveries: AdminDeliveryUsage;
 }
 
 /**

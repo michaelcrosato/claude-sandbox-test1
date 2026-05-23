@@ -511,11 +511,16 @@ export class DeliveryWorker {
     let response: HttpDeliveryResponse | null = null;
     let failure: string | null = null;
     let durationMs = 0;
+    // The tenant the attempt is made on behalf of, denormalized onto the audit record
+    // (the basis for per-tenant delivery-usage metering). Null until the message loads;
+    // it stays null for a vanished message, whose attempt belongs to no tenant.
+    let appId: string | null = null;
     try {
       const message = await this.#store.get(task.messageId);
       if (message === null) {
         failure = `message "${task.messageId}" not found`;
       } else {
+        appId = message.appId;
         const target = await this.#resolveEndpoint(task, message);
         if (target === null) {
           failure = `no endpoint resolved for task "${task.id}"`;
@@ -541,7 +546,7 @@ export class DeliveryWorker {
 
     // Append this attempt to the audit log before settling. Best-effort: a failed
     // record never changes the delivery outcome (see #recordDeliveryAttempt).
-    await this.#recordDeliveryAttempt(task, nowMs, {
+    await this.#recordDeliveryAttempt(task, nowMs, appId, {
       succeeded,
       responseStatus: response?.status ?? null,
       error,
@@ -565,11 +570,14 @@ export class DeliveryWorker {
    * and swallowed, so a flaky audit write never blocks or fails an otherwise-fine
    * delivery. The attempt's `attemptedAt` is the tick instant; its `attemptNumber`
    * is the claimed task's `attempts` (already incremented by `applyClaim`, so it is
-   * this attempt's 1-based number).
+   * this attempt's 1-based number); `appId` is the delivered message's tenant
+   * (`null` if the message had vanished), denormalized so per-tenant delivery usage
+   * is a single indexed scan.
    */
   async #recordDeliveryAttempt(
     task: DeliveryTask,
     attemptedAt: number,
+    appId: string | null,
     detail: {
       readonly succeeded: boolean;
       readonly responseStatus: number | null;
@@ -585,6 +593,7 @@ export class DeliveryWorker {
       await record({
         taskId: task.id,
         messageId: task.messageId,
+        appId,
         endpointId: task.endpointId,
         attemptNumber: task.attempts,
         outcome: detail.succeeded ? "succeeded" : "failed",

@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 29: P5 — per-tenant delivery (operations) usage metering
+
+**Repo truth at start:** clean main @ `a29a6b5` (iter 28, admin SDK) — a real clean baseline, not an
+interrupted tick (git clean; the iter-28 LOOP_LOG entry is present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **719/719, 33 files**, `npm run build` clean,
+integrity + local gate exit 0. Node 24.15. The GOAL→PROJECT reconciliation stands (Posthorn; the GitHub
+check is settled in PROJECT §1 — re-searching for a new project 29 ticks in would be anti-leverage).
+
+**High-leverage move chosen (checklist #3):** Meter **per-tenant delivery-attempt (operations) usage** —
+the standing-first deferred P5 item and the *delivery-side* completion of the metering arc. Reasoning,
+consistent with the iters-24–28 strategy (the sending core is mature and exhaustively tested → its marginal
+polish is low value; advancing the *profit phase* P5 is high value, the GOAL's prime filter): iters 25–27
+metered **accepted messages** and iter-28 finished the typed SDK, but Posthorn still only billed on accepts —
+yet this market's real resource/cost unit is **operations**, i.e. delivery attempts (every HTTP send, retries
+included; Svix/Convoy meter this, not just accepts). Metering only accepts under-prices the actual work and is
+a competitive gap. This was deferred ("attempts aren't tenant-indexed → wants a recording rollup"), but the
+clean fix is the project's *own* established pattern, not a rollup. It beat the alternatives on the loop's hard
+constraint, full local validatability: Stripe billing needs an external account (ungateable); the dashboard UI
+is large and hard to gate headlessly; `lastUsedAt`/attempt-pagination are narrow polish.
+
+**Decisive design call — denormalize the tenant onto the attempt, no new rollup.** The audit-log
+`DeliveryAttempt` already denormalizes `messageId` and `endpointId` "so the per-X read is a single indexed
+scan rather than a join." This adds **`appId: string | null`** for the identical reason — the worker already
+holds the loaded message at record time, so the tenant is free there (`null` only for a vanished message,
+which then belongs to no tenant and is counted for no one). A new `summarizeAttemptsByApp(appId, range)`
+returns `{total, succeeded, failed, daily[]}` over a half-open epoch-ms range, grouped by UTC day, split by
+outcome — computed straight from the append-only attempts log (source of truth, exact, no rollup to drift),
+riding a new `(app_id, attempted_at)` index, **sharing the message store's `UsageRange`/`utcDayKey`/
+`resolveUsageRange`** so the two usage views line up day-for-day and cannot drift. SQLite `app_id` is a
+nullable column via a seamless `ALTER TABLE` migration; the companion index is created **after** the migration
+(not in `SCHEMA`) — because on a pre-tenant-usage DB `SCHEMA` runs before the column is added, so an index DDL
+there would reference a missing column and fail (caught and fixed mid-build: my first version rationalized that
+ordering bug in a docstring; rewrote it correctly).
+
+**Built this tick:** `appId` on `DeliveryAttempt`/`NewDeliveryAttempt`/`NormalizedNewAttempt` +
+`normalizeNewAttempt` validation; `AttemptUsageDay`/`AttemptUsageSummary` + the `summarizeAttemptsByApp`
+contract on `DeliveryAttemptStore`; both backends (in-memory group-by; SQLite `date()` GROUP BY + SUM-by-
+outcome + migration + index); worker threads `message.appId` through `#recordDeliveryAttempt`; a purely-additive
+`deliveries` block on the shared `usageView` (lights up **both** `GET /v1/usage` and `GET /v1/admin/apps/:id/
+usage`); `DeliveryUsage`/`DeliveryUsageDay` OpenAPI schemas (forced by the bidirectional-drift + orphan-schema
+tests, referenced from `Usage`); `TenantUsage.deliveries` / `AdminUsage.deliveries` SDK wire types (each
+client's own views, per the SDK's design) + barrel exports. Docs: PROJECT.md (delivery-usage bullet ✅, removed
+from deferred), README (feature line meters both units + admin-SDK example).
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **734/734, 33 files**
+(was 719; **+15**: attempt store +12 — appId normalize/persist + the `summarizeAttemptsByApp` conformance ×2
+backends (zero/grouping/outcome-split/tenant-scope+null-exclusion/half-open/inverted-reject); worker +2
+(records the message's tenant; `null` for a vanished message); HTTP +2 populated `deliveries` on both routes
+with tenant isolation; SDK +empty/shape assertions). `npm run build` clean. Integrity gate exit 0 (three
+hash-protected files untouched); local gate exit 0. No tinypool flake this run
+([[vitest-tinypool-flaky-worker-exit]]).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway on a
+**file-backed** dir with an admin token; provisioned a quota'd tenant + minted a key entirely over HTTP via the
+built `PosthornAdminClient`; created an endpoint + sent a message via the built `PosthornClient`; the **running
+worker delivered** and the webhook **verified** against the minted secret; then **both** the admin
+(`getAppUsage`) and tenant (`getUsage`) SDKs read `deliveries.total=1, succeeded=1` over HTTP (polled past the
+best-effort attempt-record race); finally **restarted on the same `node:sqlite` files** and saw the delivery
+usage persist (durable, no Redis). Exit 0; temp script removed; git shows only the 16 intended source/test
+files (dist gitignored).
+
+**State:** GREEN → committing to main as Iteration 29. Net: Posthorn now meters **both** billable units —
+accepted messages **and** delivery operations — per tenant, exact and from source-of-truth logs, exposed on the
+tenant and admin routes and both typed SDKs; the billing read model is now complete. **Standing deferred (next
+candidates):** usage-based billing integration (Stripe; needs an external account — ungateable in the loop);
+the P5 dashboard UI (the largest remaining piece; hard to gate headlessly — a server-rendered slice is the
+likely path); per-key `lastUsedAt`; attempt-log pagination/retention; an operator deploy/monitoring guide.
+
+---
+
 ## 2026-05-23 — Iteration 28: admin / control-plane SDK (`PosthornAdminClient`)
 
 **Repo truth at start:** clean main @ `569fce5` (iter 27, tenant self-service `GET /v1/usage`) — a real clean

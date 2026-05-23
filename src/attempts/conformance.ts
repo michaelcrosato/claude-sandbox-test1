@@ -47,6 +47,7 @@ function attemptInput(
   return {
     taskId: "dtask_1",
     messageId: "msg_1",
+    appId: "app_1",
     endpointId: "ep_1",
     attemptNumber: 1,
     outcome: "succeeded",
@@ -109,6 +110,7 @@ export function describeDeliveryAttemptStoreContract(
           durationMs: 0,
           attemptedAt: 1_700_000_000_000,
         });
+        expect(attempt.appId).toBeNull();
         expect(attempt.endpointId).toBeNull();
         expect(attempt.responseStatus).toBeNull();
         expect(attempt.error).toBeNull();
@@ -143,6 +145,7 @@ export function describeDeliveryAttemptStoreContract(
       it("rejects malformed input with a TypeError", async () => {
         await expect(store.record(attemptInput({ taskId: "" }))).rejects.toThrow(TypeError);
         await expect(store.record(attemptInput({ messageId: "" }))).rejects.toThrow(TypeError);
+        await expect(store.record(attemptInput({ appId: "" }))).rejects.toThrow(TypeError);
         await expect(store.record(attemptInput({ endpointId: "" }))).rejects.toThrow(TypeError);
         await expect(store.record(attemptInput({ attemptNumber: 0 }))).rejects.toThrow(TypeError);
         await expect(store.record(attemptInput({ attemptNumber: 1.5 }))).rejects.toThrow(TypeError);
@@ -203,6 +206,75 @@ export function describeDeliveryAttemptStoreContract(
         await store.record(input);
         const [listed] = await store.listByMessage("m-x");
         expect(listed).toEqual({ id: "datt_test_1", ...normalizeNewAttempt(input) });
+      });
+    });
+
+    describe("summarizeAttemptsByApp", () => {
+      const DAY_A = Date.UTC(2023, 10, 14); // 2023-11-14T00:00:00Z
+      const DAY_B = Date.UTC(2023, 10, 15); // 2023-11-15T00:00:00Z
+      const DAY_C = Date.UTC(2023, 10, 16); // 2023-11-16T00:00:00Z
+
+      it("returns a zeroed summary for a tenant with no attempts in range", async () => {
+        const summary = await store.summarizeAttemptsByApp("app_none", {
+          fromMs: DAY_A,
+          toMs: DAY_B,
+        });
+        expect(summary).toEqual({
+          appId: "app_none",
+          fromMs: DAY_A,
+          toMs: DAY_B,
+          total: 0,
+          succeeded: 0,
+          failed: 0,
+          daily: [],
+        });
+      });
+
+      it("counts a tenant's attempts per UTC day, split by outcome, oldest day first", async () => {
+        // app_1: day A → 2 succeeded + 1 failed; day B → 1 failed.
+        await store.record(attemptInput({ appId: "app_1", outcome: "succeeded", attemptedAt: DAY_A + 1 }));
+        await store.record(attemptInput({ appId: "app_1", outcome: "succeeded", attemptedAt: DAY_A + 2 }));
+        await store.record(
+          attemptInput({ appId: "app_1", outcome: "failed", responseStatus: 500, error: "x", attemptedAt: DAY_A + 3 }),
+        );
+        await store.record(
+          attemptInput({ appId: "app_1", outcome: "failed", responseStatus: 503, error: "y", attemptedAt: DAY_B + 1 }),
+        );
+        const summary = await store.summarizeAttemptsByApp("app_1", { fromMs: DAY_A, toMs: DAY_C });
+        expect(summary.total).toBe(4);
+        expect(summary.succeeded).toBe(2);
+        expect(summary.failed).toBe(2);
+        expect(summary.daily).toEqual([
+          { date: "2023-11-14", attempts: 3, succeeded: 2, failed: 1 },
+          { date: "2023-11-15", attempts: 1, succeeded: 0, failed: 1 },
+        ]);
+      });
+
+      it("scopes to the tenant and never counts a null-tenant attempt", async () => {
+        await store.record(attemptInput({ appId: "app_1", outcome: "succeeded", attemptedAt: DAY_A + 1 }));
+        await store.record(attemptInput({ appId: "app_2", outcome: "succeeded", attemptedAt: DAY_A + 2 }));
+        // A vanished-message attempt: belongs to no tenant.
+        await store.record(
+          attemptInput({ appId: null, outcome: "failed", responseStatus: null, error: "gone", attemptedAt: DAY_A + 3 }),
+        );
+        const range = { fromMs: DAY_A, toMs: DAY_B };
+        expect((await store.summarizeAttemptsByApp("app_1", range)).total).toBe(1);
+        expect((await store.summarizeAttemptsByApp("app_2", range)).total).toBe(1);
+        // The null-tenant attempt is attributed to neither.
+      });
+
+      it("honours the half-open [from, to) range at the day boundary", async () => {
+        await store.record(attemptInput({ appId: "app_1", attemptedAt: DAY_A })); // at fromMs → included
+        await store.record(attemptInput({ appId: "app_1", attemptedAt: DAY_B })); // at toMs → excluded
+        const summary = await store.summarizeAttemptsByApp("app_1", { fromMs: DAY_A, toMs: DAY_B });
+        expect(summary.total).toBe(1);
+        expect(summary.daily).toEqual([{ date: "2023-11-14", attempts: 1, succeeded: 1, failed: 0 }]);
+      });
+
+      it("rejects an inverted range", async () => {
+        await expect(
+          store.summarizeAttemptsByApp("app_1", { fromMs: DAY_B, toMs: DAY_A }),
+        ).rejects.toThrow(RangeError);
       });
     });
   });

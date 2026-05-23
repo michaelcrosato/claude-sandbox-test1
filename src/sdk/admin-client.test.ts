@@ -489,6 +489,13 @@ describe("PosthornAdminClient end-to-end via a running gateway", () => {
       const usage = await admin.getAppUsage(app.id, { from: today, to: today });
       expect(usage.appId).toBe(app.id);
       expect(usage.total).toBe(1);
+      // The delivery-attempt (operations) block is present and typed over the admin SDK
+      // wire. Its exact count races the best-effort attempt record the worker writes just
+      // after the receiver responds, so assert shape here; populated counts are covered
+      // deterministically by the api handler tests and the compiled-dist smoke.
+      expect(typeof usage.deliveries.total).toBe("number");
+      expect(typeof usage.deliveries.succeeded).toBe("number");
+      expect(Array.isArray(usage.deliveries.daily)).toBe(true);
 
       // Revoking the minted key over the admin SDK locks the tenant out.
       const keys = await admin.listApiKeys(app.id);

@@ -388,6 +388,7 @@ describe("createApi — GET /v1/usage (tenant self-service)", () => {
     readonly secret: string;
     readonly appId: string;
     readonly messages: InMemoryMessageStore;
+    readonly attempts: InMemoryDeliveryAttemptStore;
     setNow(ms: number): void;
   }
 
@@ -406,7 +407,7 @@ describe("createApi — GET /v1/usage (tenant self-service)", () => {
     const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs });
     const app = await apps.create({ name: "Acme", monthlyMessageQuota: quota });
     const { secret } = await apps.createApiKey(app.id);
-    return { api, secret, appId: app.id, messages, setNow: (ms) => { nowMs = ms; } };
+    return { api, secret, appId: app.id, messages, attempts, setNow: (ms) => { nowMs = ms; } };
   }
 
   function usageRequest(secret: string | null, query: Record<string, string> = {}): ApiRequest {
@@ -435,6 +436,8 @@ describe("createApi — GET /v1/usage (tenant self-service)", () => {
       to: "2026-05-31",
       total: 2,
       daily: [{ date: "2026-05-15", messages: 2 }],
+      // No delivery attempts recorded → an all-zero operations block.
+      deliveries: { total: 0, succeeded: 0, failed: 0, daily: [] },
       quota: {
         monthlyMessageQuota: null,
         used: 2,
@@ -442,6 +445,25 @@ describe("createApi — GET /v1/usage (tenant self-service)", () => {
         periodStart: "2026-05-01",
         resetsAt: "2026-06-01",
       },
+    });
+  });
+
+  it("reports the tenant's delivery-attempt (operations) usage, scoped to the tenant", async () => {
+    const { api, secret, appId, attempts } = await setupUsage(null);
+    const at = Date.UTC(2026, 4, 15, 13, 0, 0); // 2026-05-15, the current month
+    // Two succeeded + one failed attempt for this tenant…
+    await attempts.record({ taskId: "t1", messageId: "m1", appId, attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: at });
+    await attempts.record({ taskId: "t2", messageId: "m2", appId, attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: at + 1 });
+    await attempts.record({ taskId: "t3", messageId: "m3", appId, attemptNumber: 2, outcome: "failed", responseStatus: 503, error: "x", durationMs: 5, attemptedAt: at + 2 });
+    // …and one for a different tenant, which must not leak in.
+    await attempts.record({ taskId: "t4", messageId: "m4", appId: "other_app", attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: at + 3 });
+
+    const b = body(await api(usageRequest(secret)));
+    expect(b.deliveries).toEqual({
+      total: 3,
+      succeeded: 2,
+      failed: 1,
+      daily: [{ date: "2026-05-15", attempts: 3, succeeded: 2, failed: 1 }],
     });
   });
 
@@ -1820,6 +1842,7 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
     readonly api: ApiHandler;
     readonly appId: string;
     readonly messages: InMemoryMessageStore;
+    readonly attempts: InMemoryDeliveryAttemptStore;
     advance(ms: number): void;
   }
 
@@ -1844,6 +1867,7 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
       api,
       appId: app.id,
       messages,
+      attempts,
       advance: (ms) => {
         nowMs += ms;
       },
@@ -1907,6 +1931,7 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
       to: "2026-05-12",
       total: 0,
       daily: [],
+      deliveries: { total: 0, succeeded: 0, failed: 0, daily: [] },
     });
   });
 
@@ -1929,12 +1954,36 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
         { date: "2026-05-10", messages: 2 },
         { date: "2026-05-11", messages: 1 },
       ],
+      deliveries: { total: 0, succeeded: 0, failed: 0, daily: [] },
     });
 
     // The `to` day is inclusive but a single-day window past it excludes the older day.
     const justDay2 = await api(usageRequest(appId, { from: "2026-05-11", to: "2026-05-11" }));
     expect(body(justDay2).total).toBe(1);
     expect(body(justDay2).daily).toEqual([{ date: "2026-05-11", messages: 1 }]);
+  });
+
+  it("reports per-tenant delivery-attempt (operations) usage over the range", async () => {
+    const { api, appId, attempts } = await setup();
+    const day1 = Date.UTC(2026, 4, 10, 8, 0, 0); // 2026-05-10
+    const day2 = Date.UTC(2026, 4, 11, 8, 0, 0); // 2026-05-11
+    // Day 1: 1 succeeded + 1 failed; day 2: 1 succeeded — for this tenant.
+    await attempts.record({ taskId: "t1", messageId: "m1", appId, attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: day1 });
+    await attempts.record({ taskId: "t1", messageId: "m1", appId, attemptNumber: 2, outcome: "failed", responseStatus: 500, error: "x", durationMs: 5, attemptedAt: day1 + 1 });
+    await attempts.record({ taskId: "t2", messageId: "m2", appId, attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: day2 });
+    // A different tenant's attempt must not leak in.
+    await attempts.record({ taskId: "t3", messageId: "m3", appId: "app_other", attemptNumber: 1, outcome: "succeeded", durationMs: 5, attemptedAt: day1 });
+
+    const b = body(await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-11" })));
+    expect(b.deliveries).toEqual({
+      total: 3,
+      succeeded: 2,
+      failed: 1,
+      daily: [
+        { date: "2026-05-10", attempts: 2, succeeded: 1, failed: 1 },
+        { date: "2026-05-11", attempts: 1, succeeded: 1, failed: 0 },
+      ],
+    });
   });
 
   it("never counts another tenant's messages", async () => {

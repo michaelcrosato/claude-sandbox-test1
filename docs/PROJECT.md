@@ -527,9 +527,8 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     dedup-once/inverted-reject), a pure handler suite (disabled→404, auth, unknown-app, the 400 family,
     correct per-day counts, tenant isolation), a running-gateway e2e (send → query usage over HTTP →
     tenant-key→401), and a **compiled-`dist` smoke** (provision+send+usage over production ESM on the
-    real `node:sqlite` file, persisting across a restart). **Deferred (next P5 steps):** per-tenant
-    *delivery* usage (attempts aren't tenant-indexed today, so this wants a recording rollup, unlike
-    messages); billing integration (Stripe) and the dashboard UI.
+    real `node:sqlite` file, persisting across a restart). The delivery-side companion —
+    per-tenant *delivery* usage — landed in iter 29 (below).
   - **Real-time monthly quota enforcement ✅ (this tick):** the *enforcement* half of metering — the
     freemium / usage-based-pricing gate that turns the read model into a billable boundary. A tenant
     (`App`) gains an optional `monthlyMessageQuota: number | null` (`null` = no limit, the default; a
@@ -586,7 +585,37 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     smoke (admin-provision a quota'd tenant over HTTP → send → SDK `getUsage` reports `used/remaining` →
     historical range returns its window while quota stays current-month → usage+quota **survive a restart**
     on the real `node:sqlite` file).
-  - Remaining: usage-based billing integration (Stripe), per-tenant *delivery* usage, and the dashboard UI.
+  - **Per-tenant delivery (operations) usage ✅ (this tick):** the *delivery-side* meter that
+    completes the billing read model. iter-25–27 metered **accepted messages**; this meters what
+    Posthorn actually *did* — every HTTP **delivery attempt**, retries included — which is the real
+    resource/cost unit incumbents bill on ("operations", e.g. Svix/Convoy), not just accepts. It was
+    the standing-first deferred P5 item, deferred because the audit-log attempt carried `messageId`
+    and `endpointId` but **not** the tenant, so a per-tenant count needed a join. The fix is the
+    project's own established pattern, not a new rollup: **denormalize `appId` onto the
+    `DeliveryAttempt`** (the worker already holds the loaded message at record time — `null` only for
+    a vanished message, which then belongs to no tenant), exactly as `messageId`/`endpointId` are
+    already denormalized "so the per-X read is a single indexed scan rather than a join." A new
+    `DeliveryAttemptStore.summarizeAttemptsByApp(appId, range)` returns `{total, succeeded, failed,
+    daily[]}` over a half-open epoch-ms range, grouped by **UTC day** and split by outcome — computed
+    straight from the append-only attempts log (the source of truth, so the count is exact with no
+    rollup to drift), riding a new `(app_id, attempted_at)` index, **sharing the message store's
+    `UsageRange` + `utcDayKey`** so the two usage views line up day-for-day and can't drift. Exposed
+    as a purely-additive `deliveries` block on **both** usage routes (`GET /v1/usage` *and*
+    `GET /v1/admin/apps/:id/usage`, which share `usageView`) and on the typed SDKs
+    (`TenantUsage.deliveries` / `AdminUsage.deliveries`); the route table + bidirectional OpenAPI
+    drift + orphan-schema tests *forced* the `DeliveryUsage`/`DeliveryUsageDay` schemas. The SQLite
+    `app_id` is a nullable column added by a seamless `ALTER TABLE` migration (pre-existing attempts
+    keep `app_id = NULL` and are simply never attributed — honest: the data was never recorded), with
+    the companion index created post-migration so a pre-tenant-usage DB upgrades cleanly. Proven by
+    the expanded attempt-store conformance suite (×2 backends: zero/grouping/outcome-split/
+    tenant-scope+null-exclusion/half-open-boundary/inverted-reject), worker tests (records the
+    message's tenant; `null` for a vanished message), pure HTTP handler tests on both routes
+    (populated per-day counts, tenant isolation, empty block), in-process SDK tests, and a
+    **compiled-`dist` smoke** (provision over HTTP → real worker delivers a verified webhook →
+    admin + tenant SDK both read `deliveries.total ≥ 1` → counts **survive a restart** on the real
+    `node:sqlite` files).
+  - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
+    loop) and the dashboard UI.
 
 ## 5. Out of scope / non-goals
 
