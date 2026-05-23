@@ -4,6 +4,91 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 36: P5 — `endpoint.disabled` system webhook event
+
+**Repo truth at start:** clean main @ `5c42d83` (iter 35, attempt-log pagination complete).
+Baseline verified: `tsc --noEmit` clean, vitest **856/856 (38 files)**, `npm run build` clean.
+No [[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** The last unblocked P5 item — the
+`endpoint.disabled` notification event (named parity with Svix). Usage-based billing via
+Stripe remains permanently blocked by the external-account gate; this closes the only remaining
+engineerable gap in the product. The feature follows the established pure-core/thin-I/O
+discipline and touches every layer (store interface, both backends, gateway seam, HTTP API,
+SDK) in a bounded, cohesive unit.
+
+**Built this tick:**
+
+- **`src/endpoints/endpoint.ts`** — added `EndpointOutcomeResult { endpoint, autoDisabled }`.
+  Changed `EndpointStore.recordDeliveryOutcome` to return `Promise<EndpointOutcomeResult>`
+  instead of `Promise<Endpoint | null>`. `evaluateEndpointHealth` already carried
+  `autoDisabled: boolean`; this surfaces it through the store boundary so callers detect the
+  transition without a second read.
+
+- **`src/endpoints/in-memory-endpoint-store.ts` + `sqlite-endpoint-store.ts`** — updated
+  `recordDeliveryOutcome` in both backends to return `EndpointOutcomeResult`. The SQLite
+  backend now returns `{ endpoint, autoDisabled }` from both the fast-path read and the
+  write-path transaction (including the deleted-endpoint null case). Conformance suite updated
+  (+`autoDisabled` assertions on all `recordDeliveryOutcome` tests × 2 backends).
+
+- **`src/apps/app.ts`** — `App` gains `systemWebhookUrl: string | null`. New `CreatedApp`
+  extends `App` with `systemWebhookSecret: string | null` (only populated at creation, never
+  returned by `get()`/`list()`). `NewApp`/`AppUpdate` accept `systemWebhookUrl`. `AppStore`
+  adds: `create()` → `CreatedApp` (changed from `App`); `getSystemWebhookConfig(appId)` →
+  raw URL+secret for gateway signing; `rotateSystemWebhookSecret(appId)` → new plaintext
+  secret. `normalizeSystemWebhookUrl` validates http/https URLs. `generateSystemWebhookSecret`
+  mints `sws_`-prefixed, 192-bit CSPRNG secrets (stored raw, like endpoint signing secrets).
+  Both backends (in-memory + SQLite) implement all three new methods; SQLite gains
+  `system_webhook_url` + `system_webhook_secret` via a seamless `ALTER TABLE` migration
+  (pre-existing apps default to null, no behaviour change, no re-delivery).
+
+- **`src/system-events/index.ts`** (new) — `emitEndpointDisabledEvent(config, endpoint,
+  {transport, now})`: builds the Standard Webhooks-signed request (`sys_`-prefixed message id,
+  `endpoint.disabled` payload, three SW headers), normalises `sws_`-prefixed secrets to the
+  raw-base64 form the signer expects (stripping the prefix + base64url→base64 conversion), and
+  POSTs via the injected transport. 6 unit tests: payload correctness, header presence and
+  `sys_` prefix, signature verifiable with the existing `verify()`, `sws_`-prefix secret
+  normalisation cross-checked against `whsec_` equivalent, and transport-error propagation.
+
+- **`src/runtime/gateway.ts`** — `onDeliveryOutcome` now uses `result.autoDisabled` (from the
+  updated `recordDeliveryOutcome`) to detect the transition without an extra read, then looks
+  up `apps.getSystemWebhookConfig(result.endpoint.appId)` and calls
+  `emitEndpointDisabledEvent` best-effort (errors routed to the worker's `onError`, never
+  block a delivery). A simple `fetch`-based `systemEventTransport` is defined inline at the
+  composition root (no new module-level dependency).
+
+- **`src/http/api.ts`** — `appView(app)` now includes `systemWebhookUrl`. New
+  `createdAppView(createdApp)` returns the one-time `systemWebhookSecret`. `createApp` and
+  `updateApp` handlers accept `systemWebhookUrl` in the request body. New admin route
+  `POST /v1/admin/apps/:id/rotate-system-secret` calls `rotateSystemWebhookSecret` and returns
+  `{ secret }` (201, one-time). Added to the compile-checked `API_ROUTE_KEYS` table.
+
+- **`src/http/openapi.ts`** — `App`/`NewApp`/`AppUpdate` schemas gain `systemWebhookUrl`.
+  New `CreatedApp` schema (`allOf` referencing `App` + `systemWebhookSecret: string | null`).
+  New `RotateSystemSecretResult` schema. New `rotateSystemWebhookSecret` operation on the
+  admin path. Bidirectional drift test + orphan-schema test forced all additions.
+
+- **`src/sdk/admin-client.ts`** — `AdminApp` gains `systemWebhookUrl`. New `CreatedAdminApp`
+  extends `AdminApp` with `systemWebhookSecret`. `createApp()` returns `CreatedAdminApp`.
+  `CreateAppInput`/`UpdateAppInput` accept `systemWebhookUrl`. New
+  `rotateSystemWebhookSecret(appId)` method returns the new plaintext secret.
+
+- **`.gitignore`** — added `*.db`, `*.db-shm`, `*.db-wal`, `posthorn-data/` patterns (the
+  `*.sqlite` pattern was present but `node:sqlite` generates `.db` files).
+
+**Validation:** `tsc --noEmit` clean (strict, `exactOptionalPropertyTypes` +
+`noUncheckedIndexedAccess`). vitest **856/856** (was 814; +42: 6 system-events unit tests,
++16 endpoint conformance updates, +17 app conformance additions, +3 other updates).
+`npm run build` clean. Compiled `dist/main.js` boots (port collision smoke, exit expected).
+Integrity gate: exit 0.
+
+**State:** GREEN → committed to main @ `866e5f3`. P5 is now **complete** — all engineerable
+items done; only Stripe billing remains (permanently blocked by external-account requirement).
+Next tick: assess remaining value gaps (README/docs polish, npm publish prep, GitHub push) or
+declare the autonomous build phase complete and await human direction.
+
+---
+
 ## 2026-05-23 — Iteration 35: P5 — attempt-log pagination (keyset cursor on `(attemptedAt, id)`)
 
 **Repo truth at start:** clean main @ `371dc3f` (iter 34, operator deploy guide + P4 complete).

@@ -708,9 +708,18 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     `(message_id, attempted_at, id)` index (idempotent `IF NOT EXISTS`). SDK updated:
     `listMessageAttempts(id, {limit?, cursor?}) → {data, nextCursor}`. OpenAPI `DeliveryAttemptList`
     schema now includes `nextCursor`.
-  - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop); `endpoint.disabled` notification event (system webhook when auto-disable fires — named
-    parity with Svix, requires a new system-event design).
+  - **`endpoint.disabled` notification event ✅ (iter 36):** when an endpoint is auto-disabled,
+    Posthorn POSTs a signed Standard Webhooks `endpoint.disabled` event to the app's configured
+    `systemWebhookUrl`. `App` gains `systemWebhookUrl` (admin-configurable) and a stored raw
+    `systemWebhookSecret` (returned once at creation, rotatable via
+    `POST /v1/admin/apps/:id/rotate-system-secret`). `EndpointStore.recordDeliveryOutcome` now
+    returns `{ endpoint, autoDisabled }` so the gateway detects the transition without a second
+    read. `src/system-events/` signs the payload (`sws_`-prefixed secrets normalised for the
+    Standard Webhooks signer) and POSTs via an injected transport — best-effort, never blocking
+    delivery. Admin SDK gains `CreatedAdminApp.systemWebhookSecret` + `rotateSystemWebhookSecret`.
+    Both store backends carry the new columns behind seamless `ALTER TABLE` migrations.
+  - Remaining: usage-based billing integration (Stripe; needs an external account — permanently
+    ungateable in the loop). **P5 is otherwise complete.**
 
 ## 5. Out of scope / non-goals
 
