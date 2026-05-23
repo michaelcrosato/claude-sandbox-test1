@@ -4,6 +4,102 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 35: P5 — attempt-log pagination (keyset cursor on `(attemptedAt, id)`)
+
+**Repo truth at start:** clean main @ `371dc3f` (iter 34, operator deploy guide + P4 complete).
+Baseline re-verified ([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **814/814 (37
+files)**, `npm run build` clean, integrity + local gate exit 0. Node 24.15. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** The **explicitly-named "next code tick"** in
+PROJECT.md — attempt-log pagination with a keyset cursor on `(attemptedAt, id)`. The prior design
+said "no pagination" on the grounds that the log is bounded by `endpoints × retry_budget`, but as
+endpoint counts and retry budgets can grow, an unbounded per-message endpoint scan under a single
+HTTP request is a latent scaling risk, and a capped keyset pager closes it. Exactly the kind of
+deterministic, dual-backend, conformance-suite-driven addition this loop is strongest at — zero new
+dependencies, zero risk to the delivery path.
+
+**Built this tick:**
+
+- **`src/attempts/delivery-attempt.ts`** — pagination primitives added to the module:
+  `DEFAULT_LIST_ATTEMPTS_LIMIT` (50), `MAX_LIST_ATTEMPTS_LIMIT` (200), `ListAttemptsOptions`
+  (`limit?`, `cursor?`), `AttemptPage` (`data`, `nextCursor`), `AttemptCursor`, `encodeAttemptCursor`
+  / `decodeAttemptCursor` (base64url `attemptedAt:id`, same idiom as the message cursor),
+  `resolveListAttemptsQuery` (shared resolver, throws `RangeError` on bad limit, `TypeError` on
+  malformed cursor — identical discipline to `resolveListMessagesQuery`), `compareAttemptsOldestFirst`
+  (the one ordering rule: `attemptedAt ASC, id ASC` tiebreak), `isAttemptAfterCursor` (keyset
+  predicate for the in-memory filter). The `DeliveryAttemptStore.listByMessage` contract updated from
+  `→ Promise<readonly DeliveryAttempt[]>` to `→ Promise<AttemptPage>`.
+
+- **`src/attempts/in-memory-attempt-store.ts`** — `listByMessage` updated: collects, sorts
+  `compareAttemptsOldestFirst`, filters by cursor (`isAttemptAfterCursor`), slices `limit+1`
+  (detect-next-page pattern), returns `{data, nextCursor}`.
+
+- **`src/attempts/sqlite-attempt-store.ts`** — `listByMessage` updated: two prepared statements
+  (`#selectByMessageFirst` for no-cursor, `#selectByMessageAfter` for keyset on `(attempted_at,
+  id)`); a new `idx_delivery_attempts_message_paged (message_id, attempted_at, id)` covering index
+  created idempotently (`IF NOT EXISTS`) in the constructor after migrations, so an existing DB gains
+  it automatically on next open — no migration script needed (pure read optimization over existing
+  rows, same discipline as prior per-message/per-app indexes). `#fetchPage` dispatches to the right
+  prepared statement; `limit+1` detect-next-page pattern, then encodes cursor from the last row.
+
+- **`src/attempts/conformance.ts`** — `listByMessage` conformance block expanded: replaces the
+  three original tests with nine: empty-page for unknown message; oldest-first order + tenant scope,
+  `nextCursor: null` when all fit; verbatim-preservation; paginate-with-limit=2 (3-attempt message,
+  2 pages); full-scan limit=1 over 4 attempts (cover all, no leaks); same-ms tiebreak by id
+  ascending; exact-multiple last-page (cursor null); limit=0 → `RangeError`; malformed cursor →
+  `TypeError`. 9 cases × 2 backends = 18 new conformance assertions.
+
+- **`src/http/api.ts`** — `parseListAttemptsParams` added (mirrors `parseListMessagesParams`:
+  absent limit/cursor omitted; bad limit → `400`; cursor passed opaquely). `listMessageAttempts`
+  handler updated: calls `deps.attempts.listByMessage(id, parseListAttemptsParams(ctx.req.query))`
+  and returns `{data: page.data.map(attemptView), nextCursor: page.nextCursor}`.
+
+- **`src/http/openapi.ts`** — `listMessageAttempts` operation updated with `?limit=` and
+  `?cursor=` parameters and a `400` response (forced by the bidirectional drift test); `DeliveryAttemptList`
+  schema updated: `required` gains `"nextCursor"`, `properties` gains a nullable `nextCursor` string.
+  `MAX_LIST_ATTEMPTS_LIMIT` imported and referenced in the parameter schema.
+
+- **`src/sdk/client.ts`** — `ListAttemptsParams` and `AttemptListPage` types added. `listMessageAttempts`
+  signature updated to `(id, params?: ListAttemptsParams) → Promise<AttemptListPage>`;
+  `URLSearchParams` used to build `?limit=&cursor=` (same pattern as `listMessages`).
+
+- **`src/dashboard/tenant-handler.ts`** — calls `listByMessage` with `{limit: MAX_LIST_ATTEMPTS_LIMIT}`
+  and destructures `.data`; the dashboard shows up to 200 attempts (bounded by endpoints × retry_budget,
+  no pagination UI needed for a developer debugging tool).
+
+**Key decisions (honest tradeoffs):**
+- **Oldest-first, `(attemptedAt, id)` cursor.** The audit log is a chronological history — oldest-first
+  is the natural read order. The `id`-descending tiebreak on messages (newest-first) is inverted here
+  to `id`-ascending (oldest-first). The cursor encodes `attemptedAt:id` in both cases; the comparators
+  and SQL predicates are mirrored symmetrically.
+- **`idx_delivery_attempts_message_paged (message_id, attempted_at, id)` covers both pages.** The new
+  index subsumes the old single-column `idx_delivery_attempts_message` for the paginated query (filter
+  on `message_id`, then sort/keyset on `(attempted_at, id)`). Both indexes coexist; the old one is kept
+  for any future non-paginated scan.
+- **Dashboard uses `MAX_LIST_ATTEMPTS_LIMIT` (200).** A developer debugging tool does not need
+  pagination UI — 200 attempts per message is ≫ any realistic `endpoints × retry_budget`. The comment
+  explains the reasoning so it is not hidden.
+- **`sqlite-attempt-store.test.ts` two lines updated.** The file unpacked a `listByMessage` result as
+  `[survived]` (array destructure) and checked `.length` directly — both now go through `.data`.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **826/826** (was 814; +12: 9 new conformance ×
+2 backends = 18, minus 6 conformance tests replaced = +12 net new). `npm run build` clean.
+**Smoke-tested the compiled `dist`** through production ESM:
+- cursor round-trip (encode → decode → equal)
+- in-memory pagination: 5 attempts, limit=2 → pages [2, 2, 1], third page `nextCursor=null`
+- SQLite pagination: 4 attempts, limit=2 → pages [2, 2], second page `nextCursor=null`, survives close+reopen
+- HTTP API over a real gateway socket: empty page, `limit=0` → 400, bad cursor → 400, `limit=201` → 400
+
+Integrity + local gate: exit 0. The three hash-protected files were not touched.
+
+**State:** GREEN → committed to main (`3f3ecf6`). The attempt-log can scale with high-volume message
+fans-out. Remaining P5 items: `endpoint.disabled` notification event (system webhook when auto-disable
+fires — requires a new system-event design) and usage-based billing integration (Stripe; needs an
+external account, ungateable in the loop).
+
+---
+
 ## 2026-05-23 — Iteration 34: P4 — operator deploy/monitoring guide (GitHub Actions CI, Docker Compose, Prometheus)
 
 **Repo truth at start:** clean main @ `41c4d31` (iter 33, per-key `lastUsedAt`) — a real clean

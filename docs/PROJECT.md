@@ -479,10 +479,9 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     stops), config tests, an HTTP-view test, and a **compiled-`dist` smoke** (migration backfill +
     auto-disable + restart persistence on the real `node:sqlite` file, and the HTTP health view over a
     running gateway, all through production ESM).
-  - **Deferred (next ticks):** per-key `lastUsedAt`; pagination/retention for the attempt log once a
-    single message's attempt count can grow large (today it is bounded by endpoints × the retry budget);
-    and an `endpoint.disabled` notification event when an endpoint is auto-disabled (Svix emits one; today
-    the disabled state is observable via the API/SDK, which a tenant polls or sees on next use).
+  - **Deferred (next ticks):** per-key `lastUsedAt` ✅ (iter 33); attempt-log pagination ✅ (iter 35);
+    `endpoint.disabled` notification event when an endpoint is auto-disabled (Svix emits one; today the
+    disabled state is observable via the API/SDK, which a tenant polls or sees on next use).
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a
@@ -703,10 +702,15 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     (no blast radius on callers), surfaced in the admin dashboard key table ("Last used" column),
     the admin SDK `AdminApiKey` type, and the OpenAPI `ApiKey` schema. Both backends (in-memory +
     SQLite with a seamless `ALTER TABLE` migration).
+  - **Attempt-log pagination ✅ (iter 35):** `GET /v1/messages/:id/attempts` is now keyset-paginated
+    oldest-first on `(attemptedAt, id)` — `?limit=` (1–200, default 50) and `?cursor=` (opaque
+    base64url). Same dual-backend + one-shared-conformance-suite discipline; SQLite gains a covering
+    `(message_id, attempted_at, id)` index (idempotent `IF NOT EXISTS`). SDK updated:
+    `listMessageAttempts(id, {limit?, cursor?}) → {data, nextCursor}`. OpenAPI `DeliveryAttemptList`
+    schema now includes `nextCursor`.
   - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop); attempt-log pagination (scaling concern — keyset cursor on `(attemptedAt, id)`, same
-    pattern as message listing, next code tick); `endpoint.disabled` notification event (system
-    webhook when auto-disable fires — named parity with Svix, requires a new system-event design).
+    loop); `endpoint.disabled` notification event (system webhook when auto-disable fires — named
+    parity with Svix, requires a new system-event design).
 
 ## 5. Out of scope / non-goals
 
