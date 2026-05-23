@@ -65,6 +65,11 @@ Early foundation. Implemented so far:
   signing secret is returned exactly once at creation and never echoed afterward. Routing/auth/domain
   logic is a pure, exhaustively-tested request→response function; the `node:http` socket plumbing is a
   thin adapter — the same pure-core/thin-I/O split as the delivery worker.
+- ✅ **Runnable gateway** — the composition root that boots the whole thing as one process: a
+  `posthorn` binary (`npm start`) reads config from the environment, opens the SQLite stores under a
+  data directory (one file per store, or `:memory:`), wires the HTTP API and the delivery worker
+  together, and serves — then shuts down gracefully on `SIGINT`/`SIGTERM`. No Redis, no Postgres, no
+  framework. `createGateway(config)` exposes the same wiring as a library for embedding/tests.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -253,34 +258,49 @@ await apps.revokeApiKey(apiKey.id);
 apps.close(); // release the database handle on shutdown
 ```
 
-## Quickstart (run it as a service)
+## Run it as a service (the gateway)
 
-Compose the stores behind the built-in HTTP server and you have a deployable webhook gateway —
-no framework, no extra dependencies. Provision a tenant + key out-of-band (the privileged
-bootstrap stays on the `AppStore`, not an open HTTP route), then your customers drive the API
-with that key.
+Build once, then start the gateway. It binds the HTTP API, starts the delivery worker, and
+persists everything to SQLite files under the data directory — a single process, no Redis.
+
+```bash
+npm install && npm run build
+POSTHORN_DATA_DIR=./posthorn-data POSTHORN_PORT=3000 npm start
+# [posthorn] listening on http://0.0.0.0:3000 (data: ./posthorn-data)
+```
+
+Configuration is environment-driven (all optional):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `POSTHORN_HOST` | `0.0.0.0` | Interface to bind (`127.0.0.1` to restrict to loopback). |
+| `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
+| `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the SQLite files, or `:memory:` for an ephemeral run. |
+| `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap (`413` beyond it). |
+| `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
+| `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout. |
+| `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when idle. |
+| `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime before an in-flight delivery is reclaimed. |
+
+Minting a tenant + API key is a privileged bootstrap with no HTTP route (there is no key yet to
+authenticate the call that creates the first key). Do it programmatically against the gateway's
+`AppStore` — from a seed script, an admin task, or by embedding `createGateway` directly:
 
 ```ts
-import {
-  SqliteAppStore,
-  SqliteEndpointStore,
-  SqliteMessageStore,
-  SqliteDeliveryQueue,
-  createHttpServer,
-} from "posthorn";
+import { createGateway, loadConfig } from "posthorn";
 
-const apps = new SqliteAppStore({ location: "./posthorn.sqlite" });
-const endpoints = new SqliteEndpointStore({ location: "./posthorn.sqlite" });
-const messages = new SqliteMessageStore({ location: "./posthorn.sqlite" });
-const queue = new SqliteDeliveryQueue({ location: "./posthorn.sqlite" });
+const gateway = createGateway(loadConfig(process.env));
+const { host, port } = await gateway.start();
 
-// One-time: mint a tenant and its API key (save the plaintext — shown once).
-const app = await apps.create({ name: "Acme" });
-const { secret } = await apps.createApiKey(app.id);
+// One-time: mint a tenant and its API key (save the plaintext — it is shown once).
+const app = await gateway.apps.create({ name: "Acme" });
+const { secret } = await gateway.apps.createApiKey(app.id);
+console.log(`provisioned ${app.id} on ${host}:${port}; key: ${secret}`);
 
-createHttpServer({ apps, endpoints, messages, queue }).listen(3000);
-// (Run a DeliveryWorker against the same queue/store/endpoints to drain deliveries.)
+// Later, on shutdown: await gateway.stop();
 ```
+
+Your customers then drive the API with that key:
 
 ```bash
 # Register a destination (the response includes the signing secret — once):

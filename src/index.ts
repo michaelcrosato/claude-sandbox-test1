@@ -193,3 +193,21 @@ export {
   type RouteMatch,
   type RouteParams,
 } from "./http/router.js";
+
+export {
+  loadConfig,
+  ConfigError,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  DEFAULT_DATA_DIR,
+  MEMORY_DATA_DIR,
+  type GatewayConfig,
+  type WorkerConfig,
+  type Env,
+} from "./runtime/config.js";
+
+export {
+  createGateway,
+  type Gateway,
+  type GatewayAddress,
+} from "./runtime/gateway.js";

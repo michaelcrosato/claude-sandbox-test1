@@ -180,11 +180,31 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     over a real socket (auth → endpoint create → ingest → worker drains → the signed delivery
     **verifies** against the endpoint secret), plus a pure in-process suite (router + handler + a
     `node:http` integration test on an ephemeral port).
+  - **Runnable gateway ✅ (this tick):** the composition root that makes the standalone-gateway
+    half of the wedge real — `src/runtime/` + `src/main.ts`. The HTTP API had only landed as a
+    `createHttpServer(deps)` *factory*; nothing instantiated the durable stores, joined them, opened
+    a socket, and started the worker, so Posthorn could be *constructed* in a test but not *run*.
+    `loadConfig(env)` is a **pure**, exhaustively-tested env→`GatewayConfig` parser (`POSTHORN_*`
+    vars, validated, frozen; no `process.env`/socket/fs access — the same pure-core discipline as the
+    HTTP handler). `createGateway(config)` is pure plumbing: it opens the four SQLite backends under
+    `dataDir` (one file per store, or `:memory:`), wires `ingest` + the worker (`storeBackedResolver`)
+    + the HTTP server, and returns a `Gateway` with `start()` (listen + run the worker; returns the
+    bound address) and an idempotent, graceful `stop()` (drain the worker, close the server's idle
+    sockets, release every SQLite handle). `src/main.ts` is the thin `posthorn` bin (shebang +
+    `npm start`): load config, boot, translate `SIGINT`/`SIGTERM` into `stop()`. The stores are
+    exposed on the `Gateway` so the keyless app/key bootstrap stays programmatic (still no HTTP
+    route). Proven end-to-end on the **compiled `dist`**: the binary boots and serves `/healthz` over
+    a real socket, and a full provision→ingest→deliver→**verify** round-trip runs through the built
+    ESM (incl. the `node:sqlite` `createRequire` path); an in-process suite adds durability across a
+    restart (an endpoint created before `stop()` survives a fresh `createGateway`).
   - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface; an admin/
     control-plane route for app/key provisioning; per-key `lastUsedAt`; and the **transactional
     outbox** that makes ingest's accept-and-fan-out atomic (a crash between create and fan-out can
     still strand deliveries — the one known correctness gap in the core path).
-- **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
+- **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
+  entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ landed with the
+  runnable gateway above. Remaining: a single **Dockerfile** image, a metrics endpoint, and operator
+  docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 
 ## 5. Out of scope / non-goals

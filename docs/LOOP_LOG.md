@@ -4,6 +4,68 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 11: P3/P4 — composition root + `posthorn` bin (the gateway actually boots)
+
+**Repo truth at start:** clean main @ `5e25f91`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **338/338**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 10: the HTTP API landed only as a **`createHttpServer(deps)` factory** — `src/index.ts`
+exports it and `createApi`, but there was **no composition root and no bootable entrypoint** (no
+`src/main.ts`, no `bin`, nothing that instantiates the SQLite stores, wires `ingest`+worker, and
+calls `.listen()`). So last tick's "the engine becomes a runnable service" built the *handler* but
+Posthorn could be *constructed in a test* and **not actually started or deployed** — the
+"standalone gateway" half of PROJECT.md's wedge ("library *or* a standalone gateway") did not exist.
+
+**High-leverage move chosen:** Build the **composition root + runnable gateway bin**. Highest-leverage
+because it converts a pile of correct modules + an inert handler factory into a *thing you can run*
+(`npm start` / `posthorn`) — the single biggest systemic step (checklist #3), and it realizes the
+missing half of the product wedge. Explicitly chosen over the **transactional outbox** (again
+deferred): you cannot meaningfully harden the crash-consistency of an ingest path on a service that
+has no way to boot — making it runnable is strictly upstream of refining its crash semantics. Kept
+fully deterministic + in-process testable (Axiom 2); zero new dependencies (`node:http`/`node:fs`/
+`node:sqlite` only), preserving the zero-dep wedge. Followed the codebase's pure-core/thin-I/O split.
+
+**Built this tick (`src/runtime/` + `src/main.ts`):**
+- `config.ts` — `loadConfig(env)`: a **pure** env→`GatewayConfig` parser (`POSTHORN_*` vars,
+  defaults imported from the worker/queue/http modules so they can't drift, integer-range validation
+  with a `ConfigError` naming the offending key, frozen result). No `process.env`/socket/fs access —
+  the whole config surface is unit-testable.
+- `gateway.ts` — `createGateway(config)`: pure plumbing. Resolves store locations (one SQLite file
+  per store under `dataDir`, `mkdir -p`; or `:memory:`), opens the four backends, wires the worker
+  (`storeBackedResolver(endpoints)`) + `createHttpServer`, returns a `Gateway`: `start()` (listen via
+  a promisified `listen`, capturing a bind error; then `worker.run()`, returns the bound address) and
+  an **idempotent, graceful `stop()`** (worker.stop → await the run loop → `close()` + `closeAllConnections()`
+  the server → close all four SQLite handles). Stores exposed so the keyless app/key bootstrap stays
+  programmatic (still no HTTP route).
+- `main.ts` — the `posthorn` bin (`#!/usr/bin/env node` shebang, preserved by tsc into `dist/main.js`):
+  load config, boot, log the listen line, translate `SIGINT`/`SIGTERM` into one graceful `stop()`. The
+  thin process shell; not unit-tested (the composition it drives is). `index.ts` re-exports the runtime
+  surface; `package.json` gained `"bin": {"posthorn": ...}` + a `start` script.
+
+**Key decisions (honest tradeoffs):**
+- **Default `POSTHORN_HOST=0.0.0.0`** — correct for the headline single-container deploy (a
+  loopback bind is unreachable through the container boundary); documented, override to `127.0.0.1`
+  to restrict. A bind-everywhere default is a deliberate container-first choice, logged.
+- **One SQLite file per store** (apps/endpoints/messages/queue), matching the existing per-store
+  architecture rather than forcing a shared connection now. The transactional-outbox tick (which
+  wants messages+queue in one txn) may later consolidate; flagged, not pre-optimized.
+- **Transactional outbox deferred a 5th time — on principle, not avoidance.** Runnability is
+  upstream of crash-window correctness; the outbox is now the clearly-named next correctness tick.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **355/355** (was 338; +17: config 12 pure,
+gateway 5 incl. a real-socket end-to-end boot→provision→ingest→deliver→**verify** + a file-backed
+**durability-across-restart** test). `npm run build` clean. **Smoke-tested the compiled binary**
+(`node dist/main.js` boots, logs the listen line, serves `/healthz 200` over a real socket) **and the
+compiled `dist/index.js`** (full provision→ingest→deliver→verify through production ESM incl. the
+`node:sqlite` `createRequire` path). Integrity + local gate: exit 0. The three hash-protected files
+were not touched.
+
+**State:** GREEN → committing to main. Posthorn is now a **runnable, deployable single-process
+gateway** — `npm start` and it serves. Next tick: a single **Dockerfile** (finishing the P4
+self-host story) + **TS SDK/OpenAPI**, or the **transactional outbox** to close the core crash window.
+
+---
+
 ## 2026-05-22 — Iteration 10: P3 — HTTP API (the engine becomes a runnable service)
 
 **Repo truth at start:** clean main @ `a954399`. Baseline re-verified before any change:
