@@ -275,6 +275,58 @@ describe("createGateway", () => {
     15_000,
   );
 
+  it(
+    "exposes Prometheus metrics reflecting a delivered message (GET /metrics)",
+    async () => {
+      const gateway = createGateway(memoryConfig());
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const app = await gateway.apps.create({ name: "Acme" });
+      const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+      const authHeaders = {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      };
+      const receiver = await startReceiver();
+      receivers.push(receiver);
+
+      await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["user.created"] }),
+      });
+      await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ eventType: "user.created", payload: { n: 1 } }),
+      });
+      await receiver.received;
+
+      // /metrics is unauthenticated; poll until the worker has settled the success.
+      const deadline = Date.now() + 10_000;
+      let text = "";
+      for (;;) {
+        const res = await fetch(`${base}/metrics`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe(
+          "text/plain; version=0.0.4; charset=utf-8",
+        );
+        text = await res.text();
+        if (text.includes('posthorn_deliveries_total{outcome="succeeded"} 1')) break;
+        if (Date.now() > deadline) {
+          throw new Error(`timed out waiting for metrics to reflect success:\n${text}`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      expect(text).toContain("posthorn_messages_ingested_total 1");
+      expect(text).toContain("# TYPE posthorn_build_info gauge");
+    },
+    15_000,
+  );
+
   it("persists durable state across a restart (file-backed, no Redis)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "posthorn-gw-"));
     tempDirs.push(dir);

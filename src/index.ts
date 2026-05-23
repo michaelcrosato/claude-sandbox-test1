@@ -275,3 +275,20 @@ export {
   isValidWebhook,
   type IncomingHeaders,
 } from "./sdk/verify.js";
+
+export {
+  MetricsRegistry,
+  renderPrometheus,
+  PROMETHEUS_CONTENT_TYPE,
+  type MetricsCounters,
+  type DeliveryOutcomeCounts,
+  type MetricsSnapshot,
+  type MetricsRegistryOptions,
+} from "./metrics/metrics.js";
+
+export {
+  zeroDeliveryCounts,
+  type DeliveryCountsByStatus,
+} from "./queue/delivery-queue.js";
+
+export { POSTHORN_VERSION } from "./version.js";

@@ -5,6 +5,7 @@ import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { MetricsRegistry } from "../metrics/metrics.js";
 
 // Track started servers so each test tears its listener down (no leaked ports).
 let started: Server[] = [];
@@ -31,6 +32,7 @@ async function startServer(
       endpoints: new InMemoryEndpointStore(),
       messages: new InMemoryMessageStore(),
       queue: new InMemoryDeliveryQueue(),
+      metrics: new MetricsRegistry({ version: "test" }),
     },
     options,
   );
@@ -87,6 +89,20 @@ describe("createHttpServer (node:http adapter)", () => {
     const { base } = await startServer();
     const res = await fetch(`${base}/nope`);
     expect(res.status).toBe(404);
+  });
+
+  it("serves /metrics as raw Prometheus text (not JSON-encoded) over a real socket", async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/metrics`);
+    expect(res.status).toBe(200);
+    // The adapter must write the body verbatim with the Prometheus content type,
+    // not wrap it as application/json — proving the raw-body (contentType) path.
+    expect(res.headers.get("content-type")).toBe(
+      "text/plain; version=0.0.4; charset=utf-8",
+    );
+    const text = await res.text();
+    expect(text.startsWith("# HELP posthorn_build_info")).toBe(true);
+    expect(text).toContain('posthorn_build_info{version="test"} 1');
   });
 
   it("rejects an over-large body with 413", async () => {

@@ -4,6 +4,7 @@ import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { MetricsRegistry } from "../metrics/metrics.js";
 import { DeliveryWorker, type HttpDeliveryRequest } from "../worker/delivery-worker.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { verify } from "../signing/webhook-signature.js";
@@ -947,5 +948,66 @@ describe("createApi — end-to-end with the delivery worker", () => {
         sent.body,
       ),
     ).not.toThrow();
+  });
+});
+
+describe("createApi — GET /metrics", () => {
+  /** Build an API with metrics wired, plus a tenant + a matching endpoint. */
+  async function setupWithMetrics() {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue();
+    const metrics = new MetricsRegistry({ version: "9.9.9", now: () => 0 });
+    const api = createApi({ apps, endpoints, messages, queue, metrics });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    await endpoints.create({
+      appId: app.id,
+      url: "https://acme.example/hook",
+      eventTypes: ["user.created"],
+    });
+    return { api, metrics, secret };
+  }
+
+  it("serves Prometheus exposition unauthenticated with the right content type", async () => {
+    const { api } = await setupWithMetrics();
+    const res = await api(request({ method: "GET", path: "/metrics" }));
+    expect(res.status).toBe(200);
+    expect(res.contentType).toBe("text/plain; version=0.0.4; charset=utf-8");
+    expect(typeof res.body).toBe("string");
+    expect(res.body as string).toContain('posthorn_build_info{version="9.9.9"} 1');
+  });
+
+  it("reflects ingest activity in the counters", async () => {
+    const { api, secret } = await setupWithMetrics();
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "user.created", payload: { a: 1 } }, secret));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "user.created", payload: { a: 2 } }, secret));
+
+    const res = await api(request({ method: "GET", path: "/metrics" }));
+    const text = res.body as string;
+    expect(text).toContain("posthorn_messages_ingested_total 2");
+    // Two distinct messages fanned out to the one endpoint → two pending tasks.
+    expect(text).toContain('posthorn_delivery_tasks{status="pending"} 2');
+  });
+
+  it("counts a deduplicated replay without re-fanning it out", async () => {
+    const { api, secret } = await setupWithMetrics();
+    const body = { eventType: "user.created", payload: { a: 1 }, idempotencyKey: "k1" };
+    await api(jsonRequest("POST", "/v1/messages", body, secret));
+    await api(jsonRequest("POST", "/v1/messages", body, secret)); // dedup replay
+
+    const text = (await api(request({ method: "GET", path: "/metrics" }))).body as string;
+    expect(text).toContain("posthorn_messages_ingested_total 2");
+    expect(text).toContain("posthorn_messages_deduplicated_total 1");
+    // The replay did not enqueue a second delivery.
+    expect(text).toContain('posthorn_delivery_tasks{status="pending"} 1');
+  });
+
+  it("returns 404 when metrics are not wired", async () => {
+    const { api } = await setup(); // the default fixture has no metrics
+    const res = await api(request({ method: "GET", path: "/metrics" }));
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
   });
 });

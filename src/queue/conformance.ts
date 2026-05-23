@@ -469,6 +469,67 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("countByStatus", () => {
+      it("returns all-zero counts for an empty queue", async () => {
+        expect(await queue.countByStatus()).toEqual({
+          pending: 0,
+          delivering: 0,
+          succeeded: 0,
+          dead_letter: 0,
+        });
+      });
+
+      it("counts tasks across each delivery status", async () => {
+        // dead_letter: drive one task through the exhausted (2-retry) schedule.
+        const dead = await queue.enqueue({ messageId: "m-dead" });
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "x", nowMs: clock.now() });
+        }
+        expect((await queue.get(dead.id))?.status).toBe("dead_letter");
+
+        // succeeded: claim + complete the next task.
+        await queue.enqueue({ messageId: "m-ok" });
+        const [ok] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.complete(ok!.id, ok!.leaseToken!);
+
+        // delivering: claim and hold the lease (do not settle, do not advance time).
+        await queue.enqueue({ messageId: "m-inflight" });
+        await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+
+        // pending: enqueue with a future availableAt so it is never claimed.
+        await queue.enqueue({ messageId: "m-pending", availableAt: clock.now() + 60_000 });
+
+        expect(await queue.countByStatus()).toEqual({
+          pending: 1,
+          delivering: 1,
+          succeeded: 1,
+          dead_letter: 1,
+        });
+      });
+
+      it("reflects a transition in the counts", async () => {
+        await queue.enqueue({ messageId: "m" });
+        expect(await queue.countByStatus()).toEqual({
+          pending: 1,
+          delivering: 0,
+          succeeded: 0,
+          dead_letter: 0,
+        });
+
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        let counts = await queue.countByStatus();
+        expect(counts.pending).toBe(0);
+        expect(counts.delivering).toBe(1);
+
+        await queue.complete(claimed!.id, claimed!.leaseToken!);
+        counts = await queue.countByStatus();
+        expect(counts.delivering).toBe(0);
+        expect(counts.succeeded).toBe(1);
+      });
+    });
+
     describe("full lifecycle", () => {
       it("enqueue → claim → fail → reclaim → complete, counting attempts", async () => {
         const enq = await queue.enqueue({ messageId: "m" });

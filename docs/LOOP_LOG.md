@@ -4,6 +4,78 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 19: P4 — Prometheus `/metrics` endpoint (operator observability)
+
+**Repo truth at start:** clean main @ `1f3cca4`. Baseline re-verified before any change: `tsc --noEmit`
+clean, vitest **503/503**, `npm run build` clean, integrity + local gate both exit 0. Node 24.15.
+Reconciled GOAL→PROJECT: Posthorn stands; v1 is functionally complete (sign → fan-out → deliver →
+observe → list → retry; HTTP API + SDK + admin CLI + bootable gateway + single-container image). The
+remaining glaring gap in P4 (self-host packaging): you could now *deploy* and *bootstrap* an instance,
+but you could not **monitor a running one** — no metrics surface at all. "Does it expose Prometheus
+metrics?" is a real self-host procurement question, and it is the operator-facing half of the product's
+own "**observable**" promise (the prior ticks' status/list/retry answered the *producer's* questions).
+
+**High-leverage move chosen:** Build a Prometheus **`GET /metrics`** endpoint end-to-end. Highest-
+leverage (checklist #3): it closes the production-operability gate that blocks serious self-host
+adoption, completes P4's substantive scope, and stays squarely in the loop's strongest regime — fully
+deterministic, in-process testable, **zero new dependencies** (a pure text renderer over `node:http`,
+the same posture as `node:sqlite`/`node:crypto`). Chosen over the **per-attempt audit log** (larger,
+touches the worker hot path → higher landing risk; deferred again) and **OpenAPI** (interop/docs,
+lower operational value than "can I monitor this in prod?"). Re-confirmed the sandbox has Docker +
+network (memory `[[sandbox-has-network-and-docker]]`), but this tick needed neither — it validates
+fully on the manual gate plus a compiled-`dist` smoke.
+
+**Built this tick:**
+- **`src/metrics/metrics.ts`.** `MetricsRegistry` — a tiny in-memory accumulator of monotonic counters
+  (arrow-bound `recordIngest`/`recordTick` so they pass as bare callbacks) + uptime from an injected
+  clock; holds no domain logic. `renderPrometheus(snapshot)` — a **pure**, exhaustively-tested function
+  to v0.0.4 text exposition (HELP/TYPE headers, labeled series, label-value escaping, trailing newline).
+- **`DeliveryQueue.countByStatus()`** — the load-bearing new read primitive behind the backlog gauge.
+  Added to the contract + a shared `DeliveryCountsByStatus` type + `zeroDeliveryCounts()` helper, both
+  backends (in-memory tally; SQLite a single prepared `GROUP BY status` scan), and the one shared
+  conformance suite (+3×2 cases: empty, all-four-statuses, reflects-a-transition). Always returns every
+  status key (zero when none) so a full gauge family renders.
+- **`DeliveryWorker.onTick(result)`** — an optional observability seam (sibling of `onError`) called
+  once per `processOnce` tick with its `TickResult`; the gateway wires `onTick: metrics.recordTick`.
+  The worker gains *no* metrics logic. Counters: ingested / deduplicated / `deliveries_total{outcome}`.
+- **HTTP.** `ApiResponse.contentType` — a raw-body escape hatch so the adapter writes the Prometheus
+  text verbatim instead of JSON-encoding it (`server.ts`). `GET /metrics` route (`api.ts`),
+  unauthenticated like `/healthz`; reads `countByStatus()` at scrape time, renders, returns text. Ingest
+  is counted in `createMessage`. `metrics?` added (optional) to `ApiDeps` → `404` when not wired.
+- **Gateway + version.** `createGateway` constructs the registry (version from `POSTHORN_VERSION`),
+  wires it to the worker (`onTick`) and the HTTP deps, and exposes it on `Gateway`. New `src/version.ts`
+  reads `package.json`'s version once via `createRequire` (same idiom as `node:sqlite`; degrades to
+  `"unknown"` if not found, so a cosmetic label can never break `/metrics`). New public symbols exported
+  from `src/index.ts`.
+- **Docs reconciled to reality.** README: a Status bullet + a `/metrics` curl example + the route table
+  row. PROJECT.md: P4 metrics ✅ with the design + validation evidence; P4 remaining narrowed to operator
+  docs.
+
+**Key decisions (honest tradeoffs):** **unauthenticated** `/metrics` (Prometheus norm) — it exposes only
+instance-aggregate data (counts, a backlog gauge), never a tenant id, payload, or secret; documented
+that operators restrict it at the network layer, with a dedicated admin port / opt-out flag noted as a
+later add (kept config.ts untouched this tick). **Counters in-memory / process-lifetime** (reset on
+restart) — correct for the single-process, no-Redis model, and Prometheus detects resets; a multi-replica
+P5 plane aggregates per-instance series the usual way. Backlog as a **scrape-time gauge** from the queue
+(never stale) vs. counters for throughput — the idiomatic split. Fed metrics through the *existing* ingest
++ worker-tick seams rather than mutating the delivery hot path (the per-attempt-audit-log risk we keep
+deferring). Modeled the delivery breakdown as one labeled counter (`outcome=`) not four metric names.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **529/529** (was 503; +26: metrics 13, queue
+conformance 3×2=6, api route 4, server raw-text 1, worker onTick 1, gateway end-to-end 1). `npm run
+build` clean. **Compiled-`dist` smoke** (production ESM, in-memory gateway + a real receiver): ingest →
+worker delivers → poll `/metrics` until `posthorn_deliveries_total{outcome="succeeded"} 1`, asserting
+the v0.0.4 content-type, `posthorn_messages_ingested_total 1`, the backlog gauge, and
+`posthorn_build_info{version="0.0.1"}` (proving `version.js` + `SqliteDeliveryQueue.countByStatus`'
+`createRequire`/`node:sqlite` paths work in the built output). Integrity + local gate: exit 0. The three
+hash-protected files were not touched.
+
+**State:** GREEN → committing to main. Posthorn is now deployable, bootstrappable, *and monitorable*.
+Next ticks: operator docs (deploy/monitoring guide, closes P4); then the per-attempt audit log or OpenAPI
+(P3 deferred), or begin P5 (hosted control plane).
+
+---
+
 ## 2026-05-23 — Iteration 18: P4 — single-container `Dockerfile` (the deployment wedge made real)
 
 **Repo truth at start:** clean main @ `6c37137`. Baseline re-verified before any change: `tsc --noEmit`

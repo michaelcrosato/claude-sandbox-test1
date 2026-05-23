@@ -33,7 +33,9 @@ import {
   normalizeFailInput,
   StaleLeaseError,
   UnknownDeliveryTaskError,
+  zeroDeliveryCounts,
   type ClaimOptions,
+  type DeliveryCountsByStatus,
   type DeliveryQueue,
   type DeliveryTask,
   type EnqueueInput,
@@ -127,6 +129,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   readonly #insertTask: StatementSync;
   readonly #updateTask: StatementSync;
   readonly #countTasks: StatementSync;
+  readonly #countByStatus: StatementSync;
 
   constructor(options: SqliteQueueOptions = {}) {
     const {
@@ -187,6 +190,10 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     );
     this.#countTasks = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM delivery_tasks",
+    );
+    // Backlog/health gauge: a single grouped scan, far cheaper than four counts.
+    this.#countByStatus = this.#db.prepare(
+      "SELECT status, COUNT(*) AS n FROM delivery_tasks GROUP BY status",
     );
   }
 
@@ -299,6 +306,21 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   async listByMessage(messageId: string): Promise<readonly DeliveryTask[]> {
     const rows = this.#selectByMessage.all(messageId) as unknown as TaskRow[];
     return rows.map(rowToTask);
+  }
+
+  async countByStatus(): Promise<DeliveryCountsByStatus> {
+    const counts = zeroDeliveryCounts();
+    const rows = this.#countByStatus.all() as unknown as {
+      status: string;
+      n: number;
+    }[];
+    for (const row of rows) {
+      // Defensive: ignore any unrecognized status rather than widening the map.
+      if (row.status in counts) {
+        counts[row.status as DeliveryStatus] += Number(row.n);
+      }
+    }
+    return counts;
   }
 
   /** Close the underlying database handle. */

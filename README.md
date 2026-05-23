@@ -119,6 +119,16 @@ Early foundation. Implemented so far:
   with a built-in `/healthz` `HEALTHCHECK`. The same image runs the gateway *and* the one-shot
   `posthorn admin` bootstrap. `docker build -t posthorn . && docker run -p 3000:3000 -v posthorn-data:/data posthorn`.
 
+- ✅ **Prometheus metrics (operator observability)** — an unauthenticated `GET /metrics` serves
+  the operator-facing half of "observable": instance throughput and health in the standard Prometheus
+  text exposition format, scrape-ready with zero extra dependencies. Monotonic counters
+  (`posthorn_messages_ingested_total`, `posthorn_deliveries_total{outcome="…"}`) come from the ingest
+  route and the worker's per-tick tally; a point-in-time backlog gauge
+  (`posthorn_delivery_tasks{status="…"}` — the alert you actually set: how many deliveries are stuck
+  in `dead_letter` or queued right now) is read from the queue at scrape time. Exposes only
+  instance-aggregate operational data — no tenant id, payload, or secret — so it is safe to scrape
+  without a key; restrict it at the network layer if you want it private.
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)
@@ -407,11 +417,18 @@ curl -sX POST localhost:3000/v1/messages/$MESSAGE_ID/retry -H "authorization: Be
 # Browse what you've sent — newest-first, paginated. Feed nextCursor back as ?cursor= for the next page:
 curl -s "localhost:3000/v1/messages?limit=50" -H "authorization: Bearer $SECRET"
 #   { "data": [ { "id": "...", "eventType": "user.created", "createdAt": 169... } ], "nextCursor": "..." }
+
+# Scrape operational metrics (Prometheus text exposition; no auth — instance-aggregate only):
+curl -s localhost:3000/metrics
+#   posthorn_messages_ingested_total 12
+#   posthorn_deliveries_total{outcome="succeeded"} 11
+#   posthorn_delivery_tasks{status="dead_letter"} 1   ← the gauge to alert on
 ```
 
 | Method | Path                | Auth   | Purpose                                |
 | ------ | ------------------- | ------ | -------------------------------------- |
 | GET    | `/healthz`          | none   | Liveness probe.                        |
+| GET    | `/metrics`          | none   | Prometheus exposition (operator metrics).|
 | POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
 | GET    | `/v1/messages`      | Bearer | List the tenant's messages (paginated).|
 | GET    | `/v1/messages/:id`  | Bearer | Read a message + its delivery statuses.|

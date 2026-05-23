@@ -28,8 +28,10 @@ import {
   StaleLeaseError,
   UnknownDeliveryTaskError,
   assertValidVisibilityTimeout,
+  zeroDeliveryCounts,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
   type ClaimOptions,
+  type DeliveryCountsByStatus,
   type DeliveryQueue,
   type DeliveryTask,
   type EnqueueInput,
@@ -180,6 +182,14 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
       if (task.messageId === messageId) tasks.push(task);
     }
     return tasks;
+  }
+
+  async countByStatus(): Promise<DeliveryCountsByStatus> {
+    const counts = zeroDeliveryCounts();
+    for (const task of this.#tasks.values()) {
+      counts[task.status] += 1;
+    }
+    return counts;
   }
 
   /**

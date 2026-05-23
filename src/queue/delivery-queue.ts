@@ -117,6 +117,21 @@ export interface FailInput {
 }
 
 /**
+ * A complete count of tasks by delivery status. Every {@link DeliveryStatus} key
+ * is always present (zero when none), so a consumer (e.g. the metrics endpoint)
+ * can render a full gauge family without a missing series.
+ */
+export type DeliveryCountsByStatus = Readonly<Record<DeliveryStatus, number>>;
+
+/**
+ * A fresh, all-zero status→count map. Backends start from this and fold their
+ * counts into it, so every status is represented even when the queue is empty.
+ */
+export function zeroDeliveryCounts(): Record<DeliveryStatus, number> {
+  return { pending: 0, delivering: 0, succeeded: 0, dead_letter: 0 };
+}
+
+/**
  * A durable queue of delivery work.
  *
  * Asynchronous so one contract spans synchronous engines (in-memory, SQLite via
@@ -177,6 +192,14 @@ export interface DeliveryQueue {
    * `status`/`attempts`/`lastError` here, and this exposes them per message.
    */
   listByMessage(messageId: string): Promise<readonly DeliveryTask[]>;
+  /**
+   * Count tasks grouped by delivery status — the point-in-time backlog/health
+   * gauge behind the metrics surface ("how much is queued / in flight / stuck in
+   * dead_letter right now?"). Always returns every status key (zero when none),
+   * so a caller renders a complete gauge family. A pure read: never mutates,
+   * never throws on an empty queue.
+   */
+  countByStatus(): Promise<DeliveryCountsByStatus>;
 }
 
 /** Thrown when an operation references a task id the queue does not hold. */

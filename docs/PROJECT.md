@@ -326,8 +326,9 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     latest-state-per-endpoint view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
-  provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ (this
-  tick) — so a deployed instance can be bootstrapped without writing code.
+  provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a
+  **Prometheus `/metrics` endpoint** ✅ (this tick) — so a deployed instance can be bootstrapped,
+  run, *and monitored* without writing code.
   - **Single-container image ✅ (this tick):** the headline deployment artifact that makes the
     "single container, no Redis" wedge a *thing you can `docker run`*, not just a prose claim. A
     multi-stage `Dockerfile` (+ `.dockerignore`): stage 1 (`node:24-alpine`) `npm ci` + `tsc` →
@@ -345,7 +346,34 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     sharing the `/data` volume and the running server **authenticates that key over HTTP** (401
     without → 200/202 with); a sent message is listable; `docker stop` drains gracefully; and the
     message **survives a full container teardown + fresh boot** on the same volume (durability, no
-    Redis). Image ~231 MB (Alpine + Node). Remaining in P4: a metrics endpoint and operator docs.
+    Redis). Image ~231 MB (Alpine + Node).
+  - **Prometheus metrics endpoint ✅ (this tick):** the operator-facing half of "observable", and
+    the production-operability gate for any serious self-hoster ("does it expose Prometheus
+    metrics?" is a real procurement question). An unauthenticated `GET /metrics` serves the standard
+    text exposition (v0.0.4) over `node:http` with **zero new dependencies** (a pure string renderer,
+    the same posture as the rest of the stack). Faithful to the pure-core/thin-I/O split: a
+    `MetricsRegistry` (`src/metrics/`) is a tiny in-memory accumulator of monotonic counters fed by
+    two *existing* seams — the ingest route and a new optional `DeliveryWorker.onTick(result)` hook
+    that folds each tick's `TickResult` tally in (the worker holds no metrics logic) — and
+    `renderPrometheus(snapshot)` is a **pure**, unit-tested function from a snapshot to exposition
+    text. Counters: `posthorn_messages_ingested_total`, `posthorn_messages_deduplicated_total`,
+    `posthorn_deliveries_total{outcome="succeeded|failed|dead_lettered|stale"}`. The load-bearing
+    addition is a new **`DeliveryQueue.countByStatus()`** read primitive (added to the contract, both
+    backends — in-memory tally; SQLite `GROUP BY status` — and the one shared conformance suite, +3×2
+    cases) powering a point-in-time backlog gauge `posthorn_delivery_tasks{status="…"}` (the gauge
+    operators alert on: how many deliveries are queued / in flight / stuck in `dead_letter` *right
+    now*), read from the queue at scrape time so it is never stale. Plus `posthorn_uptime_seconds` and
+    `posthorn_build_info{version}` (the version read once from `package.json` via `createRequire`,
+    the same idiom as `node:sqlite`). The HTTP layer gained a small raw-body escape hatch
+    (`ApiResponse.contentType`) so the adapter writes the Prometheus text verbatim instead of
+    JSON-encoding it. **Security:** the endpoint exposes only instance-aggregate data — no tenant id,
+    payload, or secret — so it is safe to scrape unauthenticated (Prometheus norm); operators restrict
+    it at the network layer if desired (a dedicated admin port / opt-out flag is a noted later add).
+    Counters are process-lifetime (reset on restart), correct for the single-process, no-Redis model
+    (Prometheus detects resets). Proven by a pure renderer/registry suite, a pure handler suite, a
+    real-socket raw-text test, a running-gateway end-to-end (deliver → scrape → counters reflect it),
+    and a **compiled-`dist` smoke** through production ESM (incl. the `version.js`/`node:sqlite`
+    `createRequire` paths). Remaining in P4: operator docs (a deploy/monitoring guide).
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 
 ## 5. Out of scope / non-goals

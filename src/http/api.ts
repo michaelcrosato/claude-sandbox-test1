@@ -15,6 +15,7 @@
  * | Method | Path                 | Auth   | Purpose                                  |
  * | ------ | -------------------- | ------ | ---------------------------------------- |
  * | GET    | /healthz             | none   | Liveness probe.                          |
+ * | GET    | /metrics             | none   | Prometheus exposition (operator metrics).|
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
  * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
@@ -64,6 +65,11 @@ import { retryMessageDeliveries } from "../queue/retry-message.js";
 import type { App, AppStore } from "../apps/app.js";
 import { ingest } from "../fanout/fanout.js";
 import {
+  PROMETHEUS_CONTENT_TYPE,
+  renderPrometheus,
+  type MetricsRegistry,
+} from "../metrics/metrics.js";
+import {
   defineRoutes,
   matchRoute,
   type RouteParams,
@@ -80,6 +86,12 @@ export interface ApiDeps {
   readonly messages: MessageStore;
   /** Where {@link ingest} enqueues the resulting delivery work. */
   readonly queue: DeliveryQueue;
+  /**
+   * Operational metrics. When supplied, `GET /metrics` serves the Prometheus
+   * exposition and ingest is counted; when omitted (a minimal embedding),
+   * `GET /metrics` is `404`. Optional so the API can be composed without it.
+   */
+  readonly metrics?: MetricsRegistry;
 }
 
 /**
@@ -111,6 +123,13 @@ export interface ApiResponse {
   readonly status: number;
   readonly body: unknown;
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * When set, `body` is treated as an already-serialized string and written
+   * verbatim with this `Content-Type` (instead of being JSON-encoded). The escape
+   * hatch for non-JSON responses such as the Prometheus text exposition served at
+   * `GET /metrics`. Omitted for the JSON responses every other route returns.
+   */
+  readonly contentType?: string;
 }
 
 /** The function `server.ts` drives once per request. */
@@ -350,6 +369,25 @@ export function createApi(deps: ApiDeps): ApiHandler {
 
   const health: RouteHandler = async () => json(200, { status: "ok" });
 
+  const metricsExposition: RouteHandler = async () => {
+    const registry = deps.metrics;
+    if (registry === undefined) {
+      // Metrics not wired (a minimal embedding) — the route effectively does not
+      // exist. 404 keeps that indistinguishable from any other unknown path.
+      throw new HttpError(404, "not_found", "metrics are not enabled");
+    }
+    // Counters are in-memory (instant); the backlog gauge is read from the queue
+    // at scrape time so it is never stale.
+    const deliveryTasksByStatus = await deps.queue.countByStatus();
+    const text = renderPrometheus({
+      version: registry.version,
+      uptimeSeconds: registry.uptimeSeconds(),
+      counters: registry.counters(),
+      deliveryTasksByStatus,
+    });
+    return { status: 200, body: text, contentType: PROMETHEUS_CONTENT_TYPE };
+  };
+
   const createMessage: AuthedHandler = async (ctx) => {
     const body = parseJsonObject(ctx.req);
     if (!("payload" in body)) {
@@ -372,6 +410,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       endpoints: deps.endpoints,
       queue: deps.queue,
     });
+    deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
     return json(202, {
       message: {
         id: result.message.id,
@@ -495,6 +534,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
 
   const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>([
     { method: "GET", pattern: "/healthz", handler: health },
+    { method: "GET", pattern: "/metrics", handler: metricsExposition },
     { method: "POST", pattern: "/v1/messages", handler: authed(createMessage) },
     { method: "GET", pattern: "/v1/messages", handler: authed(listMessages) },
     { method: "GET", pattern: "/v1/messages/:id", handler: authed(getMessage) },

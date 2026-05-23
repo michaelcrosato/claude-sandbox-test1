@@ -6,6 +6,7 @@ import {
   type DeliveryWorkerOptions,
   type EndpointResolver,
   type HttpDeliveryRequest,
+  type TickResult,
   type Transport,
 } from "./delivery-worker.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
@@ -475,6 +476,12 @@ describe("DeliveryWorker.processOnce", () => {
       retry: async () => claimedTask,
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
+      countByStatus: async () => ({
+        pending: 0,
+        delivering: 1,
+        succeeded: 0,
+        dead_letter: 0,
+      }),
     };
     const worker = new DeliveryWorker({
       queue: stubQueue,
@@ -517,6 +524,31 @@ describe("DeliveryWorker.processOnce", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports each tick's tally to onTick (the metrics seam)", async () => {
+    const env = setup();
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    const ticks: TickResult[] = [];
+    const worker = makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      onTick: (result) => ticks.push(result),
+    });
+
+    const result = await worker.processOnce();
+    expect(ticks).toEqual([result]);
+    expect(ticks[0]).toMatchObject({ claimed: 1, succeeded: 1 });
+
+    // An idle tick is still reported (claimed 0), so a liveness counter advances.
+    await worker.processOnce();
+    expect(ticks).toHaveLength(2);
+    expect(ticks[1]).toMatchObject({ claimed: 0, succeeded: 0 });
   });
 });
 
@@ -569,6 +601,12 @@ describe("DeliveryWorker.run", () => {
       },
       get: async () => null,
       listByMessage: async () => [],
+      countByStatus: async () => ({
+        pending: 0,
+        delivering: 0,
+        succeeded: 0,
+        dead_letter: 0,
+      }),
     };
     const errors: unknown[] = [];
     let worker!: DeliveryWorker;

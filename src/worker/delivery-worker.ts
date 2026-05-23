@@ -228,6 +228,14 @@ export interface DeliveryWorkerOptions {
    * here and backing off; without a hook they are swallowed. Defaults to a no-op.
    */
   readonly onError?: (error: unknown) => void;
+  /**
+   * Observability hook called once per completed {@link DeliveryWorker.processOnce}
+   * tick with its tally. The seam the metrics registry feeds from
+   * (`onTick: registry.recordTick`); it carries no decision logic. Not called on a
+   * tick that throws (an unexpected settle error propagates instead). Defaults to a
+   * no-op.
+   */
+  readonly onTick?: (result: TickResult) => void;
 }
 
 function describeError(error: unknown): string {
@@ -256,6 +264,7 @@ export class DeliveryWorker {
   readonly #idlePollMs: number;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #onError: ((error: unknown) => void) | undefined;
+  readonly #onTick: ((result: TickResult) => void) | undefined;
 
   #stopped = false;
   #running = false;
@@ -291,6 +300,7 @@ export class DeliveryWorker {
     this.#idlePollMs = idlePollMs;
     this.#sleep = sleep;
     this.#onError = options.onError;
+    this.#onTick = options.onTick;
   }
 
   /** Whether {@link run} is currently looping. */
@@ -330,7 +340,15 @@ export class DeliveryWorker {
           break;
       }
     }
-    return { claimed: tasks.length, succeeded, failed, deadLettered, stale };
+    const result: TickResult = {
+      claimed: tasks.length,
+      succeeded,
+      failed,
+      deadLettered,
+      stale,
+    };
+    this.#onTick?.(result);
+    return result;
   }
 
   /**

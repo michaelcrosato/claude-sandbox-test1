@@ -106,14 +106,20 @@ function writeResponse(
   extraHeaders?: Record<string, string>,
 ): void {
   const hasBody = response.body !== undefined;
-  const payload = hasBody ? JSON.stringify(response.body) : "";
+  // A `contentType` opts out of JSON encoding: `body` is an already-serialized
+  // string written verbatim (e.g. the Prometheus text at /metrics). Otherwise the
+  // body is JSON-encoded as application/json — the shape every other route uses.
+  const isRaw = response.contentType !== undefined;
+  const payload = hasBody ? (isRaw ? String(response.body) : JSON.stringify(response.body)) : "";
   const headers: Record<string, string> = {
     ...(response.headers ?? {}),
     ...(extraHeaders ?? {}),
     "content-length": String(Buffer.byteLength(payload)),
   };
   if (hasBody) {
-    headers["content-type"] = "application/json; charset=utf-8";
+    headers["content-type"] = isRaw
+      ? response.contentType!
+      : "application/json; charset=utf-8";
   }
   res.writeHead(response.status, headers);
   res.end(payload);

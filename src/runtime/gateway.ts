@@ -28,6 +28,8 @@ import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { createHttpServer } from "../http/server.js";
+import { MetricsRegistry } from "../metrics/metrics.js";
+import { POSTHORN_VERSION } from "../version.js";
 import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
 import type { MessageStore } from "../storage/message-store.js";
@@ -64,6 +66,11 @@ export interface Gateway {
    * Started/halted alongside the worker.
    */
   readonly dispatcher: FanoutDispatcher;
+  /**
+   * Operational metrics: counters fed by the worker + ingest, served as Prometheus
+   * exposition at the unauthenticated `GET /metrics`.
+   */
+  readonly metrics: MetricsRegistry;
   /** The `node:http` server (already constructed; {@link Gateway.start} makes it listen). */
   readonly httpServer: Server;
   /**
@@ -133,6 +140,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     visibilityTimeoutMs: config.worker.visibilityTimeoutMs,
   });
 
+  const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
+
   const worker = new DeliveryWorker({
     queue,
     store: messages,
@@ -140,6 +149,8 @@ export function createGateway(config: GatewayConfig): Gateway {
     batchSize: config.worker.batchSize,
     requestTimeoutMs: config.worker.requestTimeoutMs,
     idlePollMs: config.worker.idlePollMs,
+    // Fold each tick's tally into the metrics counters.
+    onTick: metrics.recordTick,
   });
 
   const dispatcher = new FanoutDispatcher({
@@ -152,7 +163,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   });
 
   const httpServer = createHttpServer(
-    { apps, endpoints, messages, queue },
+    { apps, endpoints, messages, queue, metrics },
     { maxBodyBytes: config.maxBodyBytes },
   );
 
@@ -223,6 +234,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     queue,
     worker,
     dispatcher,
+    metrics,
     httpServer,
     start,
     stop,
