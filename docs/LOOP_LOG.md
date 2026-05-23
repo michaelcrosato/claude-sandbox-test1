@@ -4,6 +4,59 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 22: P2.5 — bounded worker concurrency (kill head-of-line blocking)
+
+**Repo truth at start:** clean main @ `436a0ad` (iter 21, audit log) — a real clean baseline, not an
+interrupted tick (git clean, iter-21 entry present + matches the head commit). Baseline re-verified by
+the manual gate (`[[validation-gate-is-manual]]`): `tsc --noEmit` clean, vitest **585/585**, `npm run
+build` clean, integrity gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Replace the delivery worker's **sequential** per-batch
+loop with a **bounded concurrency pool** — the *one remaining engine-level limitation*, called out in
+both the worker's own doc comment and PROJECT.md's P2.5 bullet as "the next throughput optimization."
+Reasoning that beat the alternatives (admin HTTP route, per-key `lastUsedAt`, attempt-log pagination,
+operator docs): every feature shipped in the last ~10 ticks was observability / packaging / API
+*surface*; the **core delivery engine** still serialized a claimed batch, so one slow/timing-out
+receiver blocked every healthy delivery behind it (head-of-line blocking) and `batchSize ×
+requestTimeoutMs` could exceed the visibility timeout under load → leases lapse → wasted reclaim churn.
+It is a core-path *reliability/throughput* fix (the product's central promise), sits in the loop's
+strongest regime (pure, deterministic, fake-clock/gated-transport testable), and needs **zero new deps**.
+
+**Built this tick:**
+- **`delivery-worker.ts`** — new `concurrency` option (default `DEFAULT_WORKER_CONCURRENCY = 8`;
+  validated positive int; `1` = fully sequential). `processOnce` now delegates the claimed batch to a
+  new private `#deliverBatch`: a fixed pool of `min(concurrency, batch)` pump loops, each pulling the
+  next un-started task as it frees a slot, collecting outcomes **by original index**. Each `#deliver`
+  already settles its own task under its own lease, so the pool needs no extra coordination. The
+  "unexpected (non-stale) settle error propagates from `processOnce`" contract is preserved *without*
+  leaving sibling rejections unhandled: a pump captures the first such error, the others stop pulling
+  new work, and it is re-thrown after the in-flight deliveries settle. Doc comments updated (the lease
+  constraint is now `ceil(batchSize/concurrency) × timeout`).
+- **`config.ts`** — `POSTHORN_WORKER_CONCURRENCY` (min 1) → `WorkerConfig.concurrency`; **`gateway.ts`**
+  passes it to the worker; **`index.ts`** re-exports `DEFAULT_WORKER_CONCURRENCY`.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **591/591** (was
+585; **+6**: worker construction-reject `concurrency`, a 4-test gated-transport pool suite —
+parallel-but-bounded at the limit, strictly-sequential at `concurrency:1`, a slow receiver does **not**
+block the fast deliveries in its batch, in-flight cap holds for a larger batch — and a config
+parse/validate case). `npm run build` clean. Integrity gate exit 0; local gate exit 0 (three
+hash-protected files untouched).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway with
+`POSTHORN_WORKER_CONCURRENCY=4`, fanned one message to a **slow** (500 ms response delay) and a **fast**
+receiver, and measured the gap between when each *received* its request: **0 ms** (a sequential worker
+would only send to the second after the first's full ~500 ms attempt resolved). Both deliveries verified
+via the SDK's own `isValidWebhook`. Exit 0; temp script removed; git shows only the intended files.
+
+**State:** GREEN → committing to main as Iteration 22. Net: head-of-line blocking is gone — a stuck
+receiver occupies only its own slot, and the worst-case batch wall time drops by up to `concurrency×`.
+The core delivery engine has no remaining known throughput/correctness-under-load gap. **Standing
+deferred (next candidates):** admin/control-plane *HTTP* provisioning route (CLI covers local
+bootstrap); per-key `lastUsedAt`; attempt-log pagination/retention; an operator deploy/monitoring guide
+(last P4 doc item); and the larger P5 hosted control plane.
+
+---
+
 ## 2026-05-23 — Iteration 21: P3 — per-attempt delivery audit log (`GET /v1/messages/:id/attempts`)
 
 **Repo truth at start — reconciliation, not a clean baseline.** `git log` head was `51585d7` (iter 20,

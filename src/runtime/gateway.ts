@@ -155,6 +155,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     store: messages,
     resolveEndpoint: storeBackedResolver(endpoints),
     batchSize: config.worker.batchSize,
+    concurrency: config.worker.concurrency,
     requestTimeoutMs: config.worker.requestTimeoutMs,
     idlePollMs: config.worker.idlePollMs,
     // Fold each tick's tally into the metrics counters.

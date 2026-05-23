@@ -24,12 +24,17 @@
  * evaluated at one clock instant (one `now()` reading drives the claim, the
  * signature timestamp, and the settle), which keeps ticks deterministic.
  *
- * Tasks in a claimed batch are processed **sequentially** in v1: simple, ordered,
- * and trivially testable. Keep `batchSize × requestTimeoutMs` comfortably below
- * the queue's visibility timeout so a batch settles before its leases lapse;
- * bounded concurrency is the next throughput optimization. Settling is always
- * safe regardless: if a lease lapsed mid-attempt and another worker reclaimed the
- * task, the settle raises {@link StaleLeaseError}, which the worker absorbs and
+ * Tasks in a claimed batch are delivered through a **bounded concurrency pool**
+ * (`concurrency`, default {@link DEFAULT_WORKER_CONCURRENCY}): up to `concurrency`
+ * sends are in flight at once, so one slow or timing-out receiver no longer blocks
+ * the healthy deliveries queued behind it (head-of-line blocking). Each task settles
+ * independently under its own lease, so concurrency needs no extra coordination, and
+ * within a tick delivery order is insignificant — webhook delivery is unordered.
+ * Keep `ceil(batchSize / concurrency) × requestTimeoutMs` comfortably below the
+ * queue's visibility timeout so a batch settles before its leases lapse (concurrency
+ * shortens this worst case by up to `concurrency×` versus sequential). Settling is
+ * always safe regardless: if a lease lapsed mid-attempt and another worker reclaimed
+ * the task, the settle raises {@link StaleLeaseError}, which the worker absorbs and
  * counts as `stale` (the orphaned result is discarded, per the queue contract).
  */
 
@@ -141,12 +146,22 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 export const DEFAULT_IDLE_POLL_MS = 1_000;
 
 /**
- * Default tasks claimed per tick. Modest because v1 processes a batch
- * sequentially: keep `batchSize × requestTimeoutMs` below the queue's visibility
- * timeout so leases do not lapse mid-batch. (The queue's own claim ceiling is
- * {@link DEFAULT_CLAIM_LIMIT}.)
+ * Default tasks claimed per tick. The batch is delivered through a bounded
+ * concurrency pool (see {@link DEFAULT_WORKER_CONCURRENCY}), so the worst-case
+ * wall-clock to settle it is `ceil(batchSize / concurrency) × requestTimeoutMs`;
+ * keep that below the queue's visibility timeout so leases do not lapse mid-batch.
+ * (The queue's own claim ceiling is {@link DEFAULT_CLAIM_LIMIT}.)
  */
 export const DEFAULT_WORKER_BATCH_SIZE = 16;
+
+/**
+ * Default maximum number of deliveries in flight at once within a tick. Greater
+ * than one so a single slow/timing-out receiver does not stall the rest of the
+ * batch (head-of-line blocking); bounded so a burst cannot open an unbounded number
+ * of sockets at once. A value of `1` restores fully sequential delivery. Operators
+ * tune it via `POSTHORN_WORKER_CONCURRENCY` for their receiver fleet's latency profile.
+ */
+export const DEFAULT_WORKER_CONCURRENCY = 8;
 
 /** Whether an HTTP status denotes a successful delivery (2xx). */
 export function isSuccessStatus(status: number): boolean {
@@ -216,6 +231,13 @@ export interface DeliveryWorkerOptions {
   readonly now?: () => number;
   /** Tasks claimed per tick. Defaults to {@link DEFAULT_WORKER_BATCH_SIZE}. */
   readonly batchSize?: number;
+  /**
+   * Maximum deliveries in flight at once within a tick. Defaults to
+   * {@link DEFAULT_WORKER_CONCURRENCY}. A value of `1` restores fully sequential
+   * delivery. Effectively capped by the batch size at run time (never more than the
+   * number of claimed tasks run at once).
+   */
+  readonly concurrency?: number;
   /** Per-attempt HTTP timeout in ms. Defaults to {@link DEFAULT_REQUEST_TIMEOUT_MS}. */
   readonly requestTimeoutMs?: number;
   /** Pause between idle polls in {@link DeliveryWorker.run}. Defaults to {@link DEFAULT_IDLE_POLL_MS}. */
@@ -272,6 +294,7 @@ export class DeliveryWorker {
   readonly #transport: Transport;
   readonly #now: () => number;
   readonly #batchSize: number;
+  readonly #concurrency: number;
   readonly #requestTimeoutMs: number;
   readonly #idlePollMs: number;
   readonly #sleep: (ms: number) => Promise<void>;
@@ -292,12 +315,16 @@ export class DeliveryWorker {
       transport = fetchTransport,
       now = Date.now,
       batchSize = DEFAULT_WORKER_BATCH_SIZE,
+      concurrency = DEFAULT_WORKER_CONCURRENCY,
       requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
       idlePollMs = DEFAULT_IDLE_POLL_MS,
       sleep = timerSleep,
     } = options;
     if (!Number.isInteger(batchSize) || batchSize < 1) {
       throw new RangeError("batchSize must be a positive integer");
+    }
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+      throw new RangeError("concurrency must be a positive integer");
     }
     if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
       throw new RangeError("requestTimeoutMs must be a positive, finite number");
@@ -311,6 +338,7 @@ export class DeliveryWorker {
     this.#transport = transport;
     this.#now = now;
     this.#batchSize = batchSize;
+    this.#concurrency = concurrency;
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#idlePollMs = idlePollMs;
     this.#sleep = sleep;
@@ -335,12 +363,12 @@ export class DeliveryWorker {
       nowMs,
       limit: this.#batchSize,
     });
+    const outcomes = await this.#deliverBatch(tasks, nowMs);
     let succeeded = 0;
     let failed = 0;
     let deadLettered = 0;
     let stale = 0;
-    for (const task of tasks) {
-      const outcome = await this.#deliver(task, nowMs);
+    for (const outcome of outcomes) {
       switch (outcome) {
         case "succeeded":
           succeeded += 1;
@@ -365,6 +393,54 @@ export class DeliveryWorker {
     };
     this.#onTick?.(result);
     return result;
+  }
+
+  /**
+   * Deliver a claimed batch through a bounded concurrency pool, returning each
+   * task's outcome by its original index. At most `#concurrency` deliveries are in
+   * flight at once: a fixed set of pump loops each pull the next un-started task as
+   * they free up, so a slow receiver only occupies its own slot rather than blocking
+   * the whole batch (head-of-line blocking). Each {@link #deliver} settles its own
+   * task under its own lease, so the pumps need no further coordination.
+   *
+   * If a delivery raises an *unexpected* (non-stale) error, the pumps stop pulling
+   * new work and the first such error is re-thrown once the already in-flight
+   * deliveries settle — preserving {@link processOnce}'s "an unexpected settle error
+   * propagates" contract while ensuring no sibling pump rejection goes unhandled.
+   */
+  async #deliverBatch(
+    tasks: readonly DeliveryTask[],
+    nowMs: number,
+  ): Promise<TaskOutcome[]> {
+    const outcomes = new Array<TaskOutcome>(tasks.length);
+    let cursor = 0;
+    let firstError: unknown = undefined;
+    let failed = false;
+    const pump = async (): Promise<void> => {
+      while (cursor < tasks.length && !failed) {
+        const index = cursor;
+        cursor += 1;
+        try {
+          outcomes[index] = await this.#deliver(tasks[index]!, nowMs);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            firstError = error;
+          }
+          return;
+        }
+      }
+    };
+    const poolSize = Math.min(this.#concurrency, tasks.length);
+    const pumps: Promise<void>[] = [];
+    for (let i = 0; i < poolSize; i += 1) {
+      pumps.push(pump());
+    }
+    await Promise.all(pumps);
+    if (failed) {
+      throw firstError;
+    }
+    return outcomes;
   }
 
   /**

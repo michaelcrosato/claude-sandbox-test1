@@ -383,6 +383,7 @@ Configuration is environment-driven (all optional):
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the SQLite files, or `:memory:` for an ephemeral run. |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap (`413` beyond it). |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
+| `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight at once within a tick (`1` = sequential). |
 | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout. |
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when idle. |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime before an in-flight delivery is reclaimed. |

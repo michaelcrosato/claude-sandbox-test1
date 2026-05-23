@@ -6,6 +6,7 @@ import {
   type DeliveryWorkerOptions,
   type EndpointResolver,
   type HttpDeliveryRequest,
+  type HttpDeliveryResponse,
   type TickResult,
   type Transport,
 } from "./delivery-worker.js";
@@ -184,6 +185,15 @@ describe("DeliveryWorker — construction", () => {
       RangeError,
     );
     expect(() => new DeliveryWorker({ ...base(), batchSize: 1.5 })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects an invalid concurrency", () => {
+    expect(() => new DeliveryWorker({ ...base(), concurrency: 0 })).toThrow(
+      RangeError,
+    );
+    expect(() => new DeliveryWorker({ ...base(), concurrency: 2.5 })).toThrow(
       RangeError,
     );
   });
@@ -550,6 +560,157 @@ describe("DeliveryWorker.processOnce", () => {
     await worker.processOnce();
     expect(ticks).toHaveLength(2);
     expect(ticks[1]).toMatchObject({ claimed: 0, succeeded: 0 });
+  });
+});
+
+describe("DeliveryWorker — bounded concurrency", () => {
+  /** A macrotask boundary that drains all pending microtasks (and the in-memory
+   * store's resolved promises), so the pumps advance to their next transport call. */
+  const drain = (): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function enqueueN(env: ReturnType<typeof setup>, n: number): Promise<void> {
+    for (let i = 0; i < n; i++) {
+      const { message } = await env.store.create({
+        appId: "app_1",
+        eventType: "e",
+        payload: String(i),
+      });
+      await env.queue.enqueue({ messageId: message.id });
+    }
+  }
+
+  /** A transport that parks each send until its stored `release` is called, while
+   * tracking the number of concurrently in-flight sends. */
+  function gatedTransport(): {
+    transport: Transport;
+    releases: (() => void)[];
+    maxInFlight: () => number;
+  } {
+    let inFlight = 0;
+    let max = 0;
+    const releases: (() => void)[] = [];
+    const transport: Transport = () => {
+      inFlight += 1;
+      max = Math.max(max, inFlight);
+      return new Promise<HttpDeliveryResponse>((resolve) => {
+        releases.push(() => {
+          inFlight -= 1;
+          resolve({ status: 200 });
+        });
+      });
+    };
+    return { transport, releases, maxInFlight: () => max };
+  }
+
+  it("delivers a batch in parallel but never exceeds the concurrency limit", async () => {
+    const env = setup();
+    await enqueueN(env, 5);
+    const { transport, releases, maxInFlight } = gatedTransport();
+    const worker = makeWorker(env, { transport, batchSize: 5, concurrency: 2 });
+
+    const pending = worker.processOnce();
+
+    // First wave: exactly `concurrency` sends are in flight; the rest wait a slot.
+    await drain();
+    expect(releases).toHaveLength(2);
+
+    // Free one slot at a time; each completion pulls the next task, so the pool
+    // stays saturated at the limit until the whole batch drains.
+    for (let i = 0; i < releases.length; i++) {
+      releases[i]!();
+      await drain();
+    }
+
+    const result = await pending;
+    expect(result).toMatchObject({ claimed: 5, succeeded: 5, failed: 0 });
+    expect(releases).toHaveLength(5); // all five eventually sent
+    expect(maxInFlight()).toBe(2); // but never more than two at once
+  });
+
+  it("with concurrency 1 delivers strictly sequentially (one in flight at a time)", async () => {
+    const env = setup();
+    await enqueueN(env, 3);
+    const { transport, releases, maxInFlight } = gatedTransport();
+    const worker = makeWorker(env, { transport, batchSize: 3, concurrency: 1 });
+
+    const pending = worker.processOnce();
+    await drain();
+    expect(releases).toHaveLength(1); // only one ever in flight
+
+    for (let i = 0; i < releases.length; i++) {
+      releases[i]!();
+      await drain();
+    }
+
+    const result = await pending;
+    expect(result).toMatchObject({ claimed: 3, succeeded: 3 });
+    expect(maxInFlight()).toBe(1);
+  });
+
+  it("does not let one slow receiver block the rest of the batch (no head-of-line blocking)", async () => {
+    const env = setup();
+    // Task 0 targets a receiver that hangs; tasks 1 and 2 respond immediately.
+    const { message: m0 } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "SLOW",
+    });
+    await env.queue.enqueue({ messageId: m0.id });
+    for (let i = 0; i < 2; i++) {
+      const { message } = await env.store.create({
+        appId: "app_1",
+        eventType: "e",
+        payload: "FAST",
+      });
+      await env.queue.enqueue({ messageId: message.id });
+    }
+
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    let fastCompleted = 0;
+    const transport: Transport = async (request) => {
+      if (request.body === "SLOW") {
+        await slowGate;
+      } else {
+        fastCompleted += 1;
+      }
+      return { status: 200 };
+    };
+
+    const worker = makeWorker(env, { transport, batchSize: 3, concurrency: 3 });
+    const pending = worker.processOnce();
+
+    // Both FAST deliveries finish while SLOW is still hanging — the proof that a
+    // stuck receiver no longer stalls the deliveries behind it.
+    await drain();
+    expect(fastCompleted).toBe(2);
+
+    releaseSlow();
+    const result = await pending;
+    expect(result).toMatchObject({ claimed: 3, succeeded: 3 });
+  });
+
+  it("caps in-flight sends at the concurrency limit even when the batch is larger", async () => {
+    const env = setup();
+    await enqueueN(env, 6);
+    const { transport, releases, maxInFlight } = gatedTransport();
+    const worker = makeWorker(env, { transport, batchSize: 6, concurrency: 3 });
+
+    const pending = worker.processOnce();
+    await drain();
+    expect(releases).toHaveLength(3);
+
+    for (let i = 0; i < releases.length; i++) {
+      releases[i]!();
+      await drain();
+    }
+
+    const result = await pending;
+    expect(result).toMatchObject({ claimed: 6, succeeded: 6 });
+    expect(maxInFlight()).toBe(3);
   });
 });
 

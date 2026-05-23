@@ -114,8 +114,17 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
   survives unexpected tick errors via `onError`). A lapsed-and-reclaimed lease surfaces as a
   `StaleLeaseError` on settle, which the worker absorbs (counted `stale`) so it never double-settles.
   Per-attempt HTTP timeout via `AbortSignal`. Proven end-to-end: a worker-emitted request **verifies
-  against the existing verifier** in tests and a compiled-`dist` smoke run. v1 processes a claimed
-  batch sequentially (bounded concurrency is the next throughput optimization).
+  against the existing verifier** in tests and a compiled-`dist` smoke run. A claimed batch is
+  delivered through a **bounded concurrency pool** ✅ (`concurrency`, default 8, env
+  `POSTHORN_WORKER_CONCURRENCY`; `1` restores sequential): up to `concurrency` sends are in flight at
+  once, so one slow/timing-out receiver no longer blocks the healthy deliveries behind it
+  (head-of-line blocking), and the worst-case batch wall time drops from `batchSize × timeout` to
+  `ceil(batchSize / concurrency) × timeout` — relaxing the lease-lapse constraint. Each task still
+  settles independently under its own lease, so concurrency adds no new coordination, and an
+  unexpected settle error still propagates from `processOnce` (no sibling pump rejection is left
+  unhandled). Proven by a gated-transport pool-saturation suite (parallel-but-bounded, sequential at
+  `concurrency:1`, slow-receiver-doesn't-block) and a compiled-`dist` smoke (one message fanned to a
+  slow + fast receiver arrives in parallel, both verified through production ESM).
 - **P3 — endpoints + HTTP API + SDK (in progress):**
   - **Endpoint store ✅ (this tick):** the persisted subscription/endpoint entity the rest of P3
     sits on. `Endpoint` (tenant-scoped via `appId`; url + signing secret + event-type subscription

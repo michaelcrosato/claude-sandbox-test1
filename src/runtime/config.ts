@@ -17,6 +17,7 @@ import {
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WORKER_BATCH_SIZE,
+  DEFAULT_WORKER_CONCURRENCY,
 } from "../worker/delivery-worker.js";
 import {
   DEFAULT_FANOUT_BATCH_SIZE,
@@ -52,6 +53,8 @@ const MAX_PORT = 65_535;
 export interface WorkerConfig {
   /** Tasks claimed and delivered per tick. */
   readonly batchSize: number;
+  /** Maximum deliveries in flight at once within a tick (`1` = sequential). */
+  readonly concurrency: number;
   /** Per-attempt HTTP timeout, in ms. */
   readonly requestTimeoutMs: number;
   /** Pause between idle polls, in ms. */
@@ -149,7 +152,8 @@ function readString(env: Env, key: string, fallback: string): string {
  *
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
- * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
+ * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_CONCURRENCY`,
+ * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
  * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
  * `POSTHORN_FANOUT_IDLE_POLL_MS`.
@@ -169,6 +173,12 @@ export function loadConfig(env: Env): GatewayConfig {
       batchSize: readInt(env, "POSTHORN_WORKER_BATCH_SIZE", DEFAULT_WORKER_BATCH_SIZE, {
         min: 1,
       }),
+      concurrency: readInt(
+        env,
+        "POSTHORN_WORKER_CONCURRENCY",
+        DEFAULT_WORKER_CONCURRENCY,
+        { min: 1 },
+      ),
       requestTimeoutMs: readInt(
         env,
         "POSTHORN_WORKER_REQUEST_TIMEOUT_MS",

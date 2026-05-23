@@ -125,6 +125,7 @@ export {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_WORKER_BATCH_SIZE,
+  DEFAULT_WORKER_CONCURRENCY,
   type DeliveryWorkerOptions,
   type DeliveryTarget,
   type EndpointResolver,

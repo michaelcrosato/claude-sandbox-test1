@@ -13,6 +13,7 @@ import {
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WORKER_BATCH_SIZE,
+  DEFAULT_WORKER_CONCURRENCY,
 } from "../worker/delivery-worker.js";
 import {
   DEFAULT_FANOUT_BATCH_SIZE,
@@ -31,6 +32,7 @@ describe("loadConfig", () => {
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
       worker: {
         batchSize: DEFAULT_WORKER_BATCH_SIZE,
+        concurrency: DEFAULT_WORKER_CONCURRENCY,
         requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
         idlePollMs: DEFAULT_IDLE_POLL_MS,
         visibilityTimeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
@@ -88,16 +90,25 @@ describe("loadConfig", () => {
   it("parses worker tunables", () => {
     const config = loadConfig({
       POSTHORN_WORKER_BATCH_SIZE: "32",
+      POSTHORN_WORKER_CONCURRENCY: "12",
       POSTHORN_WORKER_REQUEST_TIMEOUT_MS: "5000",
       POSTHORN_WORKER_IDLE_POLL_MS: "250",
       POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS: "60000",
     });
     expect(config.worker).toEqual({
       batchSize: 32,
+      concurrency: 12,
       requestTimeoutMs: 5000,
       idlePollMs: 250,
       visibilityTimeoutMs: 60_000,
     });
+  });
+
+  it("rejects a non-positive worker concurrency", () => {
+    expect(loadConfig({ POSTHORN_WORKER_CONCURRENCY: "1" }).worker.concurrency).toBe(1);
+    expect(() => loadConfig({ POSTHORN_WORKER_CONCURRENCY: "0" })).toThrow(
+      /POSTHORN_WORKER_CONCURRENCY/,
+    );
   });
 
   it("parses fan-out dispatcher tunables", () => {
