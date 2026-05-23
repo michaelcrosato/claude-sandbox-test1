@@ -665,8 +665,32 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     **compiled-`dist` smoke run** (26/26 checks: login rejects wrong token, correct token sets
     `HttpOnly` cookie; create app → app detail; create key → secret shown → minted key authenticates
     a real tenant API request; cascade-delete invalidates key → 401; logout clears session).
+  - **Tenant dashboard UI ✅ (this tick):** the browser-facing face of the tenant plane — a
+    developer-debugging UI at `/dashboard/tenant/*` that lets any tenant browse their webhook
+    messages, per-endpoint delivery statuses, and per-attempt audit logs. Authentication is via
+    the tenant's existing API key (`phk_…`) presented once in a login form, which calls
+    `AppStore.authenticate` and issues an `HttpOnly; SameSite=Strict` session cookie (8-hour TTL,
+    `InMemoryTenantSessionStore` that stores `{appId}` — distinct from the admin session).
+    **Always enabled** — no extra config flag needed, since it adds no new credential surface
+    beyond the existing JSON API auth. **Security (decided, not incidental):** `appId` comes
+    from the session (resolved at login), never from a URL param, so a tenant cannot forge
+    another tenant's view; cross-tenant resources return `404`; cookies are `HttpOnly;
+    SameSite=Strict`; a revoked key's session expires naturally (no active invalidation needed
+    — the session just carries the `appId`, not re-authenticating on each request). Pages: login
+    (`GET /dashboard/tenant/login`), messages list (`GET /dashboard/tenant/messages` —
+    newest-first, paginated with "Older →" cursor), message detail (`GET
+    /dashboard/tenant/messages/:id` — payload, per-endpoint delivery status with endpoint URL
+    resolved, and full per-attempt log), endpoints list (`GET /dashboard/tenant/endpoints` —
+    URL, event types, health). The `/dashboard/tenant` dispatch is checked *before* the admin
+    `/dashboard` prefix in `server.ts` so the longer prefix wins and routes don't collide.
+    Zero new runtime dependencies; pure HTML/CSS string builders (`tenant-views.ts`) with `esc()`
+    XSS guard. Proven by 7 session-store tests + 15 handler tests (login/logout, auth guard,
+    messages list, message detail with deliveries+attempts, tenant isolation, 404s), plus a
+    **compiled-`dist` smoke run** (22/22 checks through production ESM: login flow, session
+    cookie attrs, tenant isolation, message list + detail, endpoints, logout, unauthenticated
+    redirect).
   - Remaining: usage-based billing integration (Stripe; needs an external account — ungateable in the
-    loop); tenant-facing webhook event dashboard (message/delivery browse UI for individual tenants).
+    loop); per-key `lastUsedAt`; attempt-log pagination; operator deploy/monitoring guide (P4 docs).
 
 ## 5. Out of scope / non-goals
 

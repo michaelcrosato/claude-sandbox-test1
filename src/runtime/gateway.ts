@@ -31,6 +31,8 @@ import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { createHttpServer } from "../http/server.js";
 import { createDashboardHandler } from "../dashboard/handler.js";
 import { InMemorySessionStore } from "../dashboard/sessions.js";
+import { createTenantDashboardHandler } from "../dashboard/tenant-handler.js";
+import { InMemoryTenantSessionStore } from "../dashboard/tenant-sessions.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
 import { POSTHORN_VERSION } from "../version.js";
 import type { AppStore } from "../apps/app.js";
@@ -202,6 +204,18 @@ export function createGateway(config: GatewayConfig): Gateway {
         })
       : undefined;
 
+  // The tenant dashboard is always wired — it uses the existing API-key auth so it
+  // adds no new credential surface. A tenant logs in with their phk_… key and gets
+  // a scoped session to browse their messages, deliveries, and attempt logs.
+  const tenantDashboardHandler = createTenantDashboardHandler({
+    apps,
+    endpoints,
+    messages,
+    queue,
+    attempts,
+    sessions: new InMemoryTenantSessionStore(),
+  });
+
   const httpServer = createHttpServer(
     {
       apps,
@@ -217,6 +231,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     {
       maxBodyBytes: config.maxBodyBytes,
       ...(dashboardHandler !== undefined ? { dashboardHandler } : {}),
+      tenantDashboardHandler,
     },
   );
 

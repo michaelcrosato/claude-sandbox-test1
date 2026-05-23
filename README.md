@@ -175,7 +175,12 @@ Early foundation. Implemented so far:
   index, rather than separate rollups that could drift — and a deduplicated retry is never
   double-counted. The span is capped (≤ 366 days) so a query stays bounded.
 - ✅ **Endpoint health + auto-disable** — Posthorn stops wasting deliveries on a permanently-dead
-  endpoint. Each endpoint tracks its delivery health (`consecutiveFailures` + the `firstFailureAt`/
+  endpoint.
+- ✅ **Tenant dashboard UI** — a browser UI at `/dashboard/tenant` where any tenant can log in with
+  their API key and browse their message history, per-endpoint delivery statuses, and the
+  per-attempt audit log (the "attempt 3: 503 in 1.2s" view). Tenant-scoped by session — one
+  tenant's messages, deliveries, and endpoints are never visible to another. No extra config;
+  it is always available alongside the gateway. Each endpoint tracks its delivery health (`consecutiveFailures` + the `firstFailureAt`/
   `lastFailureAt` streak, all surfaced over the API/SDK); once a delivery has been *failing
   continuously* for a configurable window (`POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS`, default 5 days;
   `0` = off), the endpoint is **automatically disabled** so fan-out stops sending it new work —

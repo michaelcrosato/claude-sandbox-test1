@@ -4,6 +4,92 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 32: P5 — tenant dashboard UI (browser webhook-debug view)
+
+**Repo truth at start:** clean main @ `d3c7774` (iter 31, admin dashboard UI) — a real clean
+baseline (git clean; iter-31 LOOP_LOG entry present and matches head;
+[[interrupted-tick-reconcile-pattern]] not triggered). Baseline re-verified by the manual gate
+([[validation-gate-is-manual]]): `tsc --noEmit` clean, vitest **790/790, 35 files**, `npm run build`
+clean, integrity + local gate exit 0. Node 24.15. GOAL→PROJECT reconciliation stands (Posthorn).
+
+**High-leverage move chosen (checklist #3):** Build the **P5 tenant dashboard UI** — a browser UI
+tenants use to browse their own webhook messages, deliveries, and attempt logs. The reasoning: the
+standing deferred items after iter-31 are Stripe billing (ungateable — external account), per-key
+`lastUsedAt` (observability add-on, minimal standalone value), and attempt-log pagination (a scaling
+concern, not an immediate user gap). The tenant dashboard is the highest-leverage move I can fully
+validate in one green tick: *(a)* it closes the "developers must curl the API to debug their own
+webhooks" gap — the single most common developer pain point with webhook infrastructure; *(b)* it
+completes the "observable" promise for the tenant (the admin dashboard serves operators; tenants now
+have parity); *(c)* all data primitives already exist (`listByApp`, `listByMessage`, `listAttempts`,
+`listByApp` for endpoints) — this is a pure presentation layer on top of them. The previous iteration's
+concern about tenant session auth being "more complex" was an estimation gap: the implementation
+follows the admin dashboard pattern exactly (API key → session cookie holding `appId`), with no
+new credential surface beyond what the JSON API already exposes.
+
+**Decisive design calls.**
+- **Always enabled; no extra config flag.** The tenant dashboard authenticates via the existing API
+  key — the same credential the JSON API uses. Disabling it would require a new `POSTHORN_TENANT_DASHBOARD`
+  toggle that adds no security benefit (a tenant who can call `POST /v1/messages` can call `GET
+  /dashboard/tenant/messages` — the same auth). The admin dashboard requires `POSTHORN_ADMIN_TOKEN`
+  because the admin surface is deliberately opt-in; the tenant surface is not.
+- **Session stores `appId`, not just existence.** `InMemoryTenantSessionStore` returns the `appId`
+  from `validateSession` — unlike the admin store which is a pure boolean check — because every
+  tenant page needs to scope its queries. Structurally distinct from (but parallel to) the admin
+  `InMemorySessionStore` to keep the two auth surfaces independent.
+- **`/dashboard/tenant` dispatched before `/dashboard` in `server.ts`.** The longer prefix must
+  match first so tenant routes don't accidentally fall through to the admin handler. The updated
+  routing checks `isTenantDashboard` before `isAdminDashboard`.
+- **`appId` from session only, never from URL.** A tenant cannot forge another tenant's view by
+  constructing a path — every query uses the session-held `appId`. Cross-tenant resources return
+  `404`, identical to the JSON API.
+- **Message detail joins endpoint URLs best-effort.** `listByMessage` returns task+endpointId; the
+  handler loads each endpoint (`endpoints.get(endpointId)`) to show the human-readable URL. A
+  deleted endpoint → `null` → shows the raw ID instead. Tenant-scoped: the fetched endpoint's
+  `appId` must match the session's (defense-in-depth against a stale cross-tenant endpointId).
+- **Payload displayed (truncated at 2000 chars).** This is the developer's primary debugging view
+  — "what exactly did I send?" Omitting it (as the message list API does for lean list rows) would
+  defeat the purpose of the detail page.
+
+**Built this tick:** `src/dashboard/tenant-sessions.ts` (`InMemoryTenantSessionStore`, 8h TTL,
+returns `appId` on validate); `src/dashboard/tenant-views.ts` (pure `tenantLoginPage` /
+`tenantMessagesPage` / `tenantMessageDetailPage` / `tenantEndpointsPage` HTML builders, `esc()`
+XSS guard, status pills, pagination); `src/dashboard/tenant-handler.ts`
+(`createTenantDashboardHandler(deps)` — login/logout, messages list+detail, endpoints list,
+session-scoped `requireAuth`); `scripts/smoke-tenant-dashboard.mjs` (22-check compiled-dist proof).
+Modified: `src/http/server.ts` (`tenantDashboardHandler` option, `/dashboard/tenant` prefix dispatch
+before `/dashboard`); `src/runtime/gateway.ts` (always-wired `InMemoryTenantSessionStore` +
+`createTenantDashboardHandler`). Docs: README ✅, PROJECT.md P5 tenant dashboard ✅ + deferred list,
+this entry.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **812/812,
+37 files** (was 790/35; **+22**: 7 `InMemoryTenantSessionStore` (create/validate-live/validate-expired-prune/
+validate-unknown/delete/no-op-delete/two-coexist); 15 handler (login page, wrong key, empty key,
+correct key + cookie attrs, logout, auth-guard redirect, root-redirect, messages list empty, tenant
+isolation, message detail with deliveries+attempts, cross-tenant 404, unknown-id 404, endpoints list
+with isolation, endpoints empty, unknown route 404)). `npm run build` clean. Integrity gate exit 0
+(three hash-protected files untouched); local gate exit 0. No tinypool flake
+([[vitest-tinypool-flaky-worker-exit]]).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** 22/22 checks PASS: (1)
+`GET /dashboard/tenant/login` → 200 HTML with `apikey` input; (2) wrong API key → 200 + error
+message; (3) correct key → 302 + `ph_tenant_session` cookie (HttpOnly, SameSite=Strict); (4)
+session cookie authenticates `GET /dashboard/tenant/messages` → 200; (5) other tenant's message
+absent from list (tenant isolation); (6) `GET /dashboard/tenant` → 302 to messages; (7) sent
+message appears in list; (8) message id extractable from list HTML; (9) `GET …/:id` → 200 with
+event type + payload visible; (10) `GET /dashboard/tenant/endpoints` → 200 with empty state; (11)
+`POST /dashboard/tenant/logout` → 302 + `Max-Age=0`; (12) post-logout session invalid → 302 to
+login. Temp script retained (not gitignored) per Axiom 3.
+
+**State:** GREEN → committing to main as Iteration 32. Net: a tenant with a valid API key can now
+open `/dashboard/tenant` in a browser and browse their sent messages, their per-endpoint delivery
+statuses (with endpoint URLs resolved), and the full per-attempt audit log (HTTP status, duration,
+error) — the "what happened to my webhook?" answer that was previously accessible only via the JSON
+API. **Standing deferred (next candidates):** Stripe billing (ungateable); per-key `lastUsedAt`;
+attempt-log pagination; operator deploy/monitoring guide (P4 docs); `endpoint.disabled` notification
+event.
+
+---
+
 ## 2026-05-23 — Iteration 31: P5 — admin dashboard UI
 
 **Repo truth at start:** clean main @ `93489a0` (iter 30, endpoint health + auto-disable) — a real
