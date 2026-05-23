@@ -4,6 +4,55 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 20: P3 — OpenAPI 3.1 contract (`GET /openapi.json`)
+
+**Repo truth at start:** clean main @ `7669885`. Baseline re-verified before any change: `tsc --noEmit`
+clean, vitest **529/529**, `npm run build` clean. Node 24.15. Reconciled GOAL→PROJECT: Posthorn's v1 is
+functionally complete and now *deployable + bootstrappable + monitorable* (iter 18 Docker, iter 19
+`/metrics`). The standing deferred list was: **OpenAPI spec**, an admin HTTP route, a per-attempt audit
+log, per-key `lastUsedAt`. Iter 19 deferred OpenAPI deliberately ("lower operational value than 'can I
+monitor this in prod?'"); with metrics now landed, the cross-language interop/adoption gap is the top item.
+
+**High-leverage move chosen:** Ship the **OpenAPI 3.1 document + `GET /openapi.json`** (checklist #3).
+Highest-leverage now because it compounds the just-shipped TS SDK by unlocking **every other language**
+(client codegen) + interactive docs (Swagger/Redoc) — a table-stakes adoption/procurement asset the
+product lacked — and it sits squarely in the loop's strongest regime: pure, deterministic, **zero new
+deps**, low landing risk. Chosen over the **per-attempt audit log** (larger, touches the worker hot path,
+migration → higher risk; deferred again) and the **admin HTTP route** (the CLI already covers bootstrap).
+
+**Built this tick:**
+- **`src/http/openapi.ts`** — `buildOpenApiDocument()`, a **pure**, zero-dependency builder of a
+  hand-authored OpenAPI 3.1 document (15 component schemas modeled byte-faithfully to the real
+  `api.ts` views/error envelope; Bearer security scheme + `security:[]` on the three unauthenticated
+  routes; `info.version` from the `version.ts`/`createRequire` seam). Hand-authored, not reflected —
+  a useful spec carries per-field docs/schemas/error-codes/examples the route table can't.
+- **`api.ts` refactor → single source of truth.** Extracted `API_ROUTE_KEYS` (exported), built the
+  route table from it via a `Record<ApiRouteKey, RouteHandler>` map (a missing/extra key is a *compile*
+  error), added the `GET /openapi.json` handler (served verbatim as JSON), and an exported pure
+  `patternToOpenApiPath` (`:id`→`{id}`). Behaviour of the existing 11 routes unchanged (49 api tests green).
+- **`index.ts`** re-exports `buildOpenApiDocument`/`OpenApiDocument`/`API_ROUTE_KEYS`/`ApiRouteKey`/
+  `patternToOpenApiPath`. **README + PROJECT.md** updated (feature bullet, surface table row, curl line).
+
+**Anti-drift (the load-bearing guarantee, same discipline as the dual-backend conformance suites):**
+a **bidirectional drift test** asserts the document's operations exactly equal `API_ROUTE_KEYS`
+(mapped via `patternToOpenApiPath`) — a route can never ship undocumented, nor a doc entry without a
+route. Plus ref-integrity (every `$ref` resolves) + no-orphan-schema + structure (3.1, unique
+operationIds, described responses, the exact 3 unauthenticated routes) tests.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **540/540** (was 529; +11: openapi suite 9, api +1,
+server +1). `npm run build` clean. **Compiled-`dist` smoke:** booted the *built* gateway, fetched
+`/openapi.json` over a real socket → 200 `application/json`, `openapi:"3.1.0"`, `info.version:"0.0.1"`
+(proves the production `createRequire` path), 12 operations / 15 schemas, retry route present. **Beyond
+the gate:** generated the doc and ran the **Redocly CLI OpenAPI linter** (`npx @redocly/cli lint`) →
+*"Your API description is valid"*, **0 errors** (only the stylistic `operation-4xx-response` warning on
+`/healthz` + `/openapi.json`, which correctly have no client-error path). Smoke artifacts removed; git
+status shows only intended files.
+
+**State:** GREEN → committing to main. Next candidates: per-attempt audit log (the remaining
+observability *depth* item), an admin/control-plane HTTP route, or P4 operator/deploy docs.
+
+---
+
 ## 2026-05-23 — Iteration 19: P4 — Prometheus `/metrics` endpoint (operator observability)
 
 **Repo truth at start:** clean main @ `1f3cca4`. Baseline re-verified before any change: `tsc --noEmit`

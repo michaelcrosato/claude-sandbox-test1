@@ -16,6 +16,7 @@
  * | ------ | -------------------- | ------ | ---------------------------------------- |
  * | GET    | /healthz             | none   | Liveness probe.                          |
  * | GET    | /metrics             | none   | Prometheus exposition (operator metrics).|
+ * | GET    | /openapi.json        | none   | The OpenAPI 3.1 description of this API.  |
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
  * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
@@ -72,9 +73,11 @@ import {
 import {
   defineRoutes,
   matchRoute,
+  toSegments,
   type RouteParams,
   type Route,
 } from "./router.js";
+import { buildOpenApiDocument } from "./openapi.js";
 
 /** The stores the API composes. One instance per running Posthorn service. */
 export interface ApiDeps {
@@ -339,6 +342,49 @@ type RouteHandler = (ctx: BaseContext) => Promise<ApiResponse>;
 type AuthedHandler = (ctx: AuthedContext) => Promise<ApiResponse>;
 
 /**
+ * Every v1 route as `"METHOD pattern"`. This is the **single source of truth** for
+ * the API surface: {@link createApi} maps each key to a handler (the `Record` type
+ * below makes that mapping exhaustive at compile time — a key with no handler, or a
+ * handler with no key, fails to typecheck), and the OpenAPI document
+ * (`openapi.ts`) is asserted against this same list so the two can never drift.
+ */
+export const API_ROUTE_KEYS = [
+  "GET /healthz",
+  "GET /metrics",
+  "GET /openapi.json",
+  "POST /v1/messages",
+  "GET /v1/messages",
+  "GET /v1/messages/:id",
+  "POST /v1/messages/:id/retry",
+  "GET /v1/endpoints",
+  "POST /v1/endpoints",
+  "GET /v1/endpoints/:id",
+  "PATCH /v1/endpoints/:id",
+  "DELETE /v1/endpoints/:id",
+] as const;
+
+/** One of the {@link API_ROUTE_KEYS} `"METHOD pattern"` strings. */
+export type ApiRouteKey = (typeof API_ROUTE_KEYS)[number];
+
+/** Split a route key into its method and pattern halves (the method has no spaces). */
+function splitRouteKey(key: ApiRouteKey): { method: string; pattern: string } {
+  const sep = key.indexOf(" ");
+  return { method: key.slice(0, sep), pattern: key.slice(sep + 1) };
+}
+
+/**
+ * Convert a router pattern to an OpenAPI path template: each `:name` segment becomes
+ * `{name}` (e.g. `/v1/messages/:id` → `/v1/messages/{id}`). Pure; shared with the
+ * spec drift test so the router and the document agree on path templating.
+ */
+export function patternToOpenApiPath(pattern: string): string {
+  const segments = toSegments(pattern).map((segment) =>
+    segment.startsWith(":") ? `{${segment.slice(1)}}` : segment,
+  );
+  return `/${segments.join("/")}`;
+}
+
+/**
  * Create the request handler for a Posthorn service. Builds the route table once;
  * the returned {@link ApiHandler} is then driven per request and never mutates.
  */
@@ -387,6 +433,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
     return { status: 200, body: text, contentType: PROMETHEUS_CONTENT_TYPE };
   };
+
+  // The OpenAPI document is static (its only variable is the build version), so it is
+  // built once at construction and served verbatim — the cross-language complement to
+  // the TS SDK and the source for interactive docs.
+  const openApiDocument = buildOpenApiDocument();
+  const openapi: RouteHandler = async () => json(200, openApiDocument);
 
   const createMessage: AuthedHandler = async (ctx) => {
     const body = parseJsonObject(ctx.req);
@@ -532,19 +584,30 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return { status: 204, body: undefined };
   };
 
-  const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>([
-    { method: "GET", pattern: "/healthz", handler: health },
-    { method: "GET", pattern: "/metrics", handler: metricsExposition },
-    { method: "POST", pattern: "/v1/messages", handler: authed(createMessage) },
-    { method: "GET", pattern: "/v1/messages", handler: authed(listMessages) },
-    { method: "GET", pattern: "/v1/messages/:id", handler: authed(getMessage) },
-    { method: "POST", pattern: "/v1/messages/:id/retry", handler: authed(retryMessage) },
-    { method: "GET", pattern: "/v1/endpoints", handler: authed(listEndpoints) },
-    { method: "POST", pattern: "/v1/endpoints", handler: authed(createEndpoint) },
-    { method: "GET", pattern: "/v1/endpoints/:id", handler: authed(getEndpoint) },
-    { method: "PATCH", pattern: "/v1/endpoints/:id", handler: authed(updateEndpoint) },
-    { method: "DELETE", pattern: "/v1/endpoints/:id", handler: authed(deleteEndpoint) },
-  ]);
+  // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
+  // exhaustive: a missing key or a stray extra key is a compile error, so the route
+  // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
+  const handlers: Record<ApiRouteKey, RouteHandler> = {
+    "GET /healthz": health,
+    "GET /metrics": metricsExposition,
+    "GET /openapi.json": openapi,
+    "POST /v1/messages": authed(createMessage),
+    "GET /v1/messages": authed(listMessages),
+    "GET /v1/messages/:id": authed(getMessage),
+    "POST /v1/messages/:id/retry": authed(retryMessage),
+    "GET /v1/endpoints": authed(listEndpoints),
+    "POST /v1/endpoints": authed(createEndpoint),
+    "GET /v1/endpoints/:id": authed(getEndpoint),
+    "PATCH /v1/endpoints/:id": authed(updateEndpoint),
+    "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
+  };
+
+  const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>(
+    API_ROUTE_KEYS.map((key) => {
+      const { method, pattern } = splitRouteKey(key);
+      return { method, pattern, handler: handlers[key] };
+    }),
+  );
 
   return async (req) => {
     const lookup = matchRoute(routes, req.method, req.path);

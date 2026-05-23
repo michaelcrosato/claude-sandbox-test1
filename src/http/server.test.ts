@@ -105,6 +105,16 @@ describe("createHttpServer (node:http adapter)", () => {
     expect(text).toContain('posthorn_build_info{version="test"} 1');
   });
 
+  it("serves the OpenAPI document unauthenticated as JSON over a real socket", async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/openapi.json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const doc = (await res.json()) as { openapi: string; paths: Record<string, unknown> };
+    expect(doc.openapi).toBe("3.1.0");
+    expect(doc.paths["/v1/messages"]).toBeDefined();
+  });
+
   it("rejects an over-large body with 413", async () => {
     const { base, secret } = await startServer({ maxBodyBytes: 16 });
     const res = await fetch(`${base}/v1/messages`, {

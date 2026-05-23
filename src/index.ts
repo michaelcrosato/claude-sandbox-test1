@@ -196,11 +196,19 @@ export {
 
 export {
   createApi,
+  API_ROUTE_KEYS,
+  patternToOpenApiPath,
   type ApiDeps,
   type ApiRequest,
   type ApiResponse,
   type ApiHandler,
+  type ApiRouteKey,
 } from "./http/api.js";
+
+export {
+  buildOpenApiDocument,
+  type OpenApiDocument,
+} from "./http/openapi.js";
 
 export {
   createHttpServer,

@@ -319,11 +319,31 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     compiled-`dist` SQLite smoke (dead_letter → retry → delivered+**verified** through production ESM).
     Net: a dead-lettered delivery is recoverable instead of lost — `dead_letter` is no longer terminal
     for an operator.
-  - **Deferred (next ticks):** an **OpenAPI** spec over this surface (the SDK now covers typed TS
-    consumers; OpenAPI would serve other-language clients + interactive docs); an admin/control-plane
-    *HTTP* route for app/key provisioning (the CLI now covers local bootstrap); a full per-attempt audit
-    log (one record per HTTP attempt with response detail — richer than the current
-    latest-state-per-endpoint view); and per-key `lastUsedAt`.
+  - **OpenAPI 3.1 contract — `GET /openapi.json` ✅ (this tick):** the cross-language complement to
+    the TS SDK and the source for interactive docs (Swagger UI / Redoc) — the SDK covers typed *TS*
+    consumers; the spec lets a consumer in **any** language generate a typed client (`openapi-generator`,
+    `oapi-codegen`, …). `src/http/openapi.ts` is a **pure**, zero-dependency builder
+    (`buildOpenApiDocument()`) of a hand-authored document — hand-authored, not reflected, because a
+    useful spec carries far more than the route table (per-field descriptions, request/response schemas,
+    error codes, examples, the Bearer security model + the `security:[]` overrides on the three
+    unauthenticated routes). `info.version` is read from `package.json` via the same `version.ts` seam
+    `/metrics` uses, so the published spec always names the running build. The route is served verbatim
+    (unauthenticated, like `/healthz`/`/metrics`). **What stops the spec drifting from the router** is the
+    same conformance discipline the dual store backends use: `api.ts` now exposes a single source of
+    truth `API_ROUTE_KEYS`, the route table is built from it via a `Record<ApiRouteKey, RouteHandler>`
+    (so a key with no handler — or a handler with no key — is a *compile* error), and a **bidirectional
+    drift test** asserts the document's operations exactly equal `API_ROUTE_KEYS` (mapped `:id`→`{id}` by
+    the shared, exported `patternToOpenApiPath`). So a route can never ship undocumented, nor a doc entry
+    without a route. Proven by a pure builder/structure/ref-integrity/orphan-schema suite, the drift test,
+    a pure handler test + a real-socket JSON test, a **compiled-`dist` smoke** (production ESM serves the
+    doc — 12 operations, 15 schemas, real build version via the `createRequire` path), and — beyond the
+    standard gate — **externally validated as a valid OpenAPI 3.1 document by the Redocly CLI linter**
+    (0 errors; the only output is the stylistic "no 4xx response" warning on the two probe routes that
+    legitimately have none). SDK coverage of this *meta* endpoint is intentionally omitted (the SDK is the
+    typed-TS path; OpenAPI exists for everyone else).
+  - **Deferred (next ticks):** an admin/control-plane *HTTP* route for app/key provisioning (the CLI
+    now covers local bootstrap); a full per-attempt audit log (one record per HTTP attempt with response
+    detail — richer than the current latest-state-per-endpoint view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a

@@ -74,6 +74,18 @@ describe("createApi — health & routing", () => {
     expect(body(res).error.code).toBe("not_found");
   });
 
+  it("serves the OpenAPI document unauthenticated as JSON", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/openapi.json" }));
+    expect(res.status).toBe(200);
+    // No raw-body opt-out: it is JSON-encoded like every other non-/metrics route.
+    expect(res.contentType).toBeUndefined();
+    const doc = body(res);
+    expect(doc.openapi).toBe("3.1.0");
+    expect(doc.paths["/v1/messages"]).toBeDefined();
+    expect(doc.paths["/v1/endpoints/{id}"]).toBeDefined();
+  });
+
   it("returns 405 with an Allow header for a known path, wrong method", async () => {
     const { api } = await setup();
     const res = await api(request({ method: "PUT", path: "/v1/endpoints/ep_1" }));

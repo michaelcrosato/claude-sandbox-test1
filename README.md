@@ -129,6 +129,15 @@ Early foundation. Implemented so far:
   instance-aggregate operational data — no tenant id, payload, or secret — so it is safe to scrape
   without a key; restrict it at the network layer if you want it private.
 
+- ✅ **OpenAPI 3.1 contract** — the cross-language complement to the TS SDK: an unauthenticated
+  `GET /openapi.json` serves a complete, machine-readable description of the v1 surface, so a consumer
+  in *any* language can generate a typed client (`openapi-generator`, `oapi-codegen`, …) or render
+  interactive docs (Swagger UI / Redoc) — no hand-written wrappers. It is **hand-authored** for rich
+  per-field docs, error codes, and the security model, then held to the implementation by a
+  bidirectional **drift test**: the documented operations are asserted to equal the router's single
+  source of truth, so a route can never ship undocumented (or a doc entry without a route). Validated
+  as a valid OpenAPI 3.1 document, with **zero runtime dependencies** (a pure builder over `node:*`).
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)
@@ -423,12 +432,16 @@ curl -s localhost:3000/metrics
 #   posthorn_messages_ingested_total 12
 #   posthorn_deliveries_total{outcome="succeeded"} 11
 #   posthorn_delivery_tasks{status="dead_letter"} 1   ← the gauge to alert on
+
+# Fetch the machine-readable API contract — generate a client for any language, or render docs:
+curl -s localhost:3000/openapi.json | jq .openapi   # "3.1.0"
 ```
 
 | Method | Path                | Auth   | Purpose                                |
 | ------ | ------------------- | ------ | -------------------------------------- |
 | GET    | `/healthz`          | none   | Liveness probe.                        |
 | GET    | `/metrics`          | none   | Prometheus exposition (operator metrics).|
+| GET    | `/openapi.json`     | none   | OpenAPI 3.1 contract (client codegen + docs).|
 | POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
 | GET    | `/v1/messages`      | Bearer | List the tenant's messages (paginated).|
 | GET    | `/v1/messages/:id`  | Bearer | Read a message + its delivery statuses.|
