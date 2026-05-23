@@ -3,6 +3,7 @@ import {
   createMessageId,
   IdempotencyConflictError,
   messageFingerprint,
+  utcMonthRange,
 } from "./message-store.js";
 
 describe("messageFingerprint", () => {
@@ -44,5 +45,27 @@ describe("IdempotencyConflictError", () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("IdempotencyConflictError");
     expect(err.key).toBe("key-123");
+  });
+});
+
+describe("utcMonthRange", () => {
+  it("spans [first-of-month, first-of-next-month) in UTC for a mid-month instant", () => {
+    const range = utcMonthRange(Date.UTC(2026, 4, 15, 12, 34, 56)); // 2026-05-15
+    expect(range.fromMs).toBe(Date.UTC(2026, 4, 1, 0, 0, 0));
+    expect(range.toMs).toBe(Date.UTC(2026, 5, 1, 0, 0, 0));
+  });
+
+  it("rolls December over into the next January", () => {
+    const range = utcMonthRange(Date.UTC(2026, 11, 31, 23, 59, 59)); // 2026-12-31
+    expect(range.fromMs).toBe(Date.UTC(2026, 11, 1, 0, 0, 0));
+    expect(range.toMs).toBe(Date.UTC(2027, 0, 1, 0, 0, 0));
+  });
+
+  it("includes the first instant of the month and excludes the first of the next", () => {
+    const first = Date.UTC(2026, 4, 1, 0, 0, 0);
+    const range = utcMonthRange(first);
+    expect(range.fromMs).toBe(first);
+    // Half-open: the upper bound is the next month's first instant, never counted.
+    expect(range.toMs).toBeGreaterThan(range.fromMs);
   });
 });

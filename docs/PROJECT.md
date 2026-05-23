@@ -505,9 +505,36 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     tenant-key→401), and a **compiled-`dist` smoke** (provision+send+usage over production ESM on the
     real `node:sqlite` file, persisting across a restart). **Deferred (next P5 steps):** per-tenant
     *delivery* usage (attempts aren't tenant-indexed today, so this wants a recording rollup, unlike
-    messages); real-time quota enforcement (block at a free-tier limit) on top of this read model;
-    billing integration (Stripe) and the dashboard UI.
-  - Remaining: usage-based billing integration, quota enforcement, and the dashboard UI.
+    messages); billing integration (Stripe) and the dashboard UI.
+  - **Real-time monthly quota enforcement ✅ (this tick):** the *enforcement* half of metering — the
+    freemium / usage-based-pricing gate that turns the read model into a billable boundary. A tenant
+    (`App`) gains an optional `monthlyMessageQuota: number | null` (`null` = no limit, the default; a
+    non-negative integer caps monthly accepts; `0` suspends a tenant), settable at provision time
+    (`POST /v1/admin/apps`) and changeable on the **new `PATCH /v1/admin/apps/:id`** plan-management
+    route (the upgrade/downgrade path; `null` removes the limit). On `POST /v1/messages` the handler
+    enforces it *before* accepting: a pure `utcMonthRange(now)` (`src/storage/message-store.ts`) locates
+    the current **UTC calendar month**, the existing `summarizeUsageByApp` counts that window, and a pure
+    `isQuotaExceeded(usage, quota)` (`src/apps/app.ts`, `>=` so a quota of `N` admits exactly `N`)
+    decides → `429 quota_exceeded`. **Reuses the iter-25 read model** — no rollup, no new index, no
+    ingest-hot-path write; the window "resets" at the month boundary with **no scheduled job** (the
+    range simply moves). Two deliberate correctness calls: an **idempotent replay is exempt** (it creates
+    no new message, so 429-ing it would break idempotency for a client retrying a send it already made),
+    and the limit is **soft** (a burst near the ceiling can overshoot by at most the concurrency — the
+    standard trade for not serializing ingest behind a counter). The quota is a nullable SQLite column
+    added by a seamless `ALTER TABLE` migration (a pre-quota DB upgrades with existing tenants defaulting
+    to unlimited — no behaviour change), validated by the shared `normalizeQuota`/`applyAppUpdate` so
+    intake can't drift across backends. The route table + bidirectional OpenAPI drift test *forced* the
+    `updateApp` operation, the `AppUpdate` schema, the `429` response, and the `monthlyMessageQuota`
+    field on `App`/`NewApp`. Proven by pure unit tests (`normalizeQuota`/`isQuotaExceeded`/`utcMonthRange`/
+    `applyAppUpdate`), the expanded app-store conformance suite (×2 backends: default/persist/reject/
+    update-clear), a pure handler suite (unlimited never blocked, admits-N-then-429, replay-exempt,
+    quota-0-blocks-all, **month-boundary reset**, PATCH set/change/clear + 400/404, disabled→404), and a
+    **compiled-`dist` smoke** (admin-create-with-quota → 429 at the ceiling → PATCH raises it → sends
+    resume, all over real HTTP, with the quota *and* the counted messages surviving a restart on the real
+    `node:sqlite` file). **Reconciled, not freshly authored:** the implementation landed orphaned from an
+    interrupted prior tick (built + uncommitted, no LOOP_LOG entry, tree red on `tsc`); this tick
+    adjudicated it, completed the missing test coverage, and validated it green ([[interrupted-tick-reconcile-pattern]]).
+  - Remaining: usage-based billing integration (Stripe), per-tenant *delivery* usage, and the dashboard UI.
 
 ## 5. Out of scope / non-goals
 

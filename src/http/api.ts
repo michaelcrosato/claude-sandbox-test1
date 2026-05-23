@@ -31,6 +31,7 @@
  * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
  * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
  * | GET    | /v1/admin/apps/:id   | Admin  | Fetch one tenant.                        |
+ * | PATCH  | /v1/admin/apps/:id   | Admin  | Update a tenant (name / message quota).  |
  * | DELETE | /v1/admin/apps/:id   | Admin  | Delete a tenant (204; cascades its keys).|
  * | POST   | /v1/admin/apps/:id/keys | Admin | Mint an API key (201, secret once).     |
  * | GET    | /v1/admin/apps/:id/keys | Admin | List a tenant's keys (metadata only).   |
@@ -71,6 +72,7 @@ import {
   MAX_LIST_MESSAGES_LIMIT,
   MAX_USAGE_RANGE_DAYS,
   utcDayKey,
+  utcMonthRange,
   type ListMessagesOptions,
   type Message,
   type MessageStore,
@@ -93,10 +95,12 @@ import type {
   DeliveryAttemptStore,
 } from "../attempts/delivery-attempt.js";
 import {
+  isQuotaExceeded,
   UnknownAppError,
   type ApiKey,
   type App,
   type AppStore,
+  type AppUpdate,
   type NewApp,
 } from "../apps/app.js";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -143,6 +147,12 @@ export interface ApiDeps {
    * satisfies an admin route, and the admin token is never looked up as a key.
    */
   readonly adminToken?: string;
+  /**
+   * Clock returning epoch ms, used only to locate the current UTC calendar month when
+   * enforcing a tenant's monthly message quota on `POST /v1/messages`. Defaults to
+   * {@link Date.now}; injected by tests to pin the billing window deterministically.
+   */
+  readonly now?: () => number;
 }
 
 /**
@@ -471,6 +481,9 @@ function appView(app: App): Record<string, unknown> {
   return {
     id: app.id,
     name: app.name,
+    // The tenant's monthly message quota (null = no limit) — operator-visible so a
+    // dashboard can show the plan; not secret material.
+    monthlyMessageQuota: app.monthlyMessageQuota,
     createdAt: app.createdAt,
     updatedAt: app.updatedAt,
   };
@@ -550,6 +563,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/admin/apps",
   "GET /v1/admin/apps",
   "GET /v1/admin/apps/:id",
+  "PATCH /v1/admin/apps/:id",
   "DELETE /v1/admin/apps/:id",
   "POST /v1/admin/apps/:id/keys",
   "GET /v1/admin/apps/:id/keys",
@@ -583,6 +597,9 @@ export function patternToOpenApiPath(pattern: string): string {
  * the returned {@link ApiHandler} is then driven per request and never mutates.
  */
 export function createApi(deps: ApiDeps): ApiHandler {
+  /** Clock for the monthly-quota window; defaults to the real one. */
+  const now = deps.now ?? Date.now;
+
   /** Wrap an authenticated handler with bearer-token resolution to a tenant. */
   const authed =
     (handler: AuthedHandler): RouteHandler =>
@@ -664,6 +681,34 @@ export function createApi(deps: ApiDeps): ApiHandler {
     const body = parseJsonObject(ctx.req);
     if (!("payload" in body)) {
       throw new HttpError(400, "invalid_request", "payload is required");
+    }
+    // Enforce the tenant's monthly message quota *before* accepting (the freemium /
+    // usage-based-pricing gate). Skipped entirely for an unlimited tenant (the default
+    // null quota), so the hot path is untouched unless a limit is configured. An
+    // idempotent *replay* of a message already accepted this period is exempt — it
+    // creates no new message, so failing it would break idempotency (a client retrying
+    // a send it already made would wrongly see 429). Soft limit: a burst of concurrent
+    // sends near the ceiling can overshoot by at most the concurrency, the standard
+    // trade for not serializing ingest behind a counter.
+    if (ctx.app.monthlyMessageQuota !== null) {
+      const rawKey = "idempotencyKey" in body ? body["idempotencyKey"] : undefined;
+      const replayKey = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : null;
+      const isReplay =
+        replayKey !== null &&
+        (await deps.messages.getByIdempotencyKey(ctx.app.id, replayKey)) !== null;
+      if (!isReplay) {
+        const usage = await deps.messages.summarizeUsageByApp(
+          ctx.app.id,
+          utcMonthRange(now()),
+        );
+        if (isQuotaExceeded(usage.total, ctx.app.monthlyMessageQuota)) {
+          throw new HttpError(
+            429,
+            "quota_exceeded",
+            `monthly message quota of ${ctx.app.monthlyMessageQuota} reached`,
+          );
+        }
+      }
     }
     // The delivered/signed body is the exact JSON serialization of `payload`; the
     // receiver verifies these bytes. `eventType`/`idempotencyKey` are validated by
@@ -846,12 +891,34 @@ export function createApi(deps: ApiDeps): ApiHandler {
   // (no resolved `app`) and are gated by `adminAuthed`, not `authed`.
 
   const createApp: RouteHandler = async (ctx) => {
-    // The body is optional: no body creates an unnamed app. When present, `name` is
-    // validated by the store's normalizeNewApp (TypeError → 400).
+    // The body is optional: no body creates an unnamed, unlimited app. When present,
+    // `name` and `monthlyMessageQuota` are validated by the store's normalizeNewApp
+    // (TypeError → 400).
     const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
-    const input: NewApp = "name" in body ? { name: body["name"] as string } : {};
+    const input: NewApp = {
+      ...("name" in body ? { name: body["name"] as string } : {}),
+      ...("monthlyMessageQuota" in body
+        ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
+        : {}),
+    };
     const app = await deps.apps.create(input);
     return json(201, appView(app));
+  };
+
+  const updateApp: RouteHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const body = parseJsonObject(ctx.req);
+    // Only the patchable fields are forwarded; values are validated by applyAppUpdate
+    // (TypeError → 400). Setting `monthlyMessageQuota` is the plan upgrade/downgrade
+    // path (null removes the limit). An unknown app throws UnknownAppError → 404.
+    const patch: AppUpdate = {
+      ...("name" in body ? { name: body["name"] as string } : {}),
+      ...("monthlyMessageQuota" in body
+        ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
+        : {}),
+    };
+    const app = await deps.apps.update(id, patch);
+    return json(200, appView(app));
   };
 
   const listApps: RouteHandler = async () => {
@@ -945,6 +1012,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),
     "GET /v1/admin/apps/:id": adminAuthed(getApp),
+    "PATCH /v1/admin/apps/:id": adminAuthed(updateApp),
     "DELETE /v1/admin/apps/:id": adminAuthed(deleteApp),
     "POST /v1/admin/apps/:id/keys": adminAuthed(createApiKey),
     "GET /v1/admin/apps/:id/keys": adminAuthed(listApiKeys),

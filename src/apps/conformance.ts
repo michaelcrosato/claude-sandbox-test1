@@ -121,6 +121,28 @@ export function describeAppStoreContract(
       it("returns null from get for an unknown id", async () => {
         expect(await store.get("app_nope")).toBeNull();
       });
+
+      it("defaults monthlyMessageQuota to null (no limit) and persists a set quota", async () => {
+        const unlimited = await store.create({ name: "free" });
+        expect(unlimited.monthlyMessageQuota).toBeNull();
+        expect((await store.get(unlimited.id))?.monthlyMessageQuota).toBeNull();
+
+        const capped = await store.create({ name: "pro", monthlyMessageQuota: 1000 });
+        expect(capped.monthlyMessageQuota).toBe(1000);
+        // Survives a round-trip through the backend (the SQLite column / in-memory map).
+        expect((await store.get(capped.id))?.monthlyMessageQuota).toBe(1000);
+
+        // 0 is a valid quota (a suspended tenant), distinct from null (no limit).
+        const suspended = await store.create({ monthlyMessageQuota: 0 });
+        expect((await store.get(suspended.id))?.monthlyMessageQuota).toBe(0);
+      });
+
+      it("rejects a negative or non-integer quota", async () => {
+        await expect(store.create({ monthlyMessageQuota: -1 })).rejects.toThrow(TypeError);
+        await expect(store.create({ monthlyMessageQuota: 1.5 })).rejects.toThrow(TypeError);
+        // @ts-expect-error — quota must be a number or null
+        await expect(store.create({ monthlyMessageQuota: "100" })).rejects.toThrow(TypeError);
+      });
     });
 
     describe("list", () => {
@@ -149,6 +171,23 @@ export function describeAppStoreContract(
         await expect(
           store.update("app_nope", { name: "x" }),
         ).rejects.toBeInstanceOf(UnknownAppError);
+      });
+
+      it("sets, changes, and clears the monthly quota; leaves it untouched when omitted", async () => {
+        const app = await store.create({ name: "Acme" });
+        expect(app.monthlyMessageQuota).toBeNull();
+
+        // Set a quota (a plan upgrade)…
+        const capped = await store.update(app.id, { monthlyMessageQuota: 500 });
+        expect(capped.monthlyMessageQuota).toBe(500);
+        // …a name-only patch leaves the quota in place…
+        const renamed = await store.update(app.id, { name: "Acme Inc" });
+        expect(renamed.name).toBe("Acme Inc");
+        expect(renamed.monthlyMessageQuota).toBe(500);
+        // …and null removes the limit again.
+        const lifted = await store.update(app.id, { monthlyMessageQuota: null });
+        expect(lifted.monthlyMessageQuota).toBeNull();
+        expect((await store.get(app.id))?.monthlyMessageQuota).toBeNull();
       });
     });
 

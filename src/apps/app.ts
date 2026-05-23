@@ -37,6 +37,15 @@ export interface App {
   readonly id: string;
   /** Human-readable label. Empty string when none was given. */
   readonly name: string;
+  /**
+   * The tenant's message quota per UTC calendar month, or `null` for **no limit**
+   * (the default). When set, `POST /v1/messages` rejects a *new* message with `429`
+   * once the tenant has already accepted this many messages in the current month —
+   * the enforcement half of the per-tenant metering the hosted control plane bills on
+   * (see {@link isQuotaExceeded} and {@link import("../storage/message-store.js").utcMonthRange}).
+   * A non-negative integer; `0` blocks all sends (a suspended tenant).
+   */
+  readonly monthlyMessageQuota: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
   /** Time of the last mutation, epoch ms. */
@@ -47,12 +56,22 @@ export interface App {
 export interface NewApp {
   /** Optional human-readable label. Defaults to `""`. */
   readonly name?: string;
+  /**
+   * Optional monthly message quota (a non-negative integer), or `null`/absent for no
+   * limit (the default). See {@link App.monthlyMessageQuota}.
+   */
+  readonly monthlyMessageQuota?: number | null;
 }
 
 /** A patch applied to an existing app. Only the provided fields change. */
 export interface AppUpdate {
   /** Replace the human-readable label. */
   readonly name?: string;
+  /**
+   * Replace the monthly message quota (a non-negative integer), or set `null` to
+   * remove the limit. Omit to leave it unchanged. See {@link App.monthlyMessageQuota}.
+   */
+  readonly monthlyMessageQuota?: number | null;
 }
 
 /**
@@ -228,9 +247,37 @@ function normalizeName(name: unknown): string {
   return name;
 }
 
+/**
+ * Validate an optional monthly message quota, collapsing absent/`null` to `null`
+ * (no limit). A present value must be a non-negative integer; anything else throws
+ * {@link TypeError}. Shared by every backend so quota intake cannot drift, and the
+ * single definition of what a valid quota is.
+ */
+export function normalizeQuota(value: unknown): number | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new TypeError("monthlyMessageQuota must be a non-negative integer or null");
+  }
+  return value;
+}
+
+/**
+ * The single rule for whether a tenant is over its monthly message quota: `true`
+ * once `currentUsage` has reached `quota`. A `null` quota means **no limit** and is
+ * never exceeded. The `>=` is deliberate — when usage equals the quota, the quota is
+ * spent, so the *next* message is the one rejected (a quota of `N` admits exactly `N`
+ * messages per month). Pure; the HTTP layer calls it before accepting a new message.
+ */
+export function isQuotaExceeded(currentUsage: number, quota: number | null): boolean {
+  return quota !== null && currentUsage >= quota;
+}
+
 /** The validated, normalized fields of a {@link NewApp}. */
 export interface NormalizedNewApp {
   readonly name: string;
+  readonly monthlyMessageQuota: number | null;
 }
 
 /**
@@ -238,7 +285,10 @@ export interface NormalizedNewApp {
  * input. Shared by every backend so they enforce an identical intake contract.
  */
 export function normalizeNewApp(input: NewApp = {}): NormalizedNewApp {
-  return { name: normalizeName(input.name) };
+  return {
+    name: normalizeName(input.name),
+    monthlyMessageQuota: normalizeQuota(input.monthlyMessageQuota),
+  };
 }
 
 /**
@@ -251,6 +301,10 @@ export function applyAppUpdate(current: App, patch: AppUpdate, nowMs: number): A
   return {
     id: current.id,
     name: "name" in patch ? normalizeName(patch.name) : current.name,
+    monthlyMessageQuota:
+      "monthlyMessageQuota" in patch
+        ? normalizeQuota(patch.monthlyMessageQuota)
+        : current.monthlyMessageQuota,
     createdAt: current.createdAt,
     updatedAt: nowMs,
   };

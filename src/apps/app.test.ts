@@ -15,7 +15,9 @@ import {
   createAppId,
   generateApiKeySecret,
   hashApiKey,
+  isQuotaExceeded,
   normalizeNewApp,
+  normalizeQuota,
   UnknownAppError,
   type App,
 } from "./app.js";
@@ -83,15 +85,63 @@ describe("apiKeyHashesEqual", () => {
 });
 
 describe("normalizeNewApp", () => {
-  it("defaults an absent or omitted name to empty string", () => {
-    expect(normalizeNewApp()).toEqual({ name: "" });
-    expect(normalizeNewApp({})).toEqual({ name: "" });
+  it("defaults an absent or omitted name to empty string and quota to null", () => {
+    expect(normalizeNewApp()).toEqual({ name: "", monthlyMessageQuota: null });
+    expect(normalizeNewApp({})).toEqual({ name: "", monthlyMessageQuota: null });
   });
 
   it("keeps a provided name and rejects a non-string", () => {
-    expect(normalizeNewApp({ name: "Acme" })).toEqual({ name: "Acme" });
+    expect(normalizeNewApp({ name: "Acme" })).toEqual({
+      name: "Acme",
+      monthlyMessageQuota: null,
+    });
     // @ts-expect-error — name must be a string
     expect(() => normalizeNewApp({ name: 1 })).toThrow(TypeError);
+  });
+
+  it("carries a provided monthly quota through", () => {
+    expect(normalizeNewApp({ monthlyMessageQuota: 1000 })).toEqual({
+      name: "",
+      monthlyMessageQuota: 1000,
+    });
+  });
+});
+
+describe("normalizeQuota", () => {
+  it("collapses absent and null to null (no limit)", () => {
+    expect(normalizeQuota(undefined)).toBeNull();
+    expect(normalizeQuota(null)).toBeNull();
+  });
+
+  it("keeps a non-negative integer, including 0 (a suspended tenant)", () => {
+    expect(normalizeQuota(0)).toBe(0);
+    expect(normalizeQuota(1000)).toBe(1000);
+  });
+
+  it("rejects a negative, fractional, or non-number quota", () => {
+    expect(() => normalizeQuota(-1)).toThrow(TypeError);
+    expect(() => normalizeQuota(1.5)).toThrow(TypeError);
+    expect(() => normalizeQuota("100")).toThrow(TypeError);
+    expect(() => normalizeQuota(Number.NaN)).toThrow(TypeError);
+  });
+});
+
+describe("isQuotaExceeded", () => {
+  it("is never exceeded for a null quota (no limit)", () => {
+    expect(isQuotaExceeded(0, null)).toBe(false);
+    expect(isQuotaExceeded(1_000_000, null)).toBe(false);
+  });
+
+  it("is false below the quota and true at or above it (the next message is rejected)", () => {
+    expect(isQuotaExceeded(0, 2)).toBe(false);
+    expect(isQuotaExceeded(1, 2)).toBe(false);
+    // Usage equal to the quota means it is spent — the next send is the one blocked.
+    expect(isQuotaExceeded(2, 2)).toBe(true);
+    expect(isQuotaExceeded(3, 2)).toBe(true);
+  });
+
+  it("blocks every send for a quota of 0", () => {
+    expect(isQuotaExceeded(0, 0)).toBe(true);
   });
 });
 
@@ -99,6 +149,7 @@ describe("applyAppUpdate", () => {
   const base: App = {
     id: "app_1",
     name: "before",
+    monthlyMessageQuota: null,
     createdAt: 1000,
     updatedAt: 1000,
   };
@@ -108,6 +159,7 @@ describe("applyAppUpdate", () => {
     expect(next).toEqual({
       id: "app_1",
       name: "after",
+      monthlyMessageQuota: null,
       createdAt: 1000,
       updatedAt: 2000,
     });
@@ -117,6 +169,25 @@ describe("applyAppUpdate", () => {
     const next = applyAppUpdate(base, {}, 2000);
     expect(next.name).toBe("before");
     expect(next.updatedAt).toBe(2000);
+  });
+
+  it("sets, then clears, the monthly quota while leaving the other fields intact", () => {
+    const capped = applyAppUpdate(base, { monthlyMessageQuota: 500 }, 2000);
+    expect(capped.monthlyMessageQuota).toBe(500);
+    expect(capped.name).toBe("before");
+
+    // A name-only patch leaves the quota untouched…
+    const renamed = applyAppUpdate(capped, { name: "after" }, 3000);
+    expect(renamed.monthlyMessageQuota).toBe(500);
+
+    // …and null removes the limit again.
+    const lifted = applyAppUpdate(renamed, { monthlyMessageQuota: null }, 4000);
+    expect(lifted.monthlyMessageQuota).toBeNull();
+  });
+
+  it("rejects a negative or non-integer quota patch", () => {
+    expect(() => applyAppUpdate(base, { monthlyMessageQuota: -1 }, 2000)).toThrow(TypeError);
+    expect(() => applyAppUpdate(base, { monthlyMessageQuota: 2.5 }, 2000)).toThrow(TypeError);
   });
 });
 

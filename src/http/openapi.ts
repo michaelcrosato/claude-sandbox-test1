@@ -201,6 +201,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "400": errorResponse("Malformed or missing request body."),
             "401": errorResponse("Missing or invalid API key."),
             "409": errorResponse("Idempotency key reused with a different payload."),
+            "429": errorResponse(
+              "The tenant's monthly message quota is reached (a deduplicated replay is exempt).",
+            ),
           },
         },
         get: {
@@ -435,6 +438,24 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "404": errorResponse("No such app (or the admin API is not enabled)."),
           },
         },
+        patch: {
+          operationId: "updateApp",
+          tags: ["Admin"],
+          summary: "Update a tenant",
+          description:
+            "Patch a tenant; only the provided fields change. Set `monthlyMessageQuota` to " +
+            "change the plan (a non-negative integer to cap monthly messages, or null to remove " +
+            "the limit), or `name` to rename. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          requestBody: jsonBody(ref("AppUpdate")),
+          responses: {
+            "200": jsonResponse("The updated tenant.", ref("App")),
+            "400": errorResponse("Malformed request body (e.g. a negative or non-integer quota)."),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
         delete: {
           operationId: "deleteApp",
           tags: ["Admin"],
@@ -579,7 +600,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 code: {
                   type: "string",
                   description: "A stable, machine-readable error code.",
-                  examples: ["not_found", "unauthorized", "invalid_request", "idempotency_conflict"],
+                  examples: ["not_found", "unauthorized", "invalid_request", "idempotency_conflict", "quota_exceeded"],
                 },
                 message: { type: "string", description: "A human-readable explanation." },
               },
@@ -850,19 +871,46 @@ export function buildOpenApiDocument(): OpenApiDocument {
         App: {
           type: "object",
           description: "A tenant. The unit a single instance serves, owns endpoints/messages, and (in the hosted plane) is metered/billed.",
-          required: ["id", "name", "createdAt", "updatedAt"],
+          required: ["id", "name", "monthlyMessageQuota", "createdAt", "updatedAt"],
           properties: {
             id: { type: "string", examples: ["app_2Yx9..."], description: "The `appId` endpoints and messages reference." },
             name: { type: "string", description: "Human-readable label; empty string when none." },
+            monthlyMessageQuota: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "Messages this tenant may accept per UTC calendar month, or null for no limit. " +
+                "When set, `POST /v1/messages` returns `429` once it is reached (the freemium/" +
+                "usage-pricing gate); a deduplicated replay is exempt and never counts.",
+            },
             createdAt: epochMs("Creation time, epoch ms."),
             updatedAt: epochMs("Last mutation time, epoch ms."),
           },
         },
         NewApp: {
           type: "object",
-          description: "The (optional) body of `POST /v1/admin/apps`. Omit it entirely to create an unnamed tenant.",
+          description: "The (optional) body of `POST /v1/admin/apps`. Omit it entirely to create an unnamed, unlimited tenant.",
           properties: {
             name: { type: "string", description: "Optional human-readable label." },
+            monthlyMessageQuota: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description: "Optional monthly message quota; omit or null for no limit (the default).",
+            },
+          },
+        },
+        AppUpdate: {
+          type: "object",
+          description:
+            "The body of `PATCH /v1/admin/apps/{id}`. Only the provided fields change; " +
+            "`monthlyMessageQuota` set to null removes the limit.",
+          properties: {
+            name: { type: "string", description: "Replace the human-readable label." },
+            monthlyMessageQuota: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description: "Replace the monthly message quota; null removes the limit.",
+            },
           },
         },
         AppList: {

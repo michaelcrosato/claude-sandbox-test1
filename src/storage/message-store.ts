@@ -493,6 +493,23 @@ export function utcDayKey(epochMs: number): string {
 }
 
 /**
+ * The half-open epoch-ms range `[firstOfMonth, firstOfNextMonth)` of the **UTC
+ * calendar month** containing `nowMs` — the window a monthly message quota is
+ * enforced over. Pure: derived entirely from the clock, so the quota "resets" at the
+ * UTC month boundary with no scheduled job (the range simply moves). `Date.UTC` rolls
+ * December over to the next January correctly. Pair with
+ * {@link MessageStore.summarizeUsageByApp} to count a tenant's messages this month and
+ * {@link import("../apps/app.js").isQuotaExceeded} to decide whether the next is admitted.
+ */
+export function utcMonthRange(nowMs: number): UsageRange {
+  const d = new Date(nowMs);
+  return {
+    fromMs: Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1),
+    toMs: Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1),
+  };
+}
+
+/**
  * Validate a usage range, shared by every backend so they reject identically.
  * Bounds must be finite with `fromMs <= toMs` (an empty range is allowed and yields
  * a zero summary). Throws {@link RangeError} otherwise — a library-facing backstop;

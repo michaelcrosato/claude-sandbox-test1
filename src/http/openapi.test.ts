@@ -106,8 +106,8 @@ describe("buildOpenApiDocument — structure", () => {
     expect(adminScheme.type).toBe("http");
     expect(adminScheme.scheme).toBe("bearer");
     const adminOps = eachOperation(doc).filter(({ key }) => key.includes(" /v1/admin/"));
-    // All eight control-plane operations are documented…
-    expect(adminOps.length).toBe(8);
+    // All nine control-plane operations are documented…
+    expect(adminOps.length).toBe(9);
     // …and each requires adminAuth (not the global bearerAuth, and not `security: []`).
     for (const { key, op } of adminOps) {
       expect(op.security, `${key} security`).toEqual([{ adminAuth: [] }]);

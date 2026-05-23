@@ -4,6 +4,63 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 26: P5 — real-time monthly quota enforcement (RECONCILED interrupted tick)
+
+**Repo truth at start — an interrupted prior tick, not a clean baseline.** git head was `4f30cb9`
+(iter 25, usage metering) and the iter-25 LOOP_LOG entry matched it, but the tree was **dirty** with 10
+modified source files implementing an *unlogged, uncommitted* feature — the classic
+`[[interrupted-tick-reconcile-pattern]]` signal, here even earlier than usual: the work was built but
+PROJECT.md/README were **not** yet marked ✅. Critically the tree was **red**: `tsc --noEmit` failed
+(`app.test.ts` constructed an `App` literal missing the new required `monthlyMessageQuota` field), and
+several existing `toEqual` assertions (`normalizeNewApp`/`applyAppUpdate`, the admin `appView`) would
+fail at runtime against the new field. Per the doctrine + Axiom 4, the high-leverage move was to
+**adjudicate the orphaned work, not rebuild**: the implementation was read critically and judged coherent
+and correct, so it was completed to the project bar rather than discarded.
+
+**What the orphaned implementation was:** **real-time per-tenant monthly message quota enforcement** — the
+*enforcement* half of iter-25's metering read model and the standing-first P5 deferred item ("real-time
+quota enforcement (block at a free-tier limit)"). `App` gains `monthlyMessageQuota: number|null`
+(null=unlimited default; `0`=suspended); a pure `utcMonthRange(now)` + the existing `summarizeUsageByApp`
++ a pure `isQuotaExceeded` (`>=`) gate `POST /v1/messages` → `429 quota_exceeded`; a new
+`PATCH /v1/admin/apps/:id` is the plan-change route. Reuses the iter-25 read model (no rollup, no new
+index, no ingest-write); the window resets at the UTC month edge with no scheduled job. Two correctness
+calls baked in: an **idempotent replay is exempt** (no new message → 429-ing it would break idempotency),
+and the limit is **soft** (concurrency-bounded overshoot). Nullable SQLite column via a seamless
+`ALTER TABLE` migration (pre-quota DBs default to unlimited). Route table + bidirectional OpenAPI drift
+test force the `updateApp` op, `AppUpdate` schema, `429` response, and the new fields.
+
+**What THIS tick authored (completing the tick):** the missing test coverage + the doc/log truth.
+- Fixed the red/broken existing tests: the `App` base literal + `normalizeNewApp`/`applyAppUpdate`/admin
+  `appView` `toEqual`s now carry `monthlyMessageQuota`.
+- Added pure unit tests: `normalizeQuota` (null-collapse/non-neg-int/reject), `isQuotaExceeded` (null
+  never, `>=` boundary, 0-blocks-all), `utcMonthRange` (mid-month/Dec-rollover/half-open), `applyAppUpdate`
+  quota set-clear + reject.
+- Added HTTP handler tests: quota enforcement (unlimited-never-blocked, admits-N-then-429, replay-exempt,
+  quota-0, **month-boundary reset** via an injected clock) and `PATCH /v1/admin/apps/:id` (set/change/
+  clear, 400 invalid, 404 unknown, added to the disabled-by-default 404 probe list); admin appView quota.
+
+**Force Absolute Validation (manual gate, `[[validation-gate-is-manual]]`):** `tsc --noEmit` clean (was
+red at start). vitest **687/687, 32/32 files** (was 660 at iter 25; +6 quota app-store conformance ×2 +21
+new this tick). First full run hit the known one-off `[[vitest-tinypool-flaky-worker-exit]]` ("Worker
+exited unexpectedly", 1 file uncounted) — re-ran, fully green, confirming flake not red. `npm run build`
+clean. Integrity gate exit 0 (three hash-protected files untouched); local gate exit 0. Node 24.
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** binary on a
+**file-backed** dir with an admin token; admin-created a tenant with `monthlyMessageQuota:2` over HTTP
+(SQLite column round-trips), sent 2→202 + 3rd→`429 quota_exceeded`, `PATCH`ed the quota to 4 → sends
+resumed (202,202) then 429 at the new ceiling; **restarted on the same files** and saw the quota (=4) and
+the counted messages both persist (still 429), then a further `PATCH` to 10 resumed delivery. Exit 0;
+temp script + dir removed; git shows only the 12 intended source/test files.
+
+**State:** GREEN → committing to main as Iteration 26. Net: a deployed Posthorn now **enforces** per-tenant
+monthly message quotas (the freemium/usage-pricing boundary), not just *reports* usage — `429` at the
+ceiling, plan changes over the admin control plane, the allowance resetting at the UTC month edge with no
+job. **Standing deferred (next candidates):** usage-based billing integration (Stripe); per-tenant
+*delivery* usage (needs a recording rollup — attempts aren't tenant-indexed); an *admin* SDK client; per-key
+`lastUsedAt`; attempt-log pagination; an operator deploy/monitoring guide; and the rest of P5 (dashboard UI).
+
+---
+
 ## 2026-05-23 — Iteration 25: P5 — per-tenant usage metering (the billing/quota read model)
 
 **Repo truth at start:** clean main @ `37120eb` (iter 24, admin/control-plane HTTP API) — a real clean

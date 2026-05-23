@@ -94,6 +94,7 @@ export class InMemoryAppStore implements AppStore {
     const app: App = {
       id,
       name: normalized.name,
+      monthlyMessageQuota: normalized.monthlyMessageQuota,
       createdAt: nowMs,
       updatedAt: nowMs,
     };

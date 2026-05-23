@@ -299,6 +299,89 @@ describe("createApi — POST /v1/messages (ingest)", () => {
   });
 });
 
+describe("createApi — POST /v1/messages monthly quota enforcement", () => {
+  interface QuotaFixture {
+    readonly api: ApiHandler;
+    readonly secret: string;
+    setNow(ms: number): void;
+  }
+
+  /**
+   * An API for a single tenant with the given monthly quota, over a clock shared by
+   * the message store (so messages land in the window) and the quota check itself
+   * (so `utcMonthRange(now)` lines up). The clock can be advanced across a month edge.
+   */
+  async function setupQuota(quota: number | null): Promise<QuotaFixture> {
+    let nowMs = Date.UTC(2026, 4, 15, 12, 0, 0); // 2026-05-15T12:00:00Z
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs });
+    const app = await apps.create({ name: "Acme", monthlyMessageQuota: quota });
+    const { secret } = await apps.createApiKey(app.id);
+    return { api, secret, setNow: (ms) => { nowMs = ms; } };
+  }
+
+  /** Send one message; an optional idempotency key drives the replay path. */
+  function send(api: ApiHandler, secret: string, idempotencyKey?: string): Promise<ApiResponse> {
+    return api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "e", payload: {}, ...(idempotencyKey ? { idempotencyKey } : {}) },
+        secret,
+      ),
+    );
+  }
+
+  it("never blocks an unlimited (null-quota) tenant", async () => {
+    const { api, secret } = await setupQuota(null);
+    for (let i = 0; i < 5; i++) {
+      expect((await send(api, secret)).status).toBe(202);
+    }
+  });
+
+  it("admits exactly `quota` messages this month, then 429s the next", async () => {
+    const { api, secret } = await setupQuota(2);
+    expect((await send(api, secret)).status).toBe(202);
+    expect((await send(api, secret)).status).toBe(202);
+    const blocked = await send(api, secret);
+    expect(blocked.status).toBe(429);
+    expect(body(blocked).error.code).toBe("quota_exceeded");
+  });
+
+  it("blocks every send for a quota of 0 (a suspended tenant)", async () => {
+    const { api, secret } = await setupQuota(0);
+    const res = await send(api, secret);
+    expect(res.status).toBe(429);
+    expect(body(res).error.code).toBe("quota_exceeded");
+  });
+
+  it("exempts an idempotent replay even once the ceiling is reached", async () => {
+    const { api, secret } = await setupQuota(1);
+    // Spend the single message of the month under a key.
+    expect((await send(api, secret, "k1")).status).toBe(202);
+    // A brand-new message is now blocked…
+    expect((await send(api, secret, "k2")).status).toBe(429);
+    // …but replaying the already-accepted key creates no new message, so it is allowed
+    // (failing it would break idempotency for a client retrying a send it already made).
+    const replay = await send(api, secret, "k1");
+    expect(replay.status).toBe(202);
+    expect(body(replay).deduplicated).toBe(true);
+  });
+
+  it("resets the allowance at the UTC month boundary (no scheduled job)", async () => {
+    const { api, secret, setNow } = await setupQuota(1);
+    expect((await send(api, secret)).status).toBe(202); // May allowance spent
+    expect((await send(api, secret)).status).toBe(429);
+    // Crossing into June moves the window; the new month starts fresh.
+    setNow(Date.UTC(2026, 5, 1, 0, 0, 0)); // 2026-06-01T00:00:00Z
+    expect((await send(api, secret)).status).toBe(202);
+  });
+});
+
 describe("createApi — endpoints CRUD", () => {
   it("creates an endpoint, returning the secret exactly once", async () => {
     const { api, secret, appId } = await setup();
@@ -1345,6 +1428,7 @@ describe("createApi — admin / control-plane API", () => {
         ["POST", "/v1/admin/apps"],
         ["GET", "/v1/admin/apps"],
         ["GET", "/v1/admin/apps/app_x"],
+        ["PATCH", "/v1/admin/apps/app_x"],
         ["DELETE", "/v1/admin/apps/app_x"],
         ["POST", "/v1/admin/apps/app_x/keys"],
         ["GET", "/v1/admin/apps/app_x/keys"],
@@ -1403,10 +1487,11 @@ describe("createApi — admin / control-plane API", () => {
 
       const got = await api(adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }));
       expect(got.status).toBe(200);
-      // The view is exactly identity + label + timestamps — no secret material.
+      // The view is exactly identity + label + quota + timestamps — no secret material.
       expect(body(got)).toEqual({
         id: appId,
         name: "Acme",
+        monthlyMessageQuota: null,
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
       });
@@ -1424,6 +1509,88 @@ describe("createApi — admin / control-plane API", () => {
     it("404s fetching an unknown app", async () => {
       const { api } = setupAdmin();
       const res = await api(adminRequest("GET", "/v1/admin/apps/app_nope", { token: ADMIN_TOKEN }));
+      expect(res.status).toBe(404);
+    });
+
+    it("creates a tenant with a monthly quota and exposes it in the view", async () => {
+      const { api } = setupAdmin();
+      const res = await api(
+        adminRequest("POST", "/v1/admin/apps", {
+          token: ADMIN_TOKEN,
+          body: { name: "Pro", monthlyMessageQuota: 1000 },
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect(body(res).monthlyMessageQuota).toBe(1000);
+    });
+
+    it("PATCH sets, changes, and clears the monthly quota; a name-only patch leaves it", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api, "Acme");
+
+      // A fresh app is unlimited.
+      const before = await api(
+        adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }),
+      );
+      expect(body(before).monthlyMessageQuota).toBeNull();
+
+      // Set a quota (a plan upgrade).
+      const capped = await api(
+        adminRequest("PATCH", `/v1/admin/apps/${appId}`, {
+          token: ADMIN_TOKEN,
+          body: { monthlyMessageQuota: 1000 },
+        }),
+      );
+      expect(capped.status).toBe(200);
+      expect(body(capped).monthlyMessageQuota).toBe(1000);
+
+      // A name-only patch leaves the quota in place.
+      const renamed = await api(
+        adminRequest("PATCH", `/v1/admin/apps/${appId}`, {
+          token: ADMIN_TOKEN,
+          body: { name: "Acme Inc" },
+        }),
+      );
+      expect(body(renamed).name).toBe("Acme Inc");
+      expect(body(renamed).monthlyMessageQuota).toBe(1000);
+
+      // null removes the limit again — durably.
+      const lifted = await api(
+        adminRequest("PATCH", `/v1/admin/apps/${appId}`, {
+          token: ADMIN_TOKEN,
+          body: { monthlyMessageQuota: null },
+        }),
+      );
+      expect(body(lifted).monthlyMessageQuota).toBeNull();
+      const after = await api(
+        adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }),
+      );
+      expect(body(after).monthlyMessageQuota).toBeNull();
+    });
+
+    it("400s a negative or non-integer quota patch", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api);
+      for (const bad of [-1, 1.5, "100"]) {
+        const res = await api(
+          adminRequest("PATCH", `/v1/admin/apps/${appId}`, {
+            token: ADMIN_TOKEN,
+            body: { monthlyMessageQuota: bad },
+          }),
+        );
+        expect(res.status, `quota=${bad}`).toBe(400);
+        expect(body(res).error.code).toBe("invalid_request");
+      }
+    });
+
+    it("404s patching an unknown app", async () => {
+      const { api } = setupAdmin();
+      const res = await api(
+        adminRequest("PATCH", "/v1/admin/apps/app_nope", {
+          token: ADMIN_TOKEN,
+          body: { name: "x" },
+        }),
+      );
       expect(res.status).toBe(404);
     });
 

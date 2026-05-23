@@ -66,6 +66,7 @@ export interface SqliteAppStoreOptions {
 interface AppRow {
   readonly id: string;
   readonly name: string;
+  readonly monthly_message_quota: number | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -84,6 +85,8 @@ function rowToApp(row: AppRow): App {
   return {
     id: row.id,
     name: row.name,
+    monthlyMessageQuota:
+      row.monthly_message_quota === null ? null : Number(row.monthly_message_quota),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -138,15 +141,19 @@ export class SqliteAppStore implements AppStore {
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec("PRAGMA foreign_keys = ON");
     this.#db.exec(SCHEMA);
+    // Bring a database created before per-tenant quotas existed up to schema. For a
+    // fresh database the column is in SCHEMA and this is a no-op.
+    this.#migrateQuotaColumn();
 
     this.#selectApp = this.#db.prepare("SELECT * FROM apps WHERE id = ?");
     // rowid order is insertion order → oldest-first, matching the in-memory backend.
     this.#listApps = this.#db.prepare("SELECT * FROM apps ORDER BY rowid");
     this.#insertApp = this.#db.prepare(
-      "INSERT INTO apps (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      `INSERT INTO apps (id, name, monthly_message_quota, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
     );
     this.#updateApp = this.#db.prepare(
-      "UPDATE apps SET name = ?, updated_at = ? WHERE id = ?",
+      "UPDATE apps SET name = ?, monthly_message_quota = ?, updated_at = ? WHERE id = ?",
     );
     this.#deleteApp = this.#db.prepare("DELETE FROM apps WHERE id = ?");
     this.#insertKey = this.#db.prepare(
@@ -165,6 +172,22 @@ export class SqliteAppStore implements AppStore {
     this.#countApps = this.#db.prepare("SELECT COUNT(*) AS n FROM apps");
   }
 
+  /**
+   * Add the `monthly_message_quota` column to a database created before per-tenant
+   * quotas existed. Existing rows default to `NULL` (no limit), so an upgrade is
+   * seamless and never changes a deployed tenant's behaviour. For a fresh database the
+   * column is in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateQuotaColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(apps)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "monthly_message_quota")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE apps ADD COLUMN monthly_message_quota INTEGER");
+  }
+
   /** Number of apps currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countApps.get() as { n: number }).n);
@@ -174,9 +197,21 @@ export class SqliteAppStore implements AppStore {
     const normalized = normalizeNewApp(input);
     const nowMs = this.#now();
     const id = this.#generateAppId();
-    const app: App = { id, name: normalized.name, createdAt: nowMs, updatedAt: nowMs };
+    const app: App = {
+      id,
+      name: normalized.name,
+      monthlyMessageQuota: normalized.monthlyMessageQuota,
+      createdAt: nowMs,
+      updatedAt: nowMs,
+    };
     // The PRIMARY KEY enforces id uniqueness; a collision surfaces as a throw.
-    this.#insertApp.run(app.id, app.name, app.createdAt, app.updatedAt);
+    this.#insertApp.run(
+      app.id,
+      app.name,
+      app.monthlyMessageQuota,
+      app.createdAt,
+      app.updatedAt,
+    );
     return app;
   }
 
@@ -197,7 +232,7 @@ export class SqliteAppStore implements AppStore {
         throw new UnknownAppError(id);
       }
       const next = applyAppUpdate(rowToApp(row), patch, this.#now());
-      this.#updateApp.run(next.name, next.updatedAt, next.id);
+      this.#updateApp.run(next.name, next.monthlyMessageQuota, next.updatedAt, next.id);
       return next;
     });
   }
@@ -280,7 +315,9 @@ export class SqliteAppStore implements AppStore {
 
 /**
  * `STRICT` enforces declared column types; `IF NOT EXISTS` lets a restart
- * reattach to an existing database unchanged (crash-safe replay). `api_keys`
+ * reattach to an existing database unchanged (crash-safe replay).
+ * `apps.monthly_message_quota` is a nullable INTEGER (`NULL` = no limit), added to a
+ * pre-quota database by {@link SqliteAppStore.#migrateQuotaColumn}. `api_keys`
  * references `apps(id)` with `ON DELETE CASCADE`, so deleting an app reaps its
  * keys atomically. `key_hash` is UNIQUE and indexed — the authenticate lookup;
  * `revoked_at` is `NULL` for a live key. The app index backs the
@@ -288,10 +325,11 @@ export class SqliteAppStore implements AppStore {
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS apps (
-  id         TEXT    PRIMARY KEY,
-  name       TEXT    NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  id                    TEXT    PRIMARY KEY,
+  name                  TEXT    NOT NULL,
+  monthly_message_quota INTEGER,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS api_keys (
