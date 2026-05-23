@@ -12,7 +12,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IdempotencyConflictError, type MessageStore } from "./message-store.js";
+import {
+  IdempotencyConflictError,
+  utcDayKey,
+  type MessageStore,
+} from "./message-store.js";
 
 /** A controllable clock + deterministic id generator for reproducible tests. */
 export interface ConformanceClock {
@@ -631,6 +635,86 @@ export function describeMessageStoreContract(
           cursor: first.nextCursor!,
         });
         expect(second.messages.map((m) => m.id)).toEqual([ids[1]]);
+      });
+    });
+
+    describe("summarizeUsageByApp — per-tenant usage", () => {
+      const DAY_MS = 86_400_000;
+      const fullRange = { fromMs: 0, toMs: Number.MAX_SAFE_INTEGER };
+
+      it("returns a zero summary for a tenant with no messages in range", async () => {
+        expect(await store.summarizeUsageByApp(APP, fullRange)).toEqual({
+          appId: APP,
+          fromMs: 0,
+          toMs: Number.MAX_SAFE_INTEGER,
+          total: 0,
+          daily: [],
+        });
+        // A message outside the half-open range is excluded too (toMs is exclusive).
+        const { message } = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        const before = await store.summarizeUsageByApp(APP, {
+          fromMs: 0,
+          toMs: message.createdAt,
+        });
+        expect(before.total).toBe(0);
+        expect(before.daily).toEqual([]);
+      });
+
+      it("counts messages grouped by UTC day, oldest-day-first, with a running total", async () => {
+        const d0 = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        clock.advance(DAY_MS);
+        const d1 = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        clock.advance(DAY_MS);
+        const d2a = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        const d2b = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+
+        const summary = await store.summarizeUsageByApp(APP, fullRange);
+        expect(summary.total).toBe(4);
+        // Three distinct, ascending UTC days; the last has two messages.
+        expect(utcDayKey(d2b.message.createdAt)).toBe(utcDayKey(d2a.message.createdAt));
+        expect(summary.daily).toEqual([
+          { date: utcDayKey(d0.message.createdAt), messages: 1 },
+          { date: utcDayKey(d1.message.createdAt), messages: 1 },
+          { date: utcDayKey(d2a.message.createdAt), messages: 2 },
+        ]);
+      });
+
+      it("scopes to the tenant — another app's messages are never counted", async () => {
+        await store.create({ appId: "app_a", eventType: "e", payload: "{}" });
+        await store.create({ appId: "app_a", eventType: "e", payload: "{}" });
+        await store.create({ appId: "app_b", eventType: "e", payload: "{}" });
+        expect((await store.summarizeUsageByApp("app_a", fullRange)).total).toBe(2);
+        expect((await store.summarizeUsageByApp("app_b", fullRange)).total).toBe(1);
+        expect((await store.summarizeUsageByApp("app_c", fullRange)).total).toBe(0);
+      });
+
+      it("applies the range half-open: includes fromMs, excludes toMs", async () => {
+        const { message } = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        const at = message.createdAt;
+        // [at, at+1) includes the message…
+        expect((await store.summarizeUsageByApp(APP, { fromMs: at, toMs: at + 1 })).total).toBe(1);
+        // …[at+1, at+2) is entirely after it…
+        expect((await store.summarizeUsageByApp(APP, { fromMs: at + 1, toMs: at + 2 })).total).toBe(0);
+        // …and the upper bound is exclusive: [at-10, at) excludes a message at exactly `at`.
+        expect((await store.summarizeUsageByApp(APP, { fromMs: at - 10, toMs: at })).total).toBe(0);
+      });
+
+      it("counts a deduplicated retry only once (one stored message)", async () => {
+        const input = { appId: APP, eventType: "e", payload: "{}", idempotencyKey: "k" };
+        await store.create(input);
+        const retry = await store.create(input);
+        expect(retry.deduplicated).toBe(true);
+        const summary = await store.summarizeUsageByApp(APP, fullRange);
+        expect(summary.total).toBe(1);
+        expect(summary.daily).toEqual([
+          { date: utcDayKey(retry.message.createdAt), messages: 1 },
+        ]);
+      });
+
+      it("rejects an inverted range (fromMs > toMs)", async () => {
+        await expect(
+          store.summarizeUsageByApp(APP, { fromMs: 10, toMs: 5 }),
+        ).rejects.toThrow(RangeError);
       });
     });
   });

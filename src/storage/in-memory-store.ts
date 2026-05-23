@@ -24,6 +24,8 @@ import {
   normalizeNewMessage,
   resolveListMessagesQuery,
   resolvePendingFanoutQuery,
+  resolveUsageRange,
+  utcDayKey,
   type CreateMessageResult,
   type ListMessagesOptions,
   type ListPendingFanoutOptions,
@@ -31,6 +33,8 @@ import {
   type MessagePage,
   type MessageStore,
   type NewMessage,
+  type UsageRange,
+  type UsageSummary,
 } from "./message-store.js";
 
 /** Construction options for {@link InMemoryMessageStore}. */
@@ -198,6 +202,27 @@ export class InMemoryMessageStore implements MessageStore {
     const nextCursor =
       hasMore && last !== undefined ? encodeMessageCursor(last) : null;
     return { messages, nextCursor };
+  }
+
+  async summarizeUsageByApp(
+    appId: string,
+    range: UsageRange,
+  ): Promise<UsageSummary> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const byDay = new Map<string, number>();
+    let total = 0;
+    for (const message of this.#messages.values()) {
+      if (message.appId !== appId) continue;
+      // Half-open [fromMs, toMs): a message exactly at fromMs counts; one at toMs does not.
+      if (message.createdAt < fromMs || message.createdAt >= toMs) continue;
+      const day = utcDayKey(message.createdAt);
+      byDay.set(day, (byDay.get(day) ?? 0) + 1);
+      total += 1;
+    }
+    const daily = [...byDay.entries()]
+      .map(([date, messages]) => ({ date, messages }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    return { appId, fromMs, toMs, total, daily };
   }
 
   async getByIdempotencyKey(

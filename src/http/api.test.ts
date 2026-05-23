@@ -1530,3 +1530,139 @@ describe("createApi — admin / control-plane API", () => {
     });
   });
 });
+
+describe("createApi — GET /v1/admin/apps/:id/usage", () => {
+  const ADMIN_TOKEN = "test-admin-token-1234567890";
+
+  interface UsageFixture {
+    readonly api: ApiHandler;
+    readonly appId: string;
+    readonly messages: InMemoryMessageStore;
+    advance(ms: number): void;
+  }
+
+  /** Build a usage-enabled API over a clock I can advance to place messages on UTC days. */
+  async function setup(adminEnabled = true): Promise<UsageFixture> {
+    let nowMs = Date.UTC(2026, 4, 10, 12, 0, 0); // 2026-05-10T12:00:00Z
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      ...(adminEnabled ? { adminToken: ADMIN_TOKEN } : {}),
+    });
+    const app = await apps.create({ name: "Acme" });
+    return {
+      api,
+      appId: app.id,
+      messages,
+      advance: (ms) => {
+        nowMs += ms;
+      },
+    };
+  }
+
+  /** A GET /v1/admin/apps/:id/usage request with query params and (default admin) auth. */
+  function usageRequest(
+    appId: string,
+    query: Record<string, string>,
+    token: string | null = ADMIN_TOKEN,
+  ): ApiRequest {
+    return request({
+      method: "GET",
+      path: `/v1/admin/apps/${appId}/usage`,
+      query,
+      headers: token !== null ? { authorization: `Bearer ${token}` } : {},
+    });
+  }
+
+  const DAY_MS = 86_400_000;
+
+  it("is 404 (surface hidden) when the admin API is disabled", async () => {
+    const { api, appId } = await setup(false);
+    const res = await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-10" }));
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("rejects a missing or wrong admin token with 401", async () => {
+    const { api, appId } = await setup();
+    expect((await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-10" }, null))).status).toBe(401);
+    expect(
+      (await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-10" }, "wrong-but-long-enough-xx"))).status,
+    ).toBe(401);
+  });
+
+  it("is 404 for an unknown tenant", async () => {
+    const { api } = await setup();
+    const res = await api(usageRequest("app_nope", { from: "2026-05-10", to: "2026-05-10" }));
+    expect(res.status).toBe(404);
+  });
+
+  it("400s on missing/invalid from or to, an inverted range, or a range over the day cap", async () => {
+    const { api, appId } = await setup();
+    expect((await api(usageRequest(appId, { to: "2026-05-10" }))).status).toBe(400); // missing from
+    expect((await api(usageRequest(appId, { from: "2026-05-10" }))).status).toBe(400); // missing to
+    expect((await api(usageRequest(appId, { from: "05/10/2026", to: "2026-05-10" }))).status).toBe(400); // bad shape
+    expect((await api(usageRequest(appId, { from: "2026-02-30", to: "2026-03-01" }))).status).toBe(400); // invalid date
+    expect((await api(usageRequest(appId, { from: "2026-05-11", to: "2026-05-10" }))).status).toBe(400); // inverted
+    expect((await api(usageRequest(appId, { from: "2020-01-01", to: "2026-01-01" }))).status).toBe(400); // > cap
+  });
+
+  it("returns a zero summary for a tenant with no messages", async () => {
+    const { api, appId } = await setup();
+    const res = await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-12" }));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({
+      appId,
+      from: "2026-05-10",
+      to: "2026-05-12",
+      total: 0,
+      daily: [],
+    });
+  });
+
+  it("reports per-UTC-day counts and a total over the inclusive range", async () => {
+    const { api, appId, messages, advance } = await setup();
+    // Two messages on 2026-05-10, one on 2026-05-11.
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    advance(DAY_MS);
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+
+    const res = await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-11" }));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({
+      appId,
+      from: "2026-05-10",
+      to: "2026-05-11",
+      total: 3,
+      daily: [
+        { date: "2026-05-10", messages: 2 },
+        { date: "2026-05-11", messages: 1 },
+      ],
+    });
+
+    // The `to` day is inclusive but a single-day window past it excludes the older day.
+    const justDay2 = await api(usageRequest(appId, { from: "2026-05-11", to: "2026-05-11" }));
+    expect(body(justDay2).total).toBe(1);
+    expect(body(justDay2).daily).toEqual([{ date: "2026-05-11", messages: 1 }]);
+  });
+
+  it("never counts another tenant's messages", async () => {
+    const { api, appId, messages } = await setup();
+    await messages.create({ appId, eventType: "e", payload: "{}" });
+    // Another tenant's traffic in the same store must not leak into this app's usage.
+    await messages.create({ appId: "app_other", eventType: "e", payload: "{}" });
+    await messages.create({ appId: "app_other", eventType: "e", payload: "{}" });
+
+    const mine = await api(usageRequest(appId, { from: "2026-05-10", to: "2026-05-10" }));
+    expect(body(mine).total).toBe(1);
+  });
+});

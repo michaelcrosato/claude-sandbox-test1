@@ -162,6 +162,20 @@ export interface MessageStore {
    * tenant's messages.
    */
   listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage>;
+  /**
+   * Summarize a tenant's message volume over the half-open epoch-ms range
+   * `[range.fromMs, range.toMs)`, broken down by **UTC calendar day** — the data a
+   * hosted control plane meters and bills usage on (this market prices per message;
+   * see docs/PROJECT.md). Each accepted message counts once; a deduplicated retry
+   * adds no new message, so it is never double-counted.
+   *
+   * It is computed from the messages table — the source of truth — so the count is
+   * always exact (there is no separate rollup to fall out of sync), and it rides the
+   * same `(app_id, created_at)` index that backs {@link listByApp}, so it stays an
+   * indexed range scan as the (unbounded) log grows. Scoped to `appId`: it never
+   * counts, or reveals the existence of, another tenant's messages.
+   */
+  summarizeUsageByApp(appId: string, range: UsageRange): Promise<UsageSummary>;
 }
 
 /**
@@ -427,4 +441,73 @@ export function isMessageAfterCursor(
     message.createdAt < cursor.createdAt ||
     (message.createdAt === cursor.createdAt && message.id < cursor.id)
   );
+}
+
+/**
+ * Largest span, in days, a single {@link MessageStore.summarizeUsageByApp} query
+ * may cover. The HTTP layer enforces it so an admin cannot request an unbounded
+ * daily breakdown (and the response stays bounded); a little over a year, enough
+ * to cover any billing period.
+ */
+export const MAX_USAGE_RANGE_DAYS = 366;
+
+/** A half-open epoch-ms range `[fromMs, toMs)` for a usage query. */
+export interface UsageRange {
+  /** Inclusive lower bound (epoch ms). */
+  readonly fromMs: number;
+  /** Exclusive upper bound (epoch ms). */
+  readonly toMs: number;
+}
+
+/** One UTC calendar day's message count for a tenant. */
+export interface UsageDay {
+  /** The UTC day, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Messages the tenant had accepted on this day (within the queried range). */
+  readonly messages: number;
+}
+
+/** A tenant's message usage over a range — the metering/billing read model. */
+export interface UsageSummary {
+  /** The tenant the summary is for. */
+  readonly appId: string;
+  /** The query's inclusive lower bound (epoch ms), echoed back. */
+  readonly fromMs: number;
+  /** The query's exclusive upper bound (epoch ms), echoed back. */
+  readonly toMs: number;
+  /** Total messages across the whole range (the billable count). */
+  readonly total: number;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one message. */
+  readonly daily: readonly UsageDay[];
+}
+
+/**
+ * The UTC calendar day (`YYYY-MM-DD`) containing an epoch-ms instant. The single
+ * shared day-bucketing rule for usage: the in-memory backend groups by it, and the
+ * SQLite backend mirrors it as `date(created_at / 1000, 'unixepoch')` — the two are
+ * held equal by the conformance suite, so they cannot drift. (Both floor to the same
+ * UTC day: `floor(floor(ms / 1000) / 86400) === floor(ms / 86400000)`.)
+ */
+export function utcDayKey(epochMs: number): string {
+  return new Date(epochMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Validate a usage range, shared by every backend so they reject identically.
+ * Bounds must be finite with `fromMs <= toMs` (an empty range is allowed and yields
+ * a zero summary). Throws {@link RangeError} otherwise — a library-facing backstop;
+ * the HTTP layer validates the calendar dates and span before the store is reached.
+ */
+export function resolveUsageRange(range: UsageRange): {
+  fromMs: number;
+  toMs: number;
+} {
+  const { fromMs, toMs } = range;
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+    throw new RangeError("usage range bounds must be finite numbers");
+  }
+  if (fromMs > toMs) {
+    throw new RangeError("usage range fromMs must be <= toMs");
+  }
+  return { fromMs, toMs };
 }

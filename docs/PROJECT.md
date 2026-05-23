@@ -482,8 +482,32 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     `createRequire` paths). Remaining in P4: operator docs (a deploy/monitoring guide).
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization). Its
   **foundation now exists** — the admin-token-gated `/v1/admin/*` provisioning API (see P3) is the
-  control-plane seam a hosted dashboard/billing layer drives tenants and keys through. Remaining:
-  usage metering, billing integration, and the dashboard UI.
+  control-plane seam a hosted dashboard/billing layer drives tenants and keys through.
+  - **Per-tenant usage metering ✅ (this tick):** the read model usage-based billing and free-tier
+    quota enforcement sit on — you cannot price per message (this market's unit) without it.
+    `MessageStore.summarizeUsageByApp(appId, {fromMs, toMs})` returns a tenant's message volume over a
+    half-open epoch-ms range, grouped by **UTC calendar day** (`total` + per-day breakdown). The
+    deliberate design choice: it is an **aggregate over the messages table — the source of truth —
+    not a separate rollup**, so the count is always *exact* (no recording seam to drop a write, no
+    eventually-consistent drift, nothing to reconcile) and it rides the *existing*
+    `idx_messages_app_created (app_id, created_at, id)` index that backs message listing — **zero new
+    schema, zero migration, no change to the ingest hot path or the delivery worker**. A pure
+    `utcDayKey` is the one shared day-bucketing rule the in-memory backend groups by and the SQLite
+    backend mirrors as `date(created_at/1000,'unixepoch')` (held equal by the conformance suite, so
+    they can't drift); a deduplicated retry is one stored message and is never double-counted. Exposed
+    as the admin-token-gated `GET /v1/admin/apps/:id/usage?from=&to=` (inclusive `YYYY-MM-DD` UTC days,
+    span capped at `MAX_USAGE_RANGE_DAYS = 366`; unknown tenant → 404, bad/missing/inverted/over-cap
+    range → 400), added to the compile-checked route table + bidirectional OpenAPI drift test (the
+    operation + `Usage`/`UsageDay` schemas were *forced* by the drift/orphan-schema tests). Proven by
+    the expanded conformance suite (×2 backends: empty/grouping/tenant-scope/half-open-boundary/
+    dedup-once/inverted-reject), a pure handler suite (disabled→404, auth, unknown-app, the 400 family,
+    correct per-day counts, tenant isolation), a running-gateway e2e (send → query usage over HTTP →
+    tenant-key→401), and a **compiled-`dist` smoke** (provision+send+usage over production ESM on the
+    real `node:sqlite` file, persisting across a restart). **Deferred (next P5 steps):** per-tenant
+    *delivery* usage (attempts aren't tenant-indexed today, so this wants a recording rollup, unlike
+    messages); real-time quota enforcement (block at a free-tier limit) on top of this read model;
+    billing integration (Stripe) and the dashboard UI.
+  - Remaining: usage-based billing integration, quota enforcement, and the dashboard UI.
 
 ## 5. Out of scope / non-goals
 

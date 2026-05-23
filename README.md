@@ -163,6 +163,13 @@ Early foundation. Implemented so far:
   source of truth, so a route can never ship undocumented (or a doc entry without a route). Validated
   as a valid OpenAPI 3.1 document, with **zero runtime dependencies** (a pure builder over `node:*`).
 
+- ✅ **Per-tenant usage metering** — the metering read model a hosted control plane bills and enforces
+  quotas on (this market prices per message). `GET /v1/admin/apps/:id/usage?from=&to=` (admin-token-gated)
+  returns a tenant's message volume over an inclusive `YYYY-MM-DD` UTC date range, broken down by day,
+  with a total. Counts are **exact** — computed directly from the messages table (the source of truth),
+  riding the same index that backs message listing, rather than a separate rollup that could drift — and
+  a deduplicated retry is never double-counted. The span is capped (≤ 366 days) so a query stays bounded.
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)

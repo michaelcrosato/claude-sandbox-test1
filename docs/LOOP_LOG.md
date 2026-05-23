@@ -4,6 +4,72 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 25: P5 — per-tenant usage metering (the billing/quota read model)
+
+**Repo truth at start:** clean main @ `37120eb` (iter 24, admin/control-plane HTTP API) — a real clean
+baseline, not an interrupted tick (git clean; iter-24 entry present + matches head). Baseline re-verified
+by the manual gate (`[[validation-gate-is-manual]]`): `tsc --noEmit` clean, vitest **641/641**, `npm run
+build` clean, integrity + local gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Build **per-tenant usage metering** — the substantive next
+step in **P5 (the hosted control plane = monetization)**, whose keystone (the admin HTTP API) landed last
+tick. The decisive reasoning: the sending core is mature and exhaustively tested, so more delivery polish
+is low-marginal-value; advancing the *profit* phase is high-value (directly the GOAL's profit filter), and
+**you cannot run usage-based pricing without metering usage**. Within P5, metering is the buildable,
+deterministic, zero-dep, fully-in-process-testable piece — billing needs an external account (Stripe) and a
+dashboard is UI, neither of which fits the loop's test gate. **Messages** is this market's canonical billing
+unit (Svix's headline price is per message; PROJECT.md §2). Beat the standing-deferred alternatives (admin
+*SDK* client — explicitly deprioritized in iter 24 since OpenAPI already covers cross-language admin
+consumers; per-key `lastUsedAt`; attempt-log pagination; operator docs): each is narrower or lower-value.
+
+**Decisive design call — an exact aggregate over the source of truth, not a rollup.** Every message already
+carries `appId` + `createdAt`, and the `idx_messages_app_created (app_id, created_at, id)` index already
+exists (added for keyset listing). So usage is a `GROUP BY day` aggregate over the messages table itself:
+**exact (no recording seam to drop a write, no eventually-consistent rollup to reconcile/drift), zero new
+schema, zero migration, no change to the ingest hot path or the safety-critical delivery worker.** A
+separate rollup would only add value for O(1) real-time quota checks — a distinct, later feature — and was
+deliberately *not* built. This is a far tighter, lower-risk green unit than a new store while delivering the
+full capability.
+
+**Built this tick (a full vertical slice, bottom-up):**
+- **`storage/message-store.ts`** — `UsageRange`/`UsageDay`/`UsageSummary` types, `MAX_USAGE_RANGE_DAYS=366`,
+  a pure `utcDayKey(ms)` (the one shared UTC-day rule), a shared `resolveUsageRange` validator (RangeError
+  backstop), and `MessageStore.summarizeUsageByApp(appId, range)` on the contract.
+- **Both store backends** — in-memory (filter by appId + half-open `[fromMs,toMs)`, group by `utcDayKey`);
+  SQLite (`SELECT date(created_at/1000,'unixepoch') … GROUP BY day` riding the existing index — `utcDayKey`
+  and the SQL `date()` produce the same key because `floor(floor(ms/1000)/86400) === floor(ms/86400000)`).
+  Held to one expanded conformance suite (+6 cases ×2 backends).
+- **`http/api.ts`** — `GET /v1/admin/apps/:id/usage` (adminAuthed), `parseUsageRangeParams` (inclusive
+  `YYYY-MM-DD` UTC days → half-open ms range; **strict** date validation via a round-trip so `Date.parse`'s
+  lenient rollover e.g. `2026-02-30`→Mar 2 is rejected; span cap; unknown app→404; bad/missing/inverted/
+  over-cap→400), `usageView`; added to `API_ROUTE_KEYS` (the `Record<ApiRouteKey,…>` made wiring exhaustive).
+- **`http/openapi.ts`** — the operation (gated by `adminAuth`) + `Usage`/`UsageDay` schemas; the
+  bidirectional drift + orphan-schema tests *forced* both. **`index.ts`** re-exports the new surfaces.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **660/660** (was 641;
+**+19**: conformance ×2 backends = +12; a pure handler suite = +7 — disabled→404, missing/wrong token→401,
+unknown-app→404, the 400 family incl. the strict-date case, zero-summary, per-UTC-day counts+total,
+tenant-isolation; plus the running-gateway admin e2e extended to query usage over HTTP and assert a tenant
+key gets 401). `npm run build` clean. Integrity gate exit 0 (three hash-protected files untouched); local
+gate exit 0. No tinypool flake this run (`[[vitest-tinypool-flaky-worker-exit]]`).
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway on a
+**file-backed** data dir with an admin token, provisioned a tenant + key **over the admin HTTP API**, sent 3
+messages, and queried `/v1/admin/apps/:id/usage` over a real socket — the SQLite `date()` GROUP BY through
+production ESM returned `total:3` with the correct single-day breakdown; the missing-`to`→400 path held;
+then **reopened on the same files** and saw the usage persist (durable, no Redis). Exit 0; temp script + dir
+removed; git shows only the 10 intended source files.
+
+**State:** GREEN → committing to main as Iteration 25. Net: a deployed Posthorn now exposes **exact
+per-tenant message usage** over the admin control plane — the read model a hosted dashboard/billing/quota
+layer consumes — derived from the source of truth with no new schema and no hot-path cost. **Standing
+deferred (next candidates):** per-tenant *delivery* usage (needs a recording rollup — attempts aren't
+tenant-indexed); real-time quota enforcement atop this read model; an *admin* SDK client; per-key
+`lastUsedAt`; attempt-log pagination; an operator deploy/monitoring guide; and the rest of P5 (billing
+integration, dashboard UI).
+
+---
+
 ## 2026-05-23 — Iteration 24: P3/P5 — admin / control-plane HTTP provisioning API (opt-in, token-gated)
 
 **Repo truth at start:** clean main @ `cbae83c` (iter 23, zero-downtime secret rotation) — a real clean

@@ -34,6 +34,7 @@
  * | DELETE | /v1/admin/apps/:id   | Admin  | Delete a tenant (204; cascades its keys).|
  * | POST   | /v1/admin/apps/:id/keys | Admin | Mint an API key (201, secret once).     |
  * | GET    | /v1/admin/apps/:id/keys | Admin | List a tenant's keys (metadata only).   |
+ * | GET    | /v1/admin/apps/:id/usage | Admin | Per-tenant message usage (metering/billing). |
  * | DELETE | /v1/admin/keys/:id   | Admin  | Revoke an API key (204).                 |
  *
  * `Bearer` = a tenant API key; `Admin` = the operator admin token
@@ -68,10 +69,14 @@
 import {
   IdempotencyConflictError,
   MAX_LIST_MESSAGES_LIMIT,
+  MAX_USAGE_RANGE_DAYS,
+  utcDayKey,
   type ListMessagesOptions,
   type Message,
   type MessageStore,
   type NewMessage,
+  type UsageRange,
+  type UsageSummary,
 } from "../storage/message-store.js";
 import {
   UnknownEndpointError,
@@ -312,6 +317,57 @@ function parseListMessagesParams(
   return options;
 }
 
+/** A strict `YYYY-MM-DD` shape (calendar validity is then checked via `Date.parse`). */
+const USAGE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Milliseconds in a UTC day — exact, since UTC has no daylight-saving shifts. */
+const USAGE_DAY_MS = 86_400_000;
+
+/** Parse a required `YYYY-MM-DD` query param to the epoch-ms of its UTC midnight, else 400. */
+function parseUsageDate(value: string | undefined, field: string): number {
+  if (value === undefined || !USAGE_DATE_PATTERN.test(value)) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `${field} is required and must be a UTC date in YYYY-MM-DD format`,
+    );
+  }
+  const ms = Date.parse(`${value}T00:00:00.000Z`);
+  // Reject a NaN parse *and* a calendar overflow: `Date.parse` leniently rolls an
+  // out-of-range day/month over (e.g. `2026-02-30` → Mar 2), so round-trip the parsed
+  // instant back to a day string and require it to equal the input.
+  if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== value) {
+    throw new HttpError(400, "invalid_request", `${field} is not a valid calendar date`);
+  }
+  return ms;
+}
+
+/**
+ * Parse the `?from=&to=` query of the admin usage route into a half-open epoch-ms
+ * range. Both are *inclusive* `YYYY-MM-DD` UTC days, so `to` is expanded to the end
+ * of that day (its midnight + one day, exclusive). `to` must be on/after `from`, and
+ * the span is capped at {@link MAX_USAGE_RANGE_DAYS} so a single query cannot request
+ * an unbounded daily breakdown. Any violation is a `400`.
+ */
+function parseUsageRangeParams(
+  query: Readonly<Record<string, string | undefined>>,
+): UsageRange {
+  const fromMs = parseUsageDate(query["from"], "from");
+  const toDayMs = parseUsageDate(query["to"], "to");
+  if (toDayMs < fromMs) {
+    throw new HttpError(400, "invalid_request", "to must be on or after from");
+  }
+  const toMs = toDayMs + USAGE_DAY_MS; // half-open, but inclusive of the whole `to` day
+  if (Math.round((toMs - fromMs) / USAGE_DAY_MS) > MAX_USAGE_RANGE_DAYS) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `the date range must span at most ${MAX_USAGE_RANGE_DAYS} days`,
+    );
+  }
+  return { fromMs, toMs };
+}
+
 /**
  * The non-secret view of an endpoint returned by list/get/update. Crucially omits
  * `secret` — the signing secret is write-only over HTTP (see the module docstring).
@@ -436,6 +492,23 @@ function apiKeyView(key: ApiKey): Record<string, unknown> {
   };
 }
 
+/**
+ * The admin view of a tenant's message usage over a date range — the metering /
+ * billing read model. `from`/`to` are echoed back as the inclusive `YYYY-MM-DD` UTC
+ * days the caller queried (the store works in epoch ms internally), and `daily` is
+ * the per-day breakdown a usage dashboard renders.
+ */
+function usageView(summary: UsageSummary): Record<string, unknown> {
+  return {
+    appId: summary.appId,
+    from: utcDayKey(summary.fromMs),
+    // toMs is exclusive (midnight after the `to` day); step back into that day for display.
+    to: utcDayKey(summary.toMs - 1),
+    total: summary.total,
+    daily: summary.daily.map((day) => ({ date: day.date, messages: day.messages })),
+  };
+}
+
 /** Base context every route handler receives. */
 interface BaseContext {
   readonly req: ApiRequest;
@@ -480,6 +553,7 @@ export const API_ROUTE_KEYS = [
   "DELETE /v1/admin/apps/:id",
   "POST /v1/admin/apps/:id/keys",
   "GET /v1/admin/apps/:id/keys",
+  "GET /v1/admin/apps/:id/usage",
   "DELETE /v1/admin/keys/:id",
 ] as const;
 
@@ -836,6 +910,20 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return { status: 204, body: undefined };
   };
 
+  const getAppUsage: RouteHandler = async (ctx) => {
+    const appId = requireParam(ctx.params, "id");
+    // An unknown tenant is 404; a known tenant with no traffic is a 200 with total 0
+    // — the same "unknown app vs. empty" distinction listApiKeys makes.
+    if ((await deps.apps.get(appId)) === null) {
+      throw new HttpError(404, "not_found", `no app with id "${appId}"`);
+    }
+    const summary = await deps.messages.summarizeUsageByApp(
+      appId,
+      parseUsageRangeParams(ctx.req.query),
+    );
+    return json(200, usageView(summary));
+  };
+
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
   // exhaustive: a missing key or a stray extra key is a compile error, so the route
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
@@ -860,6 +948,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "DELETE /v1/admin/apps/:id": adminAuthed(deleteApp),
     "POST /v1/admin/apps/:id/keys": adminAuthed(createApiKey),
     "GET /v1/admin/apps/:id/keys": adminAuthed(listApiKeys),
+    "GET /v1/admin/apps/:id/usage": adminAuthed(getAppUsage),
     "DELETE /v1/admin/keys/:id": adminAuthed(revokeApiKey),
   };
 

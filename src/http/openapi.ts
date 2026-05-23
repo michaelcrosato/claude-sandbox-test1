@@ -18,7 +18,10 @@
  * `version.ts` seam `/metrics` uses), so the published spec always names the running build.
  */
 
-import { MAX_LIST_MESSAGES_LIMIT } from "../storage/message-store.js";
+import {
+  MAX_LIST_MESSAGES_LIMIT,
+  MAX_USAGE_RANGE_DAYS,
+} from "../storage/message-store.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** A JSON Schema / OpenAPI schema object (or a `$ref`). Loosely typed on purpose. */
@@ -482,6 +485,44 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/admin/apps/{id}/usage": {
+        get: {
+          operationId: "getAppUsage",
+          tags: ["Admin"],
+          summary: "Get a tenant's message usage",
+          description:
+            "A tenant's message volume over a date range, broken down by UTC day — the metering " +
+            "read model a hosted control plane bills and enforces quotas on (this market prices " +
+            "per message). `from` and `to` are inclusive `YYYY-MM-DD` UTC days; the span is capped " +
+            `at ${MAX_USAGE_RANGE_DAYS} days. Counts are exact (computed from the messages ` +
+            "themselves, not a separate rollup) and a deduplicated retry is never double-counted. " +
+            "Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [
+            idParam("The app id."),
+            {
+              name: "from",
+              in: "query",
+              required: true,
+              schema: { type: "string", format: "date" },
+              description: "Inclusive start day, `YYYY-MM-DD` (UTC).",
+            },
+            {
+              name: "to",
+              in: "query",
+              required: true,
+              schema: { type: "string", format: "date" },
+              description: "Inclusive end day, `YYYY-MM-DD` (UTC). Must be on or after `from`.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse("The tenant's message usage over the range.", ref("Usage")),
+            "400": errorResponse("Missing/invalid `from`/`to`, or a range over the day cap."),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+      },
       "/v1/admin/keys/{id}": {
         delete: {
           operationId: "revokeApiKey",
@@ -865,6 +906,35 @@ export function buildOpenApiDocument(): OpenApiDocument {
               examples: ["phk_..."],
               description: "The plaintext key secret. Returned once, never recoverable — store it now.",
             },
+          },
+        },
+        Usage: {
+          type: "object",
+          description: "A tenant's message usage over a date range — the metering/billing read model.",
+          required: ["appId", "from", "to", "total", "daily"],
+          properties: {
+            appId: { type: "string" },
+            from: { type: "string", format: "date", description: "Inclusive start day (UTC), echoed back." },
+            to: { type: "string", format: "date", description: "Inclusive end day (UTC), echoed back." },
+            total: {
+              type: "integer",
+              minimum: 0,
+              description: "Total messages accepted across the range (the billable count).",
+            },
+            daily: {
+              type: "array",
+              items: ref("UsageDay"),
+              description: "Per-UTC-day breakdown, oldest day first; only days with at least one message.",
+            },
+          },
+        },
+        UsageDay: {
+          type: "object",
+          description: "One UTC day's message count.",
+          required: ["date", "messages"],
+          properties: {
+            date: { type: "string", format: "date", description: "The UTC day, `YYYY-MM-DD`." },
+            messages: { type: "integer", minimum: 0, description: "Messages accepted on this day." },
           },
         },
       },

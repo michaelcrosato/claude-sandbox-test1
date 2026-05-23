@@ -424,6 +424,30 @@ describe("createGateway", () => {
         ),
       ).not.toThrow();
 
+      // Per-tenant usage is queryable over the admin API and reflects the sent message.
+      const today = new Date().toISOString().slice(0, 10);
+      const usageRes = await fetch(
+        `${base}/v1/admin/apps/${appId}/usage?from=${today}&to=${today}`,
+        { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+      );
+      expect(usageRes.status).toBe(200);
+      const usage = (await usageRes.json()) as {
+        appId: string;
+        total: number;
+        daily: { date: string; messages: number }[];
+      };
+      expect(usage.appId).toBe(appId);
+      expect(usage.total).toBe(1);
+      expect(usage.daily).toEqual([{ date: today, messages: 1 }]);
+      // A tenant key cannot reach the admin usage route (it is not the admin token).
+      expect(
+        (
+          await fetch(`${base}/v1/admin/apps/${appId}/usage?from=${today}&to=${today}`, {
+            headers: { authorization: `Bearer ${apiKey}` },
+          })
+        ).status,
+      ).toBe(401);
+
       // Revoke the key over the admin API; it then stops authenticating immediately.
       const revokeRes = await fetch(`${base}/v1/admin/keys/${keyMeta.id}`, {
         method: "DELETE",

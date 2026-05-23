@@ -32,6 +32,7 @@ import {
   normalizeNewMessage,
   resolveListMessagesQuery,
   resolvePendingFanoutQuery,
+  resolveUsageRange,
   type CreateMessageResult,
   type ListMessagesOptions,
   type ListPendingFanoutOptions,
@@ -39,6 +40,8 @@ import {
   type MessagePage,
   type MessageStore,
   type NewMessage,
+  type UsageRange,
+  type UsageSummary,
 } from "./message-store.js";
 
 // `node:sqlite` is loaded through createRequire rather than a static
@@ -116,6 +119,7 @@ export class SqliteMessageStore implements MessageStore {
   readonly #listPendingFanout: StatementSync;
   readonly #listByApp: StatementSync;
   readonly #listByAppAfter: StatementSync;
+  readonly #summarizeUsage: StatementSync;
 
   constructor(options: SqliteStoreOptions = {}) {
     const {
@@ -185,6 +189,15 @@ export class SqliteMessageStore implements MessageStore {
         " FROM messages WHERE app_id = ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    // Per-tenant message usage grouped by UTC day. Integer division `created_at /
+    // 1000` yields epoch seconds (created_at is INTEGER ms); `date(…, 'unixepoch')`
+    // renders the UTC `YYYY-MM-DD`, mirroring the shared utcDayKey rule. The half-open
+    // [from, to) range rides idx_messages_app_created (app_id, created_at, id).
+    this.#summarizeUsage = this.#db.prepare(
+      "SELECT date(created_at / 1000, 'unixepoch') AS day, COUNT(*) AS n" +
+        " FROM messages WHERE app_id = ? AND created_at >= ? AND created_at < ?" +
+        " GROUP BY day ORDER BY day ASC",
     );
   }
 
@@ -375,6 +388,24 @@ export class SqliteMessageStore implements MessageStore {
     const nextCursor =
       hasMore && last !== undefined ? encodeMessageCursor(last) : null;
     return { messages, nextCursor };
+  }
+
+  async summarizeUsageByApp(
+    appId: string,
+    range: UsageRange,
+  ): Promise<UsageSummary> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const rows = this.#summarizeUsage.all(appId, fromMs, toMs) as unknown as {
+      day: string;
+      n: number;
+    }[];
+    let total = 0;
+    const daily = rows.map((row) => {
+      const messages = Number(row.n);
+      total += messages;
+      return { date: row.day, messages };
+    });
+    return { appId, fromMs, toMs, total, daily };
   }
 
   /** Close the underlying database handle. Idempotent-safe to call once. */

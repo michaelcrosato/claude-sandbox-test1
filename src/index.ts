@@ -45,8 +45,10 @@ export {
   DEFAULT_PENDING_FANOUT_LIMIT,
   DEFAULT_LIST_MESSAGES_LIMIT,
   MAX_LIST_MESSAGES_LIMIT,
+  MAX_USAGE_RANGE_DAYS,
   encodeMessageCursor,
   decodeMessageCursor,
+  utcDayKey,
   type Message,
   type NewMessage,
   type CreateMessageResult,
@@ -55,6 +57,9 @@ export {
   type MessagePage,
   type MessageCursor,
   type MessageStore,
+  type UsageRange,
+  type UsageDay,
+  type UsageSummary,
 } from "./storage/message-store.js";
 
 export {
