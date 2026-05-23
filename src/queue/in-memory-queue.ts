@@ -94,7 +94,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, availableAt } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     if (this.#tasks.has(id)) {
@@ -103,6 +103,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     const task: DeliveryTask = {
       id,
       messageId,
+      endpointId,
       status: "pending",
       attempts: 0,
       nextAttemptAt: availableAt,

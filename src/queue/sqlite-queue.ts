@@ -82,6 +82,7 @@ export interface SqliteQueueOptions {
 interface TaskRow {
   readonly id: string;
   readonly message_id: string;
+  readonly endpoint_id: string | null;
   readonly status: string;
   readonly attempts: number;
   readonly next_attempt_at: number | null;
@@ -96,6 +97,7 @@ function rowToTask(row: TaskRow): DeliveryTask {
   return {
     id: row.id,
     messageId: row.message_id,
+    endpointId: row.endpoint_id,
     status: row.status as DeliveryStatus,
     attempts: Number(row.attempts),
     nextAttemptAt: row.next_attempt_at === null ? null : Number(row.next_attempt_at),
@@ -165,9 +167,9 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     );
     this.#insertTask = this.#db.prepare(
       `INSERT INTO delivery_tasks
-         (id, message_id, status, attempts, next_attempt_at,
+         (id, message_id, endpoint_id, status, attempts, next_attempt_at,
           lease_expires_at, lease_token, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateTask = this.#db.prepare(
       `UPDATE delivery_tasks
@@ -186,12 +188,13 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, availableAt } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     const task: DeliveryTask = {
       id,
       messageId,
+      endpointId,
       status: "pending",
       attempts: 0,
       nextAttemptAt: availableAt,
@@ -205,6 +208,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#insertTask.run(
       task.id,
       task.messageId,
+      task.endpointId,
       task.status,
       task.attempts,
       task.nextAttemptAt,
@@ -330,6 +334,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS delivery_tasks (
   id               TEXT    PRIMARY KEY,
   message_id       TEXT    NOT NULL,
+  endpoint_id      TEXT,
   status           TEXT    NOT NULL,
   attempts         INTEGER NOT NULL,
   next_attempt_at  INTEGER,

@@ -441,6 +441,7 @@ describe("DeliveryWorker.processOnce", () => {
     const claimedTask: DeliveryTask = {
       id: "dtask_x",
       messageId: message.id,
+      endpointId: null,
       status: "delivering",
       attempts: 1,
       nextAttemptAt: null,

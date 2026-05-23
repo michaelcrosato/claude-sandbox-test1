@@ -120,6 +120,7 @@ export function describeDeliveryQueueContract(
         const task = await queue.enqueue({ messageId: "msg-1" });
         expect(task.id).toBe("dtask_test_1");
         expect(task.messageId).toBe("msg-1");
+        expect(task.endpointId).toBeNull(); // unspecified by default
         expect(task.status).toBe("pending");
         expect(task.attempts).toBe(0);
         expect(task.nextAttemptAt).toBeNull();
@@ -151,6 +152,24 @@ export function describeDeliveryQueueContract(
         await expect(
           // @ts-expect-error — messageId must be a string
           queue.enqueue({ messageId: 123 }),
+        ).rejects.toThrow(TypeError);
+      });
+
+      it("carries an endpointId opaquely through enqueue, get, and claim", async () => {
+        const enq = await queue.enqueue({
+          messageId: "m",
+          endpointId: "ep_1",
+        });
+        expect(enq.endpointId).toBe("ep_1");
+        expect((await queue.get(enq.id))?.endpointId).toBe("ep_1");
+        // The reference persists through a state transition (claim) unchanged.
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        expect(claimed!.endpointId).toBe("ep_1");
+      });
+
+      it("rejects an empty endpointId", async () => {
+        await expect(
+          queue.enqueue({ messageId: "m", endpointId: "" }),
         ).rejects.toThrow(TypeError);
       });
     });

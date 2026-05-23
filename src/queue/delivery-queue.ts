@@ -48,6 +48,13 @@ export interface DeliveryTask {
   readonly id: string;
   /** The message this task delivers. Opaque to the queue. */
   readonly messageId: string;
+  /**
+   * The endpoint this task delivers to, or `null` if unspecified. Opaque to the
+   * queue (it is carried, never interpreted); a worker's `EndpointResolver`
+   * uses it to look up the destination URL + signing secret. The fan-out step
+   * sets it, creating one task per (message, endpoint) pair.
+   */
+  readonly endpointId: string | null;
   /** Current delivery status (shared vocabulary with the delivery FSM). */
   readonly status: DeliveryStatus;
   /** Count of attempts started so far (incremented on each claim). */
@@ -80,6 +87,12 @@ export interface DeliveryTask {
 export interface EnqueueInput {
   /** The message to deliver. Must be a non-empty string. */
   readonly messageId: string;
+  /**
+   * The endpoint this delivery targets. Opaque to the queue; the worker resolves
+   * it to a URL + signing secret. Omit (or pass `null`) when no endpoint applies.
+   * Must be a non-empty string when provided.
+   */
+  readonly endpointId?: string | null;
   /**
    * Epoch-ms before which the task is not claimable. Omit (or `null`) to make
    * it deliverable immediately. Useful for scheduled/delayed first delivery.
@@ -204,6 +217,7 @@ export function assertValidVisibilityTimeout(visibilityTimeoutMs: number): void 
 /** A validated/normalized {@link EnqueueInput}. */
 export interface NormalizedEnqueue {
   readonly messageId: string;
+  readonly endpointId: string | null;
   readonly availableAt: number | null;
 }
 
@@ -216,11 +230,18 @@ export function normalizeEnqueueInput(input: EnqueueInput): NormalizedEnqueue {
   if (typeof messageId !== "string" || messageId.length === 0) {
     throw new TypeError("messageId must be a non-empty string");
   }
+  const endpointId = input.endpointId ?? null;
+  if (
+    endpointId !== null &&
+    (typeof endpointId !== "string" || endpointId.length === 0)
+  ) {
+    throw new TypeError("endpointId must be a non-empty string when provided");
+  }
   const availableAt = input.availableAt ?? null;
   if (availableAt !== null && !Number.isFinite(availableAt)) {
     throw new TypeError("availableAt must be a finite epoch-ms timestamp or null");
   }
-  return { messageId, availableAt };
+  return { messageId, endpointId, availableAt };
 }
 
 /** Validate {@link ClaimOptions} and resolve the effective limit. */

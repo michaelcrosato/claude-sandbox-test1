@@ -99,3 +99,31 @@ export {
   type TickResult,
   type TaskOutcome,
 } from "./worker/delivery-worker.js";
+
+export {
+  UnknownEndpointError,
+  createEndpointId,
+  endpointSubscribesTo,
+  normalizeNewEndpoint,
+  applyEndpointUpdate,
+  type Endpoint,
+  type NewEndpoint,
+  type EndpointUpdate,
+  type EndpointStore,
+  type NormalizedNewEndpoint,
+} from "./endpoints/endpoint.js";
+
+export {
+  InMemoryEndpointStore,
+  type InMemoryEndpointStoreOptions,
+} from "./endpoints/in-memory-endpoint-store.js";
+
+export {
+  SqliteEndpointStore,
+  type SqliteEndpointStoreOptions,
+} from "./endpoints/sqlite-endpoint-store.js";
+
+export {
+  storeBackedResolver,
+  endpointToDeliveryTarget,
+} from "./endpoints/endpoint-resolver.js";

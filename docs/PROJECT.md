@@ -116,8 +116,21 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
   Per-attempt HTTP timeout via `AbortSignal`. Proven end-to-end: a worker-emitted request **verifies
   against the existing verifier** in tests and a compiled-`dist` smoke run. v1 processes a claimed
   batch sequentially (bounded concurrency is the next throughput optimization).
-- **P3 — HTTP API + SDK (next):** Fastify endpoints (apps, endpoints, messages), an endpoint store
-  backing a real `EndpointResolver`, contract tests, TS SDK, OpenAPI.
+- **P3 — endpoints + HTTP API + SDK (in progress):**
+  - **Endpoint store ✅ (this tick):** the persisted subscription/endpoint entity the rest of P3
+    sits on. `Endpoint` (tenant-scoped via `appId`; url + signing secret + event-type subscription
+    filter + disabled flag), the `EndpointStore` CRUD contract (`create`/`get`/`listByApp`/
+    `update`/`delete`), shared pure validation/normalization (http(s)-only URL, deduped filter,
+    injectable secret generation), in-memory reference + durable SQLite backends on one shared
+    conformance suite (`src/endpoints/`) — the exact `MessageStore`/`DeliveryQueue` pattern. Wired
+    to the worker: a queued `DeliveryTask` now carries an opaque `endpointId`, and
+    `storeBackedResolver` fills the worker's `EndpointResolver` seam — proven end-to-end (a stored
+    endpoint's secret signs a delivery that verifies against the verifier, in tests and a compiled-
+    `dist` smoke run). The worker is no longer an island awaiting a hand-written resolver.
+  - **Deferred (next ticks):** message **fan-out** (on create, enqueue one task per subscribed,
+    enabled endpoint via `endpointSubscribesTo`; this needs `appId` on the message), the **App/tenant**
+    entity that mints/validates `appId`, the **Fastify HTTP API** (apps/endpoints/messages CRUD +
+    ingest), contract tests, TS SDK, OpenAPI.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

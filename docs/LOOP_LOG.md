@@ -4,6 +4,69 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 7: P3 begins — the endpoint store + store-backed resolver
+
+**Repo truth at start:** clean main @ `6b58953`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **168/168**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: the Posthorn decision stands. The
+glaring gap after P2.5: the worker could sign+POST, but its `EndpointResolver` seam had **no
+implementation** — there was no persisted endpoint at all, and a `DeliveryTask` carried only an
+opaque `messageId` with no way to say *which* endpoint it targets. So the worker still required a
+hand-written resolver; nothing could store a subscription. That entity is the foundation the whole
+of P3 (HTTP API, fan-out, SDK) sits on.
+
+**High-leverage move chosen:** Build the **endpoint store** and connect it to the worker. Highest-
+leverage because (a) it is the load-bearing entity every later P3 step depends on; (b) it fills the
+worker's deliberately-left resolver seam, ending the "four/five disconnected islands" pattern; (c)
+it needs **zero new dependencies** (no `npm install`/network risk in this sandbox) and is fully
+in-process validatable, directly serving Axiom 2. Followed the proven `MessageStore`/`DeliveryQueue`
+architecture verbatim (interface + in-memory reference + SQLite + one shared conformance suite) to
+keep risk low. Deliberately deferred fan-out + the App/tenant entity + the Fastify HTTP layer to
+keep this one cohesive green unit (Fastify also carries an install-network risk; the pure data layer
+is both the foundation and the safe part).
+
+**Built this tick (`src/endpoints/`):**
+- `endpoint.ts` — `Endpoint` (tenant-scoped `appId`; `url` + `secret` + `eventTypes` filter [`null`
+  = all] + `disabled`), the `EndpointStore` CRUD contract, `UnknownEndpointError`, and shared **pure**
+  helpers so backends can't drift: `normalizeNewEndpoint` (http(s)-only URL validation, deduped
+  filter, secret signalled as `null` → backend mints one via an injectable generator),
+  `applyEndpointUpdate` (validated patch; `id`/`appId`/`createdAt` immutable, `updatedAt` bumped),
+  `endpointSubscribesTo` (for fan-out next tick), `createEndpointId`.
+- `in-memory-endpoint-store.ts` — insertion-ordered reference backend; `listByApp` oldest-first.
+- `sqlite-endpoint-store.ts` — durable backend on built-in `node:sqlite` (same `createRequire`
+  workaround), `STRICT` schema, `event_types` as JSON (or NULL), `disabled` as 0/1, `update` as a
+  read-modify-write in a `BEGIN IMMEDIATE` txn, `delete` via row-changes count.
+- `conformance.ts` + `endpoint.test.ts` (pure helpers) + per-backend tests; SQLite adds crash-safe
+  replay (filter + flags survive reopen) + file isolation.
+- **Wired to the worker:** `DeliveryTask`/`EnqueueInput` now carry an opaque, nullable `endpointId`
+  (the "message×endpoint richer unit" the queue's own docstring anticipated) — threaded through both
+  queue backends + the queue conformance suite (round-trip + reject-empty). `endpoint-resolver.ts`'s
+  `storeBackedResolver(store)` fills the worker's `EndpointResolver` seam: resolves `endpointId` →
+  target, declining (null → failed attempt → policy retries/dead-letters) for absent/deleted/disabled
+  endpoints. `src/index.ts` re-exports the endpoint surface.
+
+**Key decisions (honest tradeoffs):**
+- `endpointId` is a **passenger** field — the queue carries it, never interprets it — so transitions
+  preserve it for free via the existing `...task` spread and the SQLite `#persist` UPDATE leaves it
+  untouched (immutable post-enqueue).
+- A **disabled** endpoint resolves to `null`, i.e. a *failed attempt* that eventually dead-letters,
+  rather than an out-of-band cancel (the worker has none in v1). Fan-out won't enqueue work for
+  disabled endpoints; this only bites an endpoint disabled *after* enqueue. Logged, not hidden.
+- `appId` is required now (multi-tenant from day one, `listByApp` never leaks) but treated as an
+  opaque scope string — the App entity that mints/validates it is a later tick.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **222/222** (was 168; +54: endpoints 50 [pure
+9, in-mem 17, sqlite 18, resolver 6], queue +4, plus the worker-test literal gained `endpointId`).
+`npm run build` clean. **Smoke-tested the built `dist/index.js`** (`SqliteEndpointStore` create →
+filter round-trip → enqueue with `endpointId` → `storeBackedResolver` → worker delivers → signature
+**verifies**) to prove the full path works in production ESM. Integrity + local gate: exit 0.
+
+**State:** GREEN → committing to main. P3 underway; the endpoint is persisted and the worker delivers
+to a stored endpoint end-to-end. Next tick: message **fan-out** (needs `appId` on the message) +
+the **App/tenant** entity, then the Fastify HTTP API.
+
+---
+
 ## 2026-05-22 — Iteration 6: P2.5 — the delivery worker (runtime I/O driver), end-to-end send real
 
 **Repo truth at start:** clean main @ `7c1926b`. Baseline re-verified before any change:
