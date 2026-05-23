@@ -112,6 +112,13 @@ Early foundation. Implemented so far:
   state in the delivery FSM, scoped to the authenticated tenant (another tenant's message is `404`),
   and targets only dead-lettered deliveries — succeeded/in-flight ones are left untouched.
 
+- ✅ **Single-container image (the deployment wedge made real)** — a multi-stage `Dockerfile`
+  packages the gateway as **one container, no Redis, no Postgres**, with durable state in an embedded
+  SQLite volume. Because the runtime has **zero dependencies**, the image carries only a Node binary
+  and the compiled `dist/` — no `node_modules` to ship or patch — and runs as an unprivileged user
+  with a built-in `/healthz` `HEALTHCHECK`. The same image runs the gateway *and* the one-shot
+  `posthorn admin` bootstrap. `docker build -t posthorn . && docker run -p 3000:3000 -v posthorn-data:/data posthorn`.
+
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
 ## Quickstart (signing module)
@@ -309,6 +316,33 @@ npm install && npm run build
 POSTHORN_DATA_DIR=./posthorn-data POSTHORN_PORT=3000 npm start
 # [posthorn] listening on http://0.0.0.0:3000 (data: ./posthorn-data)
 ```
+
+### Run with Docker (the headline deployment)
+
+The whole product is **one container, no Redis, no Postgres** — durable state lives in an
+embedded SQLite file. Because Posthorn has **zero runtime dependencies** (every moving part is a
+Node built-in), the image ships only a Node binary and the compiled output: no `node_modules` to
+audit or patch.
+
+```bash
+docker build -t posthorn .
+docker run -p 3000:3000 -v posthorn-data:/data posthorn
+# [posthorn] listening on http://0.0.0.0:3000 (data: /data)
+```
+
+State persists in the `/data` volume across restarts and upgrades. Bootstrap the first
+tenant + key with the same image (one-shot `admin` commands against the shared volume — see
+below), then drive the API with the minted key:
+
+```bash
+docker run --rm -v posthorn-data:/data posthorn admin create-app "Acme"
+docker run --rm -v posthorn-data:/data posthorn admin create-key app_xxx   # prints the secret once
+```
+
+The container binds `0.0.0.0:3000`, runs as the unprivileged `node` user, and ships a built-in
+`HEALTHCHECK` against `/healthz` (so `docker ps` / orchestrators see real liveness). Override any
+setting with the `POSTHORN_*` environment variables below (e.g. `-e POSTHORN_PORT=8080`). When
+bind-mounting a host directory instead of a named volume, ensure it is writable by uid `1000`.
 
 Configuration is environment-driven (all optional):
 

@@ -4,6 +4,67 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 18: P4 — single-container `Dockerfile` (the deployment wedge made real)
+
+**Repo truth at start:** clean main @ `6c37137`. Baseline re-verified before any change: `tsc --noEmit`
+clean, vitest **503/503**, `npm run build` clean, integrity + local gate both exit 0. Node 24.15.
+Reconciled GOAL→PROJECT: Posthorn stands; the product is functionally complete for v1 (sign → fan-out →
+deliver → observe → list → retry, HTTP API + SDK + admin CLI + bootable gateway). The glaring gap: the
+**entire market wedge is "deploy as one container, no Redis," and there was no `Dockerfile`** — the
+headline differentiator existed only as prose. P4's top remaining item.
+
+**Re-tested a blocking assumption from iter 17 — it was wrong.** Iter 17 deferred the Dockerfile as
+"un-validatable green here — needs network egress this sandbox blocks." I probed it directly: `docker
+--version`/`docker info` (29.4.3, daemon live), `docker pull node:24-alpine` **succeeded**, and `npm ci`
+**inside the build succeeded**. Network egress is available. So the Dockerfile is not only the
+highest-leverage move (realizes the wedge, unblocks all self-host adoption) but now **fully validatable
+for real** — a `docker build` + `docker run` smoke that *exceeds* the standard gate. Chosen over the
+metrics endpoint / operator docs (smaller, and docs follow a real artifact) and the per-attempt audit log
+(deferred again — larger, touches the worker hot path, higher landing risk).
+
+**Built this tick:**
+- **`Dockerfile` (multi-stage).** Stage 1 (`node:24-alpine`): `npm ci` (cached on lockfile) → `tsc` →
+  `dist/`, then strips the compiled `*.test.*` output tsc emits from `src/**/*.test.ts` (never on the
+  runtime graph). Stage 2 (`node:24-alpine`): copies **only** `dist/` + the `package.json` that marks the
+  output ESM (`"type":"module"`) — **no `node_modules`, because the runtime has zero dependencies** (every
+  moving part is a `node:*` builtin: `node:http`/`node:sqlite`/`node:crypto`). The cleanest possible
+  expression of the wedge: nothing to `npm install`, audit, or patch in the runtime image.
+- **Hardening / ops.** Runs as the unprivileged `node` user (uid 1000); durable SQLite state on a `/data`
+  `VOLUME` (chowned to `node` before the privilege drop, so anonymous volumes inherit a writable baseline);
+  `POSTHORN_*` defaults (`HOST=0.0.0.0`, `PORT=3000`, `DATA_DIR=/data`); a dependency-free `HEALTHCHECK`
+  using Node's built-in `fetch` against `/healthz` (no curl/wget). One exec-form
+  `ENTRYPOINT ["node","dist/main.js"]`: `node` is PID 1 and receives `SIGTERM` directly → the existing
+  graceful drain; no args → gateway, `admin <command>` args → the one-shot bootstrap. Same image runs the
+  server *and* mints the first key.
+- **`.dockerignore`** keeps the build context to just the compiled sources (`src/`, `package*.json`,
+  `tsconfig.json`); excludes `node_modules`/`dist`/`.git`/state/docs so the image is reproducible and lean.
+- **Docs reconciled to reality.** README: a "Run with Docker (the headline deployment)" subsection (build/
+  run/admin/volume/healthcheck/uid-1000 bind-mount caveat) + a Status bullet. PROJECT.md: P4 Dockerfile ✅
+  with the validation evidence.
+
+**Key decisions (honest tradeoffs):** pinned `node:24-alpine` to match the dev/test runtime (`node:sqlite`
+is a stable builtin there; Alpine = small) — image ~231 MB, dominated by the Node base, acceptable for v1
+(a `slim`/distroless shave is a later optimization). Did **not** add `tini`/`--init`: the app spawns no
+children and handles its own signals, so PID-1 `node` is correct and lighter; noted `--init` is harmless if
+an operator wants it. Stripped only `*.test.*` from `dist` (clearly off the runtime graph) rather than
+introducing a second `tsconfig.build.json` — keeps **one** validated build path, no config fork. Kept the
+existing `npm run build`; the container reuses it verbatim.
+
+**Validation (exceeds the standard gate):** standard gate first — `tsc --noEmit` clean, vitest **503/503**
+(no source changed; Docker/docs-only), `npm run build` clean, integrity + local gate exit 0, three
+hash-protected files untouched. Then a **real container smoke**: `docker build -t posthorn:smoke .`
+succeeds; booted container serves `/healthz` 200 and Docker reports `healthy`; a *separate* `admin`
+container sharing the `/data` volume mints app+key and the **running server authenticates that key over
+HTTP** (401 without → 200 on `/v1/endpoints`, 202 on `POST /v1/messages`); the sent message is listable;
+`docker stop` logs the graceful `SIGTERM` drain; and the message **survives a full teardown + fresh boot on
+the same volume** (durability, no Redis). Smoke artifacts (image/volume/containers) removed after.
+
+**State:** GREEN → committing to main. The "single container, no Redis" wedge is now a thing you can
+`docker run`, not a claim. Next ticks (P4 tail): a metrics endpoint, operator docs; then OpenAPI / a
+per-attempt audit log (P3 deferred).
+
+---
+
 ## 2026-05-23 — Iteration 17: P3 — manual retry / replay (`POST /v1/messages/:id/retry`)
 
 **Repo truth at start:** clean main @ `fe2ca77`. Baseline re-verified before any change: `tsc --noEmit`

@@ -326,9 +326,26 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     latest-state-per-endpoint view); and per-key `lastUsedAt`.
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
-  provisioning CLI** ✅ (`posthorn admin …`, see P3) — so a deployed instance can be bootstrapped
-  without writing code. Remaining: a single **Dockerfile** image, a metrics endpoint, and operator
-  docs.
+  provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ (this
+  tick) — so a deployed instance can be bootstrapped without writing code.
+  - **Single-container image ✅ (this tick):** the headline deployment artifact that makes the
+    "single container, no Redis" wedge a *thing you can `docker run`*, not just a prose claim. A
+    multi-stage `Dockerfile` (+ `.dockerignore`): stage 1 (`node:24-alpine`) `npm ci` + `tsc` →
+    `dist/` and strips the compiled `*.test.*` output; stage 2 copies **only** `dist/` + the
+    `package.json` that marks the output ESM (`"type":"module"`) onto a bare Node base — **no
+    `node_modules`, because the runtime has zero dependencies** (every moving part is a `node:*`
+    built-in), the cleanest possible expression of the wedge. Runs as the unprivileged `node` user,
+    persists durable SQLite state to a `/data` `VOLUME`, sets `POSTHORN_*` defaults, and ships a
+    dependency-free `HEALTHCHECK` (Node's built-in `fetch` against `/healthz`). One exec-form
+    `ENTRYPOINT ["node","dist/main.js"]` serves the gateway with no args (PID-1 `node` receives
+    `SIGTERM` → the existing graceful drain) **and** runs the one-shot `posthorn admin <command>`
+    bootstrap with args — so the same image provisions the first key and runs the server. **Validated
+    for real, beyond the standard gate:** `docker build` succeeds; the booted container serves
+    `/healthz` (Docker reports `healthy`); the `admin` CLI mints an app+key in a *separate* container
+    sharing the `/data` volume and the running server **authenticates that key over HTTP** (401
+    without → 200/202 with); a sent message is listable; `docker stop` drains gracefully; and the
+    message **survives a full container teardown + fresh boot** on the same volume (durability, no
+    Redis). Image ~231 MB (Alpine + Node). Remaining in P4: a metrics endpoint and operator docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 
 ## 5. Out of scope / non-goals
