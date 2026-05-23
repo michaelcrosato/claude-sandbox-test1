@@ -28,7 +28,10 @@ import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
 import type { MessageStore } from "../storage/message-store.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
-import type { DeliveryAttemptStore } from "../attempts/delivery-attempt.js";
+import {
+  MAX_LIST_ATTEMPTS_LIMIT,
+  type DeliveryAttemptStore,
+} from "../attempts/delivery-attempt.js";
 import type { TenantSessionStore } from "./tenant-sessions.js";
 import {
   tenantLoginPage,
@@ -196,10 +199,13 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
       // Tenant-scope check: treat another tenant's message as absent (404).
       if (message === null || message.appId !== appId) return NOT_FOUND;
 
-      const [tasks, attemptLog] = await Promise.all([
+      const [tasks, attemptsPage] = await Promise.all([
         queue.listByMessage(messageId),
-        attempts.listByMessage(messageId),
+        // Use the maximum page size for the dashboard; a single message's attempt
+        // log is bounded by (endpoints × retry_budget), well within 200.
+        attempts.listByMessage(messageId, { limit: MAX_LIST_ATTEMPTS_LIMIT }),
       ]);
+      const attemptLog = attemptsPage.data;
 
       // Enrich delivery tasks with endpoint URLs (best-effort: a deleted endpoint is null).
       const enriched: EnrichedDelivery[] = await Promise.all(

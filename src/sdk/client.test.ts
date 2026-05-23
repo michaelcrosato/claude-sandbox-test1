@@ -532,16 +532,17 @@ describe("PosthornClient end-to-end via a running gateway", () => {
 
       // The per-attempt audit log records that one succeeded attempt (HTTP 2xx),
       // observed all the way through the SDK.
-      const attempts = await client.listMessageAttempts(sent.message.id);
-      expect(attempts).toHaveLength(1);
-      expect(attempts[0]).toMatchObject({
+      const attemptsPage = await client.listMessageAttempts(sent.message.id);
+      expect(attemptsPage.data).toHaveLength(1);
+      expect(attemptsPage.nextCursor).toBeNull();
+      expect(attemptsPage.data[0]).toMatchObject({
         endpointId: endpoint.id,
         attemptNumber: 1,
         outcome: "succeeded",
         error: null,
       });
-      expect(attempts[0]!.responseStatus).toBeGreaterThanOrEqual(200);
-      expect(attempts[0]!.responseStatus).toBeLessThan(300);
+      expect(attemptsPage.data[0]!.responseStatus).toBeGreaterThanOrEqual(200);
+      expect(attemptsPage.data[0]!.responseStatus).toBeLessThan(300);
     },
     15_000,
   );

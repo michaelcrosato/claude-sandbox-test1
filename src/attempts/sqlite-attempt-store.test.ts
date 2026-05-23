@@ -53,7 +53,8 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
     const after = new SqliteDeliveryAttemptStore({ location: dbPath });
     try {
       expect(after.size).toBe(1);
-      const [survived] = await after.listByMessage("m1");
+      const { data: survivedData } = await after.listByMessage("m1");
+      const [survived] = survivedData;
       expect(survived).toEqual({
         id: "datt_test_1",
         taskId: "t1",
@@ -91,8 +92,8 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
         durationMs: 0,
         attemptedAt: 1,
       });
-      expect((await a.listByMessage("m")).length).toBe(1);
-      expect((await b.listByMessage("m")).length).toBe(0);
+      expect((await a.listByMessage("m")).data.length).toBe(1);
+      expect((await b.listByMessage("m")).data.length).toBe(0);
       expect(b.size).toBe(0);
     } finally {
       a.close();

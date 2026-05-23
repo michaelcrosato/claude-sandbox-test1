@@ -22,6 +22,7 @@ import {
   MAX_LIST_MESSAGES_LIMIT,
   MAX_USAGE_RANGE_DAYS,
 } from "../storage/message-store.js";
+import { MAX_LIST_ATTEMPTS_LIMIT } from "../attempts/delivery-attempt.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** A JSON Schema / OpenAPI schema object (or a `$ref`). Loosely typed on purpose. */
@@ -271,10 +272,28 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "pre-flight failure), the error, and the latency. This is the depth behind " +
             '"observable": where `GET /v1/messages/{id}` shows each delivery\'s *current* state, ' +
             "this shows the *history* of how it got there. Another tenant's (or an unknown) " +
-            "message is `404`.",
-          parameters: [idParam("The message id.")],
+            "message is `404`. Keyset-paginated oldest-first: pass `nextCursor` back as " +
+            "`?cursor=` to page forward.",
+          parameters: [
+            idParam("The message id."),
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: MAX_LIST_ATTEMPTS_LIMIT },
+              description: `Page size, 1..${MAX_LIST_ATTEMPTS_LIMIT}. A server default applies when omitted.`,
+            },
+            {
+              name: "cursor",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description: "Opaque cursor from a prior page's `nextCursor`.",
+            },
+          ],
           responses: {
-            "200": jsonResponse("The message's delivery attempts.", ref("DeliveryAttemptList")),
+            "200": jsonResponse("A page of delivery attempts.", ref("DeliveryAttemptList")),
+            "400": errorResponse("Invalid `limit` or `cursor`."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such message for this tenant."),
           },
@@ -923,9 +942,17 @@ export function buildOpenApiDocument(): OpenApiDocument {
         },
         DeliveryAttemptList: {
           type: "object",
-          description: "A message's delivery attempts, oldest-first.",
-          required: ["data"],
-          properties: { data: { type: "array", items: ref("DeliveryAttempt") } },
+          description:
+            "One page of a message's delivery attempts, oldest-first. " +
+            "Pass `nextCursor` as `?cursor=` to fetch the next page; `null` on the last page.",
+          required: ["data", "nextCursor"],
+          properties: {
+            data: { type: "array", items: ref("DeliveryAttempt") },
+            nextCursor: {
+              type: ["string", "null"],
+              description: "Opaque cursor for the next page, or null when this is the last page.",
+            },
+          },
         },
         RetryResult: {
           type: "object",

@@ -12,12 +12,18 @@
  */
 
 import {
+  compareAttemptsOldestFirst,
   createAttemptId,
+  encodeAttemptCursor,
+  isAttemptAfterCursor,
   normalizeNewAttempt,
+  resolveListAttemptsQuery,
+  type AttemptPage,
   type AttemptUsageDay,
   type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptStore,
+  type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
 import {
@@ -57,13 +63,24 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
     return attempt;
   }
 
-  async listByMessage(messageId: string): Promise<readonly DeliveryAttempt[]> {
-    const out: DeliveryAttempt[] = [];
-    // Map iteration is insertion order → oldest-first, matching SQLite's rowid.
+  async listByMessage(messageId: string, options: ListAttemptsOptions = {}): Promise<AttemptPage> {
+    const { limit, cursor } = resolveListAttemptsQuery(options);
+    // Collect all candidates, sort oldest-first, then apply cursor.
+    let candidates: DeliveryAttempt[] = [];
     for (const attempt of this.#attempts.values()) {
-      if (attempt.messageId === messageId) out.push(attempt);
+      if (attempt.messageId === messageId) candidates.push(attempt);
     }
-    return out;
+    candidates.sort(compareAttemptsOldestFirst);
+    if (cursor !== null) {
+      candidates = candidates.filter((a) => isAttemptAfterCursor(a, cursor));
+    }
+    // Take limit+1 to detect whether a next page exists.
+    const hasMore = candidates.length > limit;
+    const page = candidates.slice(0, limit);
+    return {
+      data: page,
+      nextCursor: hasMore ? encodeAttemptCursor(page[page.length - 1]!) : null,
+    };
   }
 
   async summarizeAttemptsByApp(

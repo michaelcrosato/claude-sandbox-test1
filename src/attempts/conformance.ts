@@ -160,11 +160,13 @@ export function describeDeliveryAttemptStoreContract(
     });
 
     describe("listByMessage", () => {
-      it("returns an empty array for a message with no attempts", async () => {
-        expect(await store.listByMessage("msg_unknown")).toEqual([]);
+      it("returns an empty page for a message with no attempts", async () => {
+        const page = await store.listByMessage("msg_unknown");
+        expect(page.data).toEqual([]);
+        expect(page.nextCursor).toBeNull();
       });
 
-      it("lists a message's attempts oldest-first, scoped to that message", async () => {
+      it("lists attempts oldest-first, scoped to that message, nextCursor null when all fit", async () => {
         // Two messages interleaved, as a busy worker would record them.
         const a1 = await store.record(
           attemptInput({ messageId: "m-a", attemptNumber: 1, attemptedAt: 100 }),
@@ -183,14 +185,16 @@ export function describeDeliveryAttemptStoreContract(
           }),
         );
 
-        const aAttempts = await store.listByMessage("m-a");
-        expect(aAttempts.map((a) => a.id)).toEqual([a1.id, a2.id]);
-        expect(aAttempts.map((a) => a.attemptNumber)).toEqual([1, 2]);
-        expect(aAttempts.every((a) => a.messageId === "m-a")).toBe(true);
+        const aPage = await store.listByMessage("m-a");
+        expect(aPage.data.map((a) => a.id)).toEqual([a1.id, a2.id]);
+        expect(aPage.data.map((a) => a.attemptNumber)).toEqual([1, 2]);
+        expect(aPage.data.every((a) => a.messageId === "m-a")).toBe(true);
+        expect(aPage.nextCursor).toBeNull(); // all fit on one page
 
         // The other message's attempts are not mixed in.
-        const bAttempts = await store.listByMessage("m-b");
-        expect(bAttempts.map((a) => a.id)).toEqual([b1.id]);
+        const bPage = await store.listByMessage("m-b");
+        expect(bPage.data.map((a) => a.id)).toEqual([b1.id]);
+        expect(bPage.nextCursor).toBeNull();
       });
 
       it("preserves each recorded attempt verbatim", async () => {
@@ -204,8 +208,84 @@ export function describeDeliveryAttemptStoreContract(
           attemptedAt: 1_700_000_123_456,
         });
         await store.record(input);
-        const [listed] = await store.listByMessage("m-x");
-        expect(listed).toEqual({ id: "datt_test_1", ...normalizeNewAttempt(input) });
+        const page = await store.listByMessage("m-x");
+        expect(page.data[0]).toEqual({ id: "datt_test_1", ...normalizeNewAttempt(input) });
+      });
+
+      it("paginates forward through a message's attempts (limit=2)", async () => {
+        // Record 3 attempts for the same message.
+        await store.record(attemptInput({ messageId: "m-p", attemptNumber: 1, attemptedAt: 1_000 }));
+        await store.record(attemptInput({ messageId: "m-p", attemptNumber: 2, attemptedAt: 2_000 }));
+        await store.record(
+          attemptInput({ messageId: "m-p", attemptNumber: 3, outcome: "failed", responseStatus: 503, error: "x", attemptedAt: 3_000 }),
+        );
+
+        const page1 = await store.listByMessage("m-p", { limit: 2 });
+        expect(page1.data).toHaveLength(2);
+        expect(page1.data[0]!.attemptNumber).toBe(1);
+        expect(page1.data[1]!.attemptNumber).toBe(2);
+        expect(page1.nextCursor).not.toBeNull();
+
+        const page2 = await store.listByMessage("m-p", { limit: 2, cursor: page1.nextCursor });
+        expect(page2.data).toHaveLength(1);
+        expect(page2.data[0]!.attemptNumber).toBe(3);
+        expect(page2.nextCursor).toBeNull();
+      });
+
+      it("covers all attempts when paginating through exactly (limit = 1)", async () => {
+        const n = 4;
+        for (let i = 1; i <= n; i++) {
+          await store.record(attemptInput({ messageId: "m-q", attemptNumber: i, attemptedAt: i * 1_000 }));
+        }
+
+        const allAttempts: number[] = [];
+        let cursor: string | null = null;
+        for (;;) {
+          const page = await store.listByMessage("m-q", { limit: 1, cursor });
+          for (const a of page.data) allAttempts.push(a.attemptNumber);
+          cursor = page.nextCursor;
+          if (cursor === null) break;
+        }
+        expect(allAttempts).toEqual([1, 2, 3, 4]);
+      });
+
+      it("handles a same-ms tiebreak by id ascending", async () => {
+        // Two attempts at the same epoch-ms with different ids.
+        const ts = 5_000;
+        const a1 = await store.record(attemptInput({ messageId: "m-ts", attemptNumber: 1, attemptedAt: ts }));
+        const a2 = await store.record(attemptInput({ messageId: "m-ts", attemptNumber: 2, attemptedAt: ts }));
+
+        const page1 = await store.listByMessage("m-ts", { limit: 1 });
+        expect(page1.data).toHaveLength(1);
+        expect(page1.nextCursor).not.toBeNull();
+
+        const page2 = await store.listByMessage("m-ts", { limit: 1, cursor: page1.nextCursor });
+        expect(page2.data).toHaveLength(1);
+        expect(page2.nextCursor).toBeNull();
+
+        // Combined covers both; order is stable (the one with the smaller id comes first).
+        const allIds = [page1.data[0]!.id, page2.data[0]!.id];
+        expect(new Set(allIds)).toEqual(new Set([a1.id, a2.id]));
+        expect(allIds[0]! < allIds[1]!).toBe(true); // id-ascending tiebreak
+      });
+
+      it("nextCursor is null on an exact-multiple last page", async () => {
+        // 2 attempts, limit 2 → exactly one page, no next.
+        await store.record(attemptInput({ messageId: "m-ex", attemptNumber: 1, attemptedAt: 1_000 }));
+        await store.record(attemptInput({ messageId: "m-ex", attemptNumber: 2, attemptedAt: 2_000 }));
+        const page = await store.listByMessage("m-ex", { limit: 2 });
+        expect(page.data).toHaveLength(2);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("rejects a limit of 0 with a RangeError", async () => {
+        await expect(store.listByMessage("m-any", { limit: 0 })).rejects.toThrow(RangeError);
+      });
+
+      it("rejects a malformed cursor with a TypeError", async () => {
+        await expect(
+          store.listByMessage("m-any", { cursor: "not-valid-base64url!!" }),
+        ).rejects.toThrow(TypeError);
       });
     });
 

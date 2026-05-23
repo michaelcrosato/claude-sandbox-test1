@@ -120,13 +120,15 @@ export interface DeliveryAttemptStore {
   /** Append one attempt, returning the stored record with its assigned id. */
   record(input: NewDeliveryAttempt): Promise<DeliveryAttempt>;
   /**
-   * List every attempt for `messageId`, oldest-first (the order they were
-   * recorded, which is chronological). Returns an empty array when the message has
-   * no recorded attempts or the id is unknown/empty — a pure read that never throws
-   * on an absent message. This is the data primitive behind
+   * List attempts for `messageId`, **oldest-first** (`attemptedAt ASC, id ASC`), one
+   * page at a time. Returns an empty `data` array when the message has no recorded
+   * attempts or the id is unknown/empty — a pure read that never throws on an absent
+   * message. Keyset-paginated: pass the previous page's
+   * {@link AttemptPage.nextCursor} back as {@link ListAttemptsOptions.cursor} to
+   * fetch the next page (`null` = last page). This is the data primitive behind
    * `GET /v1/messages/:id/attempts`.
    */
-  listByMessage(messageId: string): Promise<readonly DeliveryAttempt[]>;
+  listByMessage(messageId: string, options?: ListAttemptsOptions): Promise<AttemptPage>;
   /**
    * Summarize a tenant's **delivery-attempt usage** over the half-open epoch-ms range
    * `[range.fromMs, range.toMs)`, broken down by **UTC calendar day** — the *operations*
@@ -184,6 +186,127 @@ export interface AttemptUsageSummary {
   readonly failed: number;
   /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
   readonly daily: readonly AttemptUsageDay[];
+}
+
+/** Default page size for {@link DeliveryAttemptStore.listByMessage}. */
+export const DEFAULT_LIST_ATTEMPTS_LIMIT = 50;
+
+/**
+ * Largest page {@link DeliveryAttemptStore.listByMessage} will return in one call.
+ * A caller asking for more is a {@link RangeError}.
+ */
+export const MAX_LIST_ATTEMPTS_LIMIT = 200;
+
+/** Options for {@link DeliveryAttemptStore.listByMessage}. */
+export interface ListAttemptsOptions {
+  /**
+   * Page size, an integer in `[1, {@link MAX_LIST_ATTEMPTS_LIMIT}]`. Defaults to
+   * {@link DEFAULT_LIST_ATTEMPTS_LIMIT}.
+   */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link AttemptPage.nextCursor}. Omit (or
+   * `null`) for the first page. A malformed cursor throws {@link TypeError}.
+   */
+  readonly cursor?: string | null;
+}
+
+/** One page of {@link DeliveryAttemptStore.listByMessage}, oldest-first. */
+export interface AttemptPage {
+  /** This page's attempts, oldest-first. */
+  readonly data: readonly DeliveryAttempt[];
+  /** Opaque cursor for the following page, or `null` when this is the last page. */
+  readonly nextCursor: string | null;
+}
+
+/** A decoded keyset cursor — the `(attemptedAt, id)` of the last attempt on a page. */
+export interface AttemptCursor {
+  readonly attemptedAt: number;
+  readonly id: string;
+}
+
+/**
+ * Encode a keyset cursor that points just *after* `attempt` in oldest-first order.
+ * Opaque, URL-safe (base64url), paired with {@link decodeAttemptCursor}.
+ */
+export function encodeAttemptCursor(attempt: {
+  readonly attemptedAt: number;
+  readonly id: string;
+}): string {
+  return Buffer.from(`${attempt.attemptedAt}:${attempt.id}`, "utf8").toString("base64url");
+}
+
+/**
+ * Decode a cursor produced by {@link encodeAttemptCursor}, throwing
+ * {@link TypeError} on any malformed token. The `attemptedAt` prefix is all
+ * digits and ids never contain a `:`, so the first colon splits them unambiguously.
+ */
+export function decodeAttemptCursor(cursor: string): AttemptCursor {
+  if (typeof cursor !== "string" || cursor.length === 0) {
+    throw new TypeError("cursor must be a non-empty string");
+  }
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const sep = decoded.indexOf(":");
+  if (sep <= 0) {
+    throw new TypeError("malformed cursor");
+  }
+  const attemptedAt = Number(decoded.slice(0, sep));
+  const id = decoded.slice(sep + 1);
+  if (!Number.isInteger(attemptedAt) || attemptedAt < 0 || id.length === 0) {
+    throw new TypeError("malformed cursor");
+  }
+  return { attemptedAt, id };
+}
+
+/**
+ * Resolve {@link ListAttemptsOptions} into a concrete `(limit, cursor)`, shared by
+ * every backend so they page identically. `limit` defaults to
+ * {@link DEFAULT_LIST_ATTEMPTS_LIMIT} and must be an integer in
+ * `[1, {@link MAX_LIST_ATTEMPTS_LIMIT}]`; a malformed `cursor` throws TypeError.
+ */
+export function resolveListAttemptsQuery(
+  options: ListAttemptsOptions = {},
+): { limit: number; cursor: AttemptCursor | null } {
+  const limit = options.limit ?? DEFAULT_LIST_ATTEMPTS_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_ATTEMPTS_LIMIT) {
+    throw new RangeError(
+      `limit must be an integer in [1, ${MAX_LIST_ATTEMPTS_LIMIT}]`,
+    );
+  }
+  const cursor =
+    options.cursor === undefined || options.cursor === null
+      ? null
+      : decodeAttemptCursor(options.cursor);
+  return { limit, cursor };
+}
+
+/**
+ * Order two attempts **oldest-first**: `attemptedAt` ascending, then `id` ascending
+ * as a stable tiebreak. Mirrors the SQLite backend's `ORDER BY attempted_at ASC, id ASC`.
+ */
+export function compareAttemptsOldestFirst(
+  a: { readonly attemptedAt: number; readonly id: string },
+  b: { readonly attemptedAt: number; readonly id: string },
+): number {
+  if (a.attemptedAt !== b.attemptedAt) return a.attemptedAt - b.attemptedAt;
+  if (a.id < b.id) return -1;
+  if (a.id > b.id) return 1;
+  return 0;
+}
+
+/**
+ * Whether `attempt` falls strictly *after* `cursor` in oldest-first order — i.e.
+ * belongs on a later page. Mirrors the SQLite keyset predicate
+ * `attempted_at > ? OR (attempted_at = ? AND id > ?)`.
+ */
+export function isAttemptAfterCursor(
+  attempt: { readonly attemptedAt: number; readonly id: string },
+  cursor: AttemptCursor,
+): boolean {
+  return (
+    attempt.attemptedAt > cursor.attemptedAt ||
+    (attempt.attemptedAt === cursor.attemptedAt && attempt.id > cursor.id)
+  );
 }
 
 /** Prefix on generated attempt ids. */

@@ -19,12 +19,17 @@ import type {
 } from "node:sqlite";
 import {
   createAttemptId,
+  encodeAttemptCursor,
   normalizeNewAttempt,
+  resolveListAttemptsQuery,
+  type AttemptCursor,
+  type AttemptPage,
   type AttemptUsageDay,
   type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptOutcome,
   type DeliveryAttemptStore,
+  type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
 import {
@@ -88,7 +93,14 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
 
   // Prepared once at construction, reused per call.
   readonly #insert: StatementSync;
-  readonly #selectByMessage: StatementSync;
+  /** First page (no cursor): `WHERE message_id = ? ORDER BY attempted_at ASC, id ASC LIMIT ?` */
+  readonly #selectByMessageFirst: StatementSync;
+  /**
+   * Subsequent pages (keyset cursor on `(attempted_at, id)`):
+   * `WHERE message_id = ? AND (attempted_at > ? OR (attempted_at = ? AND id > ?))
+   *  ORDER BY attempted_at ASC, id ASC LIMIT ?`
+   */
+  readonly #selectByMessageAfter: StatementSync;
   readonly #countAll: StatementSync;
   readonly #summarizeByApp: StatementSync;
 
@@ -103,6 +115,12 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec(SCHEMA);
     this.#migrateAppIdColumn();
+    // Composite covering index for paginated per-message reads; idempotent (IF NOT
+    // EXISTS). Added after migrations so the column is guaranteed to exist.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_message_paged" +
+        " ON delivery_attempts (message_id, attempted_at, id)",
+    );
 
     this.#insert = this.#db.prepare(
       `INSERT INTO delivery_attempts
@@ -110,10 +128,21 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
           response_status, error, duration_ms, attempted_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    // All attempts for one message, oldest-first (rowid = record order). Backed by
-    // idx_delivery_attempts_message so it stays cheap as the log grows unbounded.
-    this.#selectByMessage = this.#db.prepare(
-      "SELECT * FROM delivery_attempts WHERE message_id = ? ORDER BY rowid",
+    // First page — no cursor. Ordered by (attempted_at ASC, id ASC) for stable
+    // oldest-first pagination; backed by idx_delivery_attempts_message_paged.
+    this.#selectByMessageFirst = this.#db.prepare(
+      "SELECT * FROM delivery_attempts" +
+        " WHERE message_id = ?" +
+        " ORDER BY attempted_at ASC, id ASC LIMIT ?",
+    );
+    // Subsequent pages — keyset cursor on (attempted_at, id). The disjunction
+    // `(attempted_at > ? OR (attempted_at = ? AND id > ?))` is the standard
+    // composite-key keyset predicate: same-ms tiebreak on id, then strictly newer.
+    this.#selectByMessageAfter = this.#db.prepare(
+      "SELECT * FROM delivery_attempts" +
+        " WHERE message_id = ?" +
+        " AND (attempted_at > ? OR (attempted_at = ? AND id > ?))" +
+        " ORDER BY attempted_at ASC, id ASC LIMIT ?",
     );
     this.#countAll = this.#db.prepare(
       "SELECT COUNT(*) AS n FROM delivery_attempts",
@@ -188,9 +217,32 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     return { id, ...n };
   }
 
-  async listByMessage(messageId: string): Promise<readonly DeliveryAttempt[]> {
-    const rows = this.#selectByMessage.all(messageId) as unknown as AttemptRow[];
-    return rows.map(rowToAttempt);
+  async listByMessage(messageId: string, options: ListAttemptsOptions = {}): Promise<AttemptPage> {
+    const { limit, cursor } = resolveListAttemptsQuery(options);
+    // Fetch limit+1 rows to detect whether a next page exists without a separate COUNT.
+    const rows = this.#fetchPage(messageId, cursor, limit + 1);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    return {
+      data: page.map(rowToAttempt),
+      nextCursor: hasMore
+        ? encodeAttemptCursor({ attemptedAt: Number(page[page.length - 1]!.attempted_at), id: page[page.length - 1]!.id })
+        : null,
+    };
+  }
+
+  /** Execute the correct paginated query based on whether a cursor is present. */
+  #fetchPage(messageId: string, cursor: AttemptCursor | null, limit: number): AttemptRow[] {
+    if (cursor === null) {
+      return this.#selectByMessageFirst.all(messageId, limit) as unknown as AttemptRow[];
+    }
+    return this.#selectByMessageAfter.all(
+      messageId,
+      cursor.attemptedAt,
+      cursor.attemptedAt,
+      cursor.id,
+      limit,
+    ) as unknown as AttemptRow[];
   }
 
   async summarizeAttemptsByApp(

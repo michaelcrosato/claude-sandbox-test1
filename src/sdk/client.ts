@@ -148,6 +148,27 @@ export interface DeliveryAttemptView {
   readonly attemptedAt: number;
 }
 
+/** Options for {@link PosthornClient.listMessageAttempts}. */
+export interface ListAttemptsParams {
+  /** Page size, 1..200. Defaults to the gateway's default (50). */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link AttemptListPage.nextCursor}; omit
+   * (or `null`) for the first page.
+   */
+  readonly cursor?: string | null;
+}
+
+/**
+ * One page of {@link PosthornClient.listMessageAttempts}: an oldest-first slice of
+ * the message's delivery attempts plus the cursor to fetch the next page.
+ */
+export interface AttemptListPage {
+  readonly data: readonly DeliveryAttemptView[];
+  /** Pass back as {@link ListAttemptsParams.cursor}; `null` on the last page. */
+  readonly nextCursor: string | null;
+}
+
 /** Options for {@link PosthornClient.listMessages}. */
 export interface ListMessagesParams {
   /** Page size, 1..200. Defaults to the gateway's default (50). */
@@ -422,13 +443,21 @@ export class PosthornClient {
    * One record per HTTP attempt the worker made (across every endpoint it fanned out
    * to), oldest-first, each carrying the response status, error, and latency — the
    * *history* behind {@link PosthornClient.getMessage}'s current-state view.
+   * Keyset-paginated: pass the returned {@link AttemptListPage.nextCursor} back as
+   * {@link ListAttemptsParams.cursor} to fetch the next page (`null` = last page).
    */
-  async listMessageAttempts(id: string): Promise<readonly DeliveryAttemptView[]> {
-    const res = await this.#transport.request<{ data: readonly DeliveryAttemptView[] }>(
+  async listMessageAttempts(
+    id: string,
+    params: ListAttemptsParams = {},
+  ): Promise<AttemptListPage> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.cursor !== undefined && params.cursor !== null) query.set("cursor", params.cursor);
+    const qs = query.toString();
+    return this.#transport.request<AttemptListPage>(
       "GET",
-      `/v1/messages/${encodeURIComponent(id)}/attempts`,
+      `/v1/messages/${encodeURIComponent(id)}/attempts${qs.length > 0 ? `?${qs}` : ""}`,
     );
-    return res.data;
   }
 
   /**

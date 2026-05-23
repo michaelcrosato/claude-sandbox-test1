@@ -91,10 +91,12 @@ import {
 } from "../endpoints/endpoint.js";
 import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
-import type {
-  AttemptUsageSummary,
-  DeliveryAttempt,
-  DeliveryAttemptStore,
+import {
+  MAX_LIST_ATTEMPTS_LIMIT,
+  type AttemptUsageSummary,
+  type DeliveryAttempt,
+  type DeliveryAttemptStore,
+  type ListAttemptsOptions,
 } from "../attempts/delivery-attempt.js";
 import {
   isQuotaExceeded,
@@ -319,6 +321,34 @@ function parseListMessagesParams(
         400,
         "invalid_request",
         `limit must be an integer in [1, ${MAX_LIST_MESSAGES_LIMIT}]`,
+      );
+    }
+    options.limit = limit;
+  }
+  const rawCursor = query["cursor"];
+  if (rawCursor !== undefined && rawCursor.length > 0) {
+    options.cursor = rawCursor;
+  }
+  return options;
+}
+
+/**
+ * Parse the `?limit=&cursor=` query of the attempt-log route into store options.
+ * Mirrors {@link parseListMessagesParams}: a present-but-invalid `limit` is `400`;
+ * the cursor is passed through opaquely (the store validates its shape → `400`).
+ */
+function parseListAttemptsParams(
+  query: Readonly<Record<string, string | undefined>>,
+): ListAttemptsOptions {
+  const options: { limit?: number; cursor?: string } = {};
+  const rawLimit = query["limit"];
+  if (rawLimit !== undefined) {
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_ATTEMPTS_LIMIT) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `limit must be an integer in [1, ${MAX_LIST_ATTEMPTS_LIMIT}]`,
       );
     }
     options.limit = limit;
@@ -841,10 +871,11 @@ export function createApi(deps: ApiDeps): ApiHandler {
     if (message === null || message.appId !== ctx.app.id) {
       throw new HttpError(404, "not_found", `no message with id "${id}"`);
     }
-    // The per-attempt audit log, oldest-first. Bounded by (endpoints × attempts),
-    // so it is returned in full (no pagination) like the per-endpoint deliveries.
-    const attempts = await deps.attempts.listByMessage(id);
-    return json(200, { data: attempts.map(attemptView) });
+    const page = await deps.attempts.listByMessage(
+      id,
+      parseListAttemptsParams(ctx.req.query),
+    );
+    return json(200, { data: page.data.map(attemptView), nextCursor: page.nextCursor });
   };
 
   const retryMessage: AuthedHandler = async (ctx) => {
