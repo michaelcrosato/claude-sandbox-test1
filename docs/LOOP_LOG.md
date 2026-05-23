@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 10: P3 — HTTP API (the engine becomes a runnable service)
+
+**Repo truth at start:** clean main @ `a954399`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **295/295**, `npm run build` clean, integrity + local gate both
+exit 0. Node 24.15 / Vitest 2.1.9. Reconciled GOAL→PROJECT: Posthorn decision stands. The glaring
+gap after Iter 9: every backend layer existed and was wired (signer → store → queue → worker →
+endpoints → fan-out → apps/auth), but there was **no way to actually run Posthorn as a service** —
+it was a library only. PROJECT.md's wedge is explicitly "library *or* standalone gateway," yet only
+the library half existed. Every prior tick ended "next: the Fastify HTTP API" and then deferred it,
+citing Fastify's `npm install`/network risk in this sandbox. That deferral was the loop's local minimum.
+
+**High-leverage move chosen:** Build the **HTTP API on Node's built-in `node:http`** instead of
+Fastify. Highest-leverage because (a) it converts a pile of correct-but-inert modules into a
+*deployable webhook gateway* — the single biggest systemic step available (checklist #3, "maximize
+systemic value"); (b) `node:http` **kills the only stated blocker** (zero `npm install`, zero network)
+and adds **zero runtime dependencies**, the same reasoning that chose `node:sqlite`/`node:crypto` —
+so it *strengthens* the single-container wedge rather than compromising it with a framework; (c) it is
+fully in-process testable on localhost (deterministic → Axiom 2). Deferred the transactional outbox
+again — a narrower internal-robustness fix that couples two stores; the API is what makes the product
+*exist*. Followed the worker's proven **pure-core + thin-I/O-adapter** split verbatim to keep risk low.
+
+**Built this tick (`src/http/`):**
+- `router.ts` — a **pure** dependency-free path router. `matchRoute(routes, method, path)` →
+  `matched | methodNotAllowed(allow[]) | notFound`; path matched before method so a wrong-method hit
+  on a known path yields 405 (+`Allow`), not a misleading 404. `:param` captures one URL-decoded
+  segment; malformed percent-encoding = non-match. Exhaustively unit-testable without sockets.
+- `api.ts` — `createApi(deps)`: the **pure** request→response handler composing `AppStore.authenticate`
+  (Bearer auth), `EndpointStore` (CRUD), and `ingest` (accept + fan-out). Standard `{error:{code,message}}`
+  envelope; domain errors mapped to status (`IdempotencyConflictError`→409, `UnknownEndpointError`→404,
+  validator `TypeError`→400). Surface: `GET /healthz` (open); `POST /v1/messages` (202);
+  `GET/POST /v1/endpoints`; `GET/PATCH/DELETE /v1/endpoints/:id`.
+- `server.ts` — `createHttpServer(deps, {maxBodyBytes?})`: the thin `node:http` adapter — reads the
+  body (1 MiB cap → 413, rejects early on overflow + closes the conn), normalizes headers, dispatches,
+  writes JSON. `src/index.ts` re-exports the whole http surface.
+
+**Security model (decided, not incidental):**
+- **Tenancy from the key, never the body.** Every authed route scopes to `authenticate(bearer).id`;
+  a body `appId` is ignored — a caller can't act as another tenant by forging a field (tested for both
+  messages and endpoint-create).
+- **Cross-tenant access is 404, not 403** — get/patch/delete/list of another app's endpoint is
+  indistinguishable from "absent"; existence is never revealed.
+- **Signing secrets are write-only over HTTP** — an endpoint's `secret` is returned exactly once in
+  the 201 create body (you need it to configure verification) and never echoed by list/get/update.
+- **App/key provisioning is intentionally not an HTTP route** — a privileged bootstrap with no key to
+  authenticate it; exposing it unauthenticated is an open door. It stays on the programmatic `AppStore`
+  (an admin/control-plane route is a later tick). This API is the *tenant-facing* surface only. Logged.
+
+**Key decisions (honest tradeoffs):**
+- **`payload` is any JSON value; the delivered/signed body is its `JSON.stringify`.** Conventional
+  webhook-API contract (Svix-like); byte-exact control is traded for ergonomics. Logged.
+- **`TypeError` → 400 is a deliberate convention** (every `normalize*`/`apply*Update` validator throws
+  it on bad input). A genuine internal bug throwing `TypeError` would also surface as 400; the
+  validators are the only realistic source on these routes. Commented in code.
+- **One self-inflicted test bug found + fixed:** the end-to-end test pinned the worker clock to 2023,
+  but `verify` checks the signed `webhook-timestamp` against the *real* wall clock + a replay window →
+  "too old". The signature was correct; fixed by signing with the real clock (the test asserts the
+  round-trip, not time logic).
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **338/338** (was 295; +43: router 11, api 27,
+server 5). `npm run build` clean. **Smoke-tested the built `dist` over a real socket** (unauth→401,
+health, endpoint create returns secret once, list never leaks it, ingest→202 fans out 1, worker drains,
+the signed delivery **verifies** against the endpoint secret). Integrity + local gate: exit 0. The three
+hash-protected files were not touched.
+
+**State:** GREEN → committing to main. Posthorn is now a runnable, zero-dependency webhook *service*,
+not just a library — curl an event in, it authenticates, fans out, and the worker delivers a verifiable
+signed webhook. Next tick: the **TS SDK** + **OpenAPI** over this surface, or the **transactional
+outbox** to close the one known correctness gap (crash between ingest's create and fan-out).
+
+---
+
 ## 2026-05-22 — Iteration 9: P3 — App/tenant entity + API-key authentication (identity layer)
 
 **Repo truth at start:** clean main @ `56a6f4a`. Baseline re-verified before any change:

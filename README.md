@@ -56,6 +56,15 @@ Early foundation. Implemented so far:
   O(1) lookup index; the plaintext is returned exactly once at creation and is never recoverable.
   Keys can be rotated and revoked; a revoked key never authenticates again. Same dual-backend +
   one-conformance-suite pattern, with the SQLite backend cascade-deleting a tenant's keys.
+- ✅ **HTTP API (run it as a service)** — the layer that turns the engine into a deployable
+  webhook gateway, built on Node's **built-in** `node:http` (zero runtime dependencies, same wedge
+  as `node:sqlite`/`node:crypto`). Bearer-key authentication scopes every request to its tenant;
+  routes cover the headline `POST /v1/messages` (accept + fan-out, `202`) and endpoint CRUD
+  (`/v1/endpoints`), plus an unauthenticated `GET /healthz`. Tenancy comes from the key, never the
+  request body; cross-tenant access returns `404` (existence is never revealed); an endpoint's
+  signing secret is returned exactly once at creation and never echoed afterward. Routing/auth/domain
+  logic is a pure, exhaustively-tested request→response function; the `node:http` socket plumbing is a
+  thin adapter — the same pure-core/thin-I/O split as the delivery worker.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -243,6 +252,57 @@ await apps.revokeApiKey(apiKey.id);
 
 apps.close(); // release the database handle on shutdown
 ```
+
+## Quickstart (run it as a service)
+
+Compose the stores behind the built-in HTTP server and you have a deployable webhook gateway —
+no framework, no extra dependencies. Provision a tenant + key out-of-band (the privileged
+bootstrap stays on the `AppStore`, not an open HTTP route), then your customers drive the API
+with that key.
+
+```ts
+import {
+  SqliteAppStore,
+  SqliteEndpointStore,
+  SqliteMessageStore,
+  SqliteDeliveryQueue,
+  createHttpServer,
+} from "posthorn";
+
+const apps = new SqliteAppStore({ location: "./posthorn.sqlite" });
+const endpoints = new SqliteEndpointStore({ location: "./posthorn.sqlite" });
+const messages = new SqliteMessageStore({ location: "./posthorn.sqlite" });
+const queue = new SqliteDeliveryQueue({ location: "./posthorn.sqlite" });
+
+// One-time: mint a tenant and its API key (save the plaintext — shown once).
+const app = await apps.create({ name: "Acme" });
+const { secret } = await apps.createApiKey(app.id);
+
+createHttpServer({ apps, endpoints, messages, queue }).listen(3000);
+// (Run a DeliveryWorker against the same queue/store/endpoints to drain deliveries.)
+```
+
+```bash
+# Register a destination (the response includes the signing secret — once):
+curl -sX POST localhost:3000/v1/endpoints \
+  -H "authorization: Bearer $SECRET" -H 'content-type: application/json' \
+  -d '{"url":"https://acme.example/hook","eventTypes":["user.created"]}'
+
+# Send an event — it is accepted (202) and fanned out to every subscribed endpoint:
+curl -sX POST localhost:3000/v1/messages \
+  -H "authorization: Bearer $SECRET" -H 'content-type: application/json' \
+  -d '{"eventType":"user.created","payload":{"id":42}}'
+```
+
+| Method | Path                | Auth   | Purpose                                |
+| ------ | ------------------- | ------ | -------------------------------------- |
+| GET    | `/healthz`          | none   | Liveness probe.                        |
+| POST   | `/v1/messages`      | Bearer | Accept an event and fan it out (`202`).|
+| GET    | `/v1/endpoints`     | Bearer | List the tenant's endpoints.           |
+| POST   | `/v1/endpoints`     | Bearer | Create an endpoint (`201`, secret once).|
+| GET    | `/v1/endpoints/:id` | Bearer | Fetch one endpoint.                    |
+| PATCH  | `/v1/endpoints/:id` | Bearer | Update an endpoint.                    |
+| DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`).            |
 
 ## Development
 

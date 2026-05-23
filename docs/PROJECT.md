@@ -160,9 +160,30 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     HTTP API's auth middleware will call: `authenticate(presentedKey)` → `appId` → scope the existing
     endpoint/message/ingest operations. **Deferred within auth:** per-key `lastUsedAt` (kept off the
     hot read path as an observability add-on).
-  - **Deferred (next ticks):** the **Fastify HTTP API** (apps/endpoints/messages CRUD + ingest)
-    composing `AppStore.authenticate` for tenancy, contract tests, TS SDK, OpenAPI, and the
-    **transactional outbox** that makes ingest's accept-and-fan-out atomic.
+  - **HTTP API ✅ (this tick):** the layer that turns the engine into a *runnable service* —
+    `src/http/`. Built on Node's **built-in `node:http`** (revised from the long-deferred Fastify:
+    the builtin needs no `npm install`/network access in this sandbox and adds **zero runtime
+    dependencies**, the same reasoning that chose `node:sqlite`/`node:crypto` — and *strengthens* the
+    single-container, zero-dep wedge rather than compromising it with a framework). Mirrors the
+    delivery worker's pure-core/thin-I/O split: a **pure router** (`router.ts`, `matchRoute` →
+    matched/methodNotAllowed/notFound) + a **pure request→response handler** (`api.ts`,
+    `createApi(deps)`) composing `AppStore.authenticate` (Bearer auth), `EndpointStore` (CRUD), and
+    `ingest` (accept + fan-out), behind a thin `node:http` adapter (`server.ts`, `createHttpServer`)
+    that only reads the body (1 MiB cap → `413`), normalizes the request, and writes JSON. Surface:
+    unauthenticated `GET /healthz`; authenticated `POST /v1/messages` (`202`), `GET/POST /v1/endpoints`,
+    `GET/PATCH/DELETE /v1/endpoints/:id`. **Security decisions (not incidental):** tenancy is taken
+    from the authenticated key, never a request-body `appId` (no tenant forgery); cross-tenant access
+    is `404` not `403` (existence never revealed); an endpoint's signing secret is returned exactly
+    once on create and never echoed by list/get/update; app/key *provisioning* is deliberately **not**
+    an HTTP route (a privileged bootstrap with no key to authenticate it — it stays on the programmatic
+    `AppStore`; an admin/control-plane route is a later tick). Proven end-to-end on the compiled `dist`
+    over a real socket (auth → endpoint create → ingest → worker drains → the signed delivery
+    **verifies** against the endpoint secret), plus a pure in-process suite (router + handler + a
+    `node:http` integration test on an ephemeral port).
+  - **Deferred (next ticks):** the **TS SDK** + **OpenAPI** spec over this surface; an admin/
+    control-plane route for app/key provisioning; per-key `lastUsedAt`; and the **transactional
+    outbox** that makes ingest's accept-and-fan-out atomic (a crash between create and fan-out can
+    still strand deliveries — the one known correctness gap in the core path).
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.
 - **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
 

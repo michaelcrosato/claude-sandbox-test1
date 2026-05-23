@@ -169,3 +169,27 @@ export {
   SqliteAppStore,
   type SqliteAppStoreOptions,
 } from "./apps/sqlite-app-store.js";
+
+export {
+  createApi,
+  type ApiDeps,
+  type ApiRequest,
+  type ApiResponse,
+  type ApiHandler,
+} from "./http/api.js";
+
+export {
+  createHttpServer,
+  DEFAULT_MAX_BODY_BYTES,
+  type HttpServerOptions,
+} from "./http/server.js";
+
+export {
+  matchRoute,
+  defineRoutes,
+  toSegments,
+  type Route,
+  type RouteDef,
+  type RouteMatch,
+  type RouteParams,
+} from "./http/router.js";
