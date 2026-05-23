@@ -46,10 +46,11 @@ export interface GatewayAddress {
 
 /**
  * A wired, runnable Posthorn instance. The stores are exposed deliberately: minting
- * an app and an API key is a privileged bootstrap operation with no HTTP route (a
- * caller would need a key to authenticate the call that creates the first key), so
- * provisioning is done programmatically against {@link Gateway.apps} — by an admin
- * script, a seeding step, or a future control-plane route.
+ * an app and an API key is a privileged operation done either programmatically
+ * against {@link Gateway.apps} (an admin script or seeding step), via the keyless
+ * `posthorn admin` CLI on the host, or — when `POSTHORN_ADMIN_TOKEN` is configured —
+ * over the admin-token-gated `/v1/admin/*` control-plane routes for remote/hosted
+ * operation. There is deliberately no *tenant-key*-authenticated provisioning route.
  */
 export interface Gateway {
   /** Tenant + API-key store. Use this to provision the first app/key (no HTTP route). */
@@ -177,7 +178,17 @@ export function createGateway(config: GatewayConfig): Gateway {
   });
 
   const httpServer = createHttpServer(
-    { apps, endpoints, messages, queue, attempts, metrics },
+    {
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      metrics,
+      // Enable the admin/control-plane routes only when a token is configured; when
+      // null they stay disabled (every /v1/admin/* route is 404).
+      ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
+    },
     { maxBodyBytes: config.maxBodyBytes },
   );
 

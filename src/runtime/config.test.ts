@@ -5,6 +5,7 @@ import {
   DEFAULT_HOST,
   DEFAULT_PORT,
   MEMORY_DATA_DIR,
+  MIN_ADMIN_TOKEN_LENGTH,
   loadConfig,
   type Env,
 } from "./config.js";
@@ -30,6 +31,7 @@ describe("loadConfig", () => {
       port: DEFAULT_PORT,
       dataDir: DEFAULT_DATA_DIR,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+      adminToken: null,
       worker: {
         batchSize: DEFAULT_WORKER_BATCH_SIZE,
         concurrency: DEFAULT_WORKER_CONCURRENCY,
@@ -160,5 +162,25 @@ describe("loadConfig", () => {
   it("names the offending key in the error message", () => {
     const env: Env = { POSTHORN_WORKER_BATCH_SIZE: "nope" };
     expect(() => loadConfig(env)).toThrow(/POSTHORN_WORKER_BATCH_SIZE must be an integer/);
+  });
+
+  describe("POSTHORN_ADMIN_TOKEN", () => {
+    it("defaults to null (admin API disabled) when unset or blank", () => {
+      expect(loadConfig({}).adminToken).toBeNull();
+      expect(loadConfig({ POSTHORN_ADMIN_TOKEN: "   " }).adminToken).toBeNull();
+    });
+
+    it("accepts and trims a sufficiently long token", () => {
+      const token = "x".repeat(MIN_ADMIN_TOKEN_LENGTH);
+      expect(loadConfig({ POSTHORN_ADMIN_TOKEN: `  ${token}  ` }).adminToken).toBe(token);
+    });
+
+    it("rejects a token shorter than the minimum length", () => {
+      const tooShort = "x".repeat(MIN_ADMIN_TOKEN_LENGTH - 1);
+      expect(() => loadConfig({ POSTHORN_ADMIN_TOKEN: tooShort })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_ADMIN_TOKEN: tooShort })).toThrow(
+        /POSTHORN_ADMIN_TOKEN must be at least/,
+      );
+    });
   });
 });

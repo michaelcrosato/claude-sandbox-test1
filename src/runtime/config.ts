@@ -86,6 +86,16 @@ export interface GatewayConfig {
   readonly dataDir: string;
   /** Request-body cap, in bytes (`413` beyond it). */
   readonly maxBodyBytes: number;
+  /**
+   * Bootstrap token for the admin/control-plane HTTP API (`/v1/admin/*`), or
+   * `null` to leave that API **disabled** (the default — `POSTHORN_ADMIN_TOKEN`
+   * unset). While disabled the admin routes return `404`, indistinguishable from a
+   * nonexistent path, so remote provisioning is an explicit opt-in and the default
+   * attack surface is unchanged. When set, the token must be at least
+   * {@link MIN_ADMIN_TOKEN_LENGTH} characters — a trivially weak root credential is
+   * rejected at boot rather than left as an open door.
+   */
+  readonly adminToken: string | null;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -145,6 +155,38 @@ function readString(env: Env, key: string, fallback: string): string {
 }
 
 /**
+ * Minimum length of `POSTHORN_ADMIN_TOKEN` when the admin API is enabled. The token
+ * is a root credential that provisions tenants and API keys, so a trivially short
+ * one is rejected at boot (fail fast) rather than silently accepted. 16 characters
+ * is a floor, not a recommendation — operators should use a long random value
+ * (e.g. `openssl rand -hex 32`).
+ */
+export const MIN_ADMIN_TOKEN_LENGTH = 16;
+
+/**
+ * Read the optional admin-API bootstrap token. Unset or blank yields `null` (the
+ * admin API stays disabled — every `/v1/admin/*` route is `404`). A present token
+ * is trimmed and must be at least {@link MIN_ADMIN_TOKEN_LENGTH} characters, else
+ * a {@link ConfigError} is thrown so a weak credential never reaches production.
+ */
+function readAdminToken(env: Env): string | null {
+  const raw = env["POSTHORN_ADMIN_TOKEN"];
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  if (trimmed.length < MIN_ADMIN_TOKEN_LENGTH) {
+    throw new ConfigError(
+      `POSTHORN_ADMIN_TOKEN must be at least ${MIN_ADMIN_TOKEN_LENGTH} characters when set`,
+    );
+  }
+  return trimmed;
+}
+
+/**
  * Build a validated {@link GatewayConfig} from an environment record. Pure: it
  * never reads `process.env` directly (the caller passes it) and performs no I/O,
  * so every branch is unit-testable. Throws {@link ConfigError} on the first
@@ -152,6 +194,7 @@ function readString(env: Env, key: string, fallback: string): string {
  *
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
+ * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_CONCURRENCY`,
  * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
@@ -169,6 +212,7 @@ export function loadConfig(env: Env): GatewayConfig {
     maxBodyBytes: readInt(env, "POSTHORN_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, {
       min: 1,
     }),
+    adminToken: readAdminToken(env),
     worker: Object.freeze<WorkerConfig>({
       batchSize: readInt(env, "POSTHORN_WORKER_BATCH_SIZE", DEFAULT_WORKER_BATCH_SIZE, {
         min: 1,

@@ -4,6 +4,73 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 24: P3/P5 — admin / control-plane HTTP provisioning API (opt-in, token-gated)
+
+**Repo truth at start:** clean main @ `cbae83c` (iter 23, zero-downtime secret rotation) — a real clean
+baseline, not an interrupted tick (git clean; iter-23 entry present + matches head). Baseline re-verified
+by the manual gate (`[[validation-gate-is-manual]]`): `tsc --noEmit` clean, vitest **623/623**, `npm run
+build` clean, integrity + local gate exit 0. Node 24.15.
+
+**High-leverage move chosen (checklist #3):** Build the **admin / control-plane HTTP provisioning API** —
+the item listed *first* in every recent tick's "standing deferred" list and the **keystone for P5 (the
+hosted control plane = monetization)**, which is exactly the GOAL's profit filter. The decisive
+observation: a deployed gateway could only be provisioned by the `posthorn admin` CLI **on the host
+shell** (or programmatic `AppStore`); a remote/hosted operator had **no network path** to mint the first
+tenant/key, leaving the whole authenticated API unreachable without shell access. The sending core is
+mature and exhaustively tested, so the marginal value of more delivery polish is low; opening the
+monetization phase is high. It is also a clean, deterministic, zero-dep vertical slice that follows the
+established HTTP-API pattern exactly (compile-checked route table + bidirectional OpenAPI drift test force
+completeness), and it **respects the project's security stance** — the earlier ticks rightly refused an
+*open* provisioning endpoint; an *authenticated, opt-in* one is the legitimate control plane.
+
+**Built this tick (a full vertical slice):**
+- **`runtime/config.ts`** — `GatewayConfig.adminToken: string | null` from `POSTHORN_ADMIN_TOKEN`
+  (`readAdminToken`: unset/blank → `null` = disabled; present → trimmed, validated to
+  `MIN_ADMIN_TOKEN_LENGTH = 16` chars else `ConfigError` at boot — a weak root credential never reaches
+  prod).
+- **`http/api.ts`** — `ApiDeps.adminToken?`; a constant-time `constantTimeEqual` (both sides SHA-256'd so
+  neither length nor content leaks via timing); an `adminAuthed` wrapper (no token configured → **404**,
+  indistinguishable from a nonexistent path, so a disabled instance never reveals the surface; bad/missing
+  token → **401**); `appView`/`apiKeyView` (no secret material); 7 handlers — `POST/GET /v1/admin/apps`,
+  `GET/DELETE /v1/admin/apps/:id`, `POST/GET /v1/admin/apps/:id/keys`, `DELETE /v1/admin/keys/:id` (a
+  superset of the CLI); `UnknownAppError → 404` added to the error map; all 7 keys added to
+  `API_ROUTE_KEYS` (the `Record<ApiRouteKey, RouteHandler>` made the handler wiring exhaustive at compile
+  time). A minted key's secret is revealed once (like endpoint create); key listings are metadata-only;
+  delete-app cascades keys.
+- **`http/openapi.ts`** — an `adminAuth` security scheme + an `Admin` tag + the 7 operations (each
+  overriding the global bearer with `security: [{ adminAuth: [] }]`) + `App`/`NewApp`/`AppList`/`ApiKey`/
+  `ApiKeyList`/`CreatedApiKey` schemas; `info.description` corrected. The bidirectional drift test +
+  orphan-schema test *forced* every operation and schema to exist.
+- **`runtime/gateway.ts`** — passes `config.adminToken` into the HTTP deps (conditional spread; `null` →
+  routes stay disabled); `Gateway.apps` docstring updated. **`index.ts`** re-exports
+  `MIN_ADMIN_TOKEN_LENGTH`. Stale "provisioning is not an HTTP route" claims in `api.ts`/`gateway.ts`/
+  `openapi.ts`/PROJECT.md corrected to the new opt-in reality.
+
+**Force Absolute Validation (manual gate):** `tsc --noEmit` clean (strict). vitest **641/641** (was 623;
+**+18**: an admin handler suite — disabled→404 across all 7 routes, missing/wrong/**tenant-key**→401, full
+CRUD, **a minted key authenticates a tenant route**, revoke-then-401, delete-cascades-then-401, 400 on bad
+name, 404s; 3 config parse/validate cases; an OpenAPI `adminAuth`/all-7-ops-gated assertion; and 2
+running-gateway e2es — disabled→404 + provision→mint→deliver+verify→revoke→401). `npm run build` clean.
+Integrity gate exit 0 (three hash-protected files untouched); local gate exit 0. No tinypool flake this run.
+
+**Beyond the gate — compiled-`dist` smoke (production-ESM proof):** booted the **built** gateway against a
+**file-backed** data dir (real `node:sqlite` `createRequire` path) with `POSTHORN_ADMIN_TOKEN` set;
+provisioned a tenant + minted a key **entirely over the admin HTTP API**, used that key to create an
+endpoint and send a message whose delivered webhook **verified** against the endpoint secret, confirmed
+list-keys is metadata-only, revoked the key over HTTP (→ tenant route 401), then **reopened on the same
+files** and saw the HTTP-provisioned tenant persist. Exit 0; temp script + dir removed; git shows only the
+9 intended source files.
+
+**State:** GREEN → committing to main as Iteration 24. Net: a deployed Posthorn can now be provisioned
+**remotely over HTTP** behind an opt-in, constant-time-checked admin token — the control-plane seam P5's
+hosted dashboard/billing will drive — without weakening the default posture (admin routes are `404` until
+the token is set) or the refusal to ship an *open* provisioning door. **Standing deferred (next
+candidates):** an *admin* SDK client (`PosthornAdminClient`); per-key `lastUsedAt`; attempt-log
+pagination/retention; an operator deploy/monitoring guide (last P4 doc item); and the rest of P5 (usage
+metering, billing, dashboard).
+
+---
+
 ## 2026-05-23 — Iteration 23: P3 — zero-downtime endpoint secret rotation
 
 **Repo truth at start:** clean main @ `de12c10` (iter 22, bounded concurrency) — a real clean baseline,

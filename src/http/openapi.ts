@@ -99,11 +99,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
       summary: "Reliable, signed, observable webhook delivery.",
       description:
         "Posthorn is open-core, Standard Webhooks-compliant webhook delivery " +
-        "infrastructure: a single container with no Redis. This is the tenant-facing " +
-        "v1 API. Every authenticated route is scoped to the API key's owning tenant — " +
-        "an `appId` is never read from a request body — and cross-tenant access returns " +
-        "`404` (existence is never revealed). App and API-key provisioning is a privileged " +
-        "bootstrap operation done out of band (the `posthorn admin` CLI), not an HTTP route.",
+        "infrastructure: a single container with no Redis. The tenant-facing v1 routes " +
+        "are scoped to the API key's owning tenant — an `appId` is never read from a " +
+        "request body — and cross-tenant access returns `404` (existence is never " +
+        "revealed). App and API-key provisioning is a privileged control-plane operation " +
+        "on the separate `/v1/admin/*` routes, authenticated by an out-of-band operator " +
+        "admin token (`POSTHORN_ADMIN_TOKEN`) and **disabled by default** (those routes " +
+        "are `404` unless the token is configured); the `posthorn admin` CLI is the " +
+        "equivalent keyless local-shell path.",
       license: { name: "MIT", identifier: "MIT" },
     },
     servers: [
@@ -115,6 +118,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
     tags: [
       { name: "Messages", description: "Send messages and observe their delivery." },
       { name: "Endpoints", description: "Manage the destinations messages fan out to." },
+      {
+        name: "Admin",
+        description:
+          "Control-plane provisioning of tenants (apps) and API keys. Authenticated by " +
+          "the operator admin token, not a tenant key; disabled (every route `404`) unless " +
+          "`POSTHORN_ADMIN_TOKEN` is set.",
+      },
       { name: "Operational", description: "Liveness, metrics, and this document." },
     ],
     security: [{ bearerAuth: [] }],
@@ -375,6 +385,121 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/admin/apps": {
+        post: {
+          operationId: "createApp",
+          tags: ["Admin"],
+          summary: "Create a tenant (app)",
+          description:
+            "Provision a new tenant. The optional body may set a human-readable `name`. " +
+            "Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: ref("NewApp") } },
+          },
+          responses: {
+            "201": jsonResponse("The created tenant.", ref("App")),
+            "400": errorResponse("Malformed request body."),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("The admin API is not enabled on this instance."),
+          },
+        },
+        get: {
+          operationId: "listApps",
+          tags: ["Admin"],
+          summary: "List tenants",
+          description: "List all tenants (apps), oldest first. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          responses: {
+            "200": jsonResponse("All tenants.", ref("AppList")),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("The admin API is not enabled on this instance."),
+          },
+        },
+      },
+      "/v1/admin/apps/{id}": {
+        get: {
+          operationId: "getApp",
+          tags: ["Admin"],
+          summary: "Get a tenant",
+          description: "Fetch one tenant by id. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          responses: {
+            "200": jsonResponse("The tenant.", ref("App")),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+        delete: {
+          operationId: "deleteApp",
+          tags: ["Admin"],
+          summary: "Delete a tenant",
+          description:
+            "Delete a tenant and **cascade-delete its API keys**. (Its endpoints and messages " +
+            "live in independent stores and are not reaped here.) Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          responses: {
+            "204": { description: "Deleted; no content." },
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+      },
+      "/v1/admin/apps/{id}/keys": {
+        post: {
+          operationId: "createApiKey",
+          tags: ["Admin"],
+          summary: "Mint an API key",
+          description:
+            "Mint a new API key for a tenant. The plaintext `secret` is returned **exactly " +
+            "once** in this response — the store keeps only its hash — so persist it now; it is " +
+            "never recoverable. Authenticate tenant requests with it as " +
+            "`Authorization: Bearer <secret>`. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          responses: {
+            "201": jsonResponse("The new key's metadata plus its one-time secret.", ref("CreatedApiKey")),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+        get: {
+          operationId: "listApiKeys",
+          tags: ["Admin"],
+          summary: "List a tenant's API keys",
+          description:
+            "List a tenant's API keys — metadata only (id, prefix, timestamps, revocation); the " +
+            "secret is never echoed. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The app id.")],
+          responses: {
+            "200": jsonResponse("The tenant's API keys.", ref("ApiKeyList")),
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse("No such app (or the admin API is not enabled)."),
+          },
+        },
+      },
+      "/v1/admin/keys/{id}": {
+        delete: {
+          operationId: "revokeApiKey",
+          tags: ["Admin"],
+          summary: "Revoke an API key",
+          description:
+            "Revoke an API key by id. A revoked key never authenticates again. Requires the admin token.",
+          security: [{ adminAuth: [] }],
+          parameters: [idParam("The API key id.")],
+          responses: {
+            "204": { description: "Revoked; no content." },
+            "401": errorResponse("Missing or invalid admin token."),
+            "404": errorResponse(
+              "No live key with that id (unknown or already revoked), or the admin API is not enabled.",
+            ),
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -383,7 +508,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
           scheme: "bearer",
           description:
             "A Posthorn API key presented as a Bearer token: `Authorization: Bearer <key>`. " +
-            "Mint one with the `posthorn admin create-key` CLI.",
+            "Mint one with the `posthorn admin create-key` CLI or `POST /v1/admin/apps/{id}/keys`.",
+        },
+        adminAuth: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "The operator admin token presented as a Bearer token: `Authorization: Bearer " +
+            "<POSTHORN_ADMIN_TOKEN>`. Authorizes the control-plane (`/v1/admin/*`) routes only. " +
+            "A distinct credential from a tenant API key; the admin API is disabled (every " +
+            "route `404`) unless the token is configured.",
         },
       },
       schemas: {
@@ -670,6 +804,67 @@ export function buildOpenApiDocument(): OpenApiDocument {
             id: { type: "string" },
             retried: { type: "integer", minimum: 0, description: "How many dead-lettered deliveries were revived." },
             deliveries: { type: "array", items: ref("Delivery") },
+          },
+        },
+        App: {
+          type: "object",
+          description: "A tenant. The unit a single instance serves, owns endpoints/messages, and (in the hosted plane) is metered/billed.",
+          required: ["id", "name", "createdAt", "updatedAt"],
+          properties: {
+            id: { type: "string", examples: ["app_2Yx9..."], description: "The `appId` endpoints and messages reference." },
+            name: { type: "string", description: "Human-readable label; empty string when none." },
+            createdAt: epochMs("Creation time, epoch ms."),
+            updatedAt: epochMs("Last mutation time, epoch ms."),
+          },
+        },
+        NewApp: {
+          type: "object",
+          description: "The (optional) body of `POST /v1/admin/apps`. Omit it entirely to create an unnamed tenant.",
+          properties: {
+            name: { type: "string", description: "Optional human-readable label." },
+          },
+        },
+        AppList: {
+          type: "object",
+          required: ["data"],
+          properties: { data: { type: "array", items: ref("App") } },
+        },
+        ApiKey: {
+          type: "object",
+          description: "An API key's non-secret metadata. The secret is never included (the store keeps only its hash).",
+          required: ["id", "appId", "prefix", "createdAt", "revokedAt"],
+          properties: {
+            id: { type: "string", examples: ["ak_5Qm2..."], description: "Used to revoke the key." },
+            appId: { type: "string", description: "The tenant this key authenticates as." },
+            prefix: {
+              type: "string",
+              examples: ["phk_a1b2c3d4"],
+              description: "A non-secret display fragment of the secret, so a key is recognisable in a list.",
+            },
+            createdAt: epochMs("Creation time, epoch ms."),
+            revokedAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description: "When the key was revoked (epoch ms), or null while it is still live.",
+            },
+          },
+        },
+        ApiKeyList: {
+          type: "object",
+          required: ["data"],
+          properties: { data: { type: "array", items: ref("ApiKey") } },
+        },
+        CreatedApiKey: {
+          type: "object",
+          description: "A freshly minted key: its metadata plus the one-time plaintext secret (shown only here).",
+          required: ["apiKey", "secret"],
+          properties: {
+            apiKey: ref("ApiKey"),
+            secret: {
+              type: "string",
+              examples: ["phk_..."],
+              description: "The plaintext key secret. Returned once, never recoverable — store it now.",
+            },
           },
         },
       },

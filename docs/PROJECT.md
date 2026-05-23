@@ -183,9 +183,9 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     `GET/PATCH/DELETE /v1/endpoints/:id`. **Security decisions (not incidental):** tenancy is taken
     from the authenticated key, never a request-body `appId` (no tenant forgery); cross-tenant access
     is `404` not `403` (existence never revealed); an endpoint's signing secret is returned exactly
-    once on create and never echoed by list/get/update; app/key *provisioning* is deliberately **not**
-    an HTTP route (a privileged bootstrap with no key to authenticate it — it stays on the programmatic
-    `AppStore`; an admin/control-plane route is a later tick). Proven end-to-end on the compiled `dist`
+    once on create and never echoed by list/get/update; app/key *provisioning* is **not** a
+    *tenant*-key route (a tenant cannot mint credentials) — it lives on the separate, admin-token-gated
+    `/v1/admin/*` control-plane surface, added in a later tick. Proven end-to-end on the compiled `dist`
     over a real socket (auth → endpoint create → ingest → worker drains → the signed delivery
     **verifies** against the endpoint secret), plus a pure in-process suite (router + handler + a
     `node:http` integration test on an ephemeral port).
@@ -402,9 +402,34 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     migration), worker multi-sign tests, pure handler + SDK tests, and a **running-gateway +
     compiled-`dist`** end-to-end where one delivered webhook **verifies against both the old and the
     new secret** and the rotation survives a restart on the real `node:sqlite` file path.
-  - **Deferred (next ticks):** an admin/control-plane *HTTP* route for app/key provisioning (the CLI
-    now covers local bootstrap); per-key `lastUsedAt`; and pagination/retention for the attempt log once
-    a single message's attempt count can grow large (today it is bounded by endpoints × the retry budget).
+  - **Admin / control-plane HTTP API ✅ (this tick):** the keystone for **remote/hosted operation and
+    P5** — provisioning over HTTP, not just the host shell. Until now the only way to mint the first
+    app/key against a deployed gateway was the `posthorn admin` CLI on the box (or programmatic
+    `AppStore`); a remote/hosted operator had no network path to create a tenant, so the entire
+    authenticated API was unreachable without shell access. This adds a **separate, admin-token-gated**
+    surface under `/v1/admin/*` (`src/http/api.ts`): create/list/get/delete tenants (`POST/GET
+    /v1/admin/apps`, `GET/DELETE /v1/admin/apps/:id`) and mint/list/revoke keys (`POST/GET
+    /v1/admin/apps/:id/keys`, `DELETE /v1/admin/keys/:id`) — a superset of the CLI. **Security (decided,
+    not incidental):** it is **disabled by default** — every admin route is `404`, indistinguishable from
+    a nonexistent path, unless `POSTHORN_ADMIN_TOKEN` is set, so the default attack surface is unchanged
+    and a disabled instance never reveals the surface exists. The token is a **distinct credential** from a
+    tenant API key (a tenant key never satisfies an admin route, nor vice versa), compared in **constant
+    time** (both sides SHA-256'd, so neither length nor content leaks via timing) and validated at boot to
+    a minimum length (`MIN_ADMIN_TOKEN_LENGTH`; a weak token → `ConfigError`, fail-fast). A minted key's
+    secret is revealed exactly once (like endpoint create); key listings are metadata-only; deleting a
+    tenant cascades its keys. This is the legitimate **authenticated, opt-in** control plane — not the
+    "open provisioning endpoint" earlier ticks rightly refused. Faithful to the compile-checked route table
+    + bidirectional OpenAPI drift test (the 7 ops + `App`/`NewApp`/`AppList`/`ApiKey`/`ApiKeyList`/
+    `CreatedApiKey` schemas + an `adminAuth` security scheme were *forced* by the drift/orphan-schema tests).
+    Proven by a pure handler suite (disabled→404; missing/wrong/tenant-key token→401; full CRUD; **a minted
+    key authenticates a tenant route, revoke denies, delete cascades**), config parse/validate tests, a
+    running-gateway e2e (provision → mint → deliver+**verify** → revoke→401), and a **compiled-`dist`** smoke
+    (provision-over-HTTP on the real `node:sqlite` file path; delivery verifies through production ESM; the
+    tenant persists across a restart). The keyless CLI remains the local-shell bootstrap path; an *admin*
+    SDK client is deferred (the OpenAPI doc already covers cross-language admin consumers).
+  - **Deferred (next ticks):** an *admin* SDK client (`PosthornAdminClient`); per-key `lastUsedAt`; and
+    pagination/retention for the attempt log once a single message's attempt count can grow large (today it
+    is bounded by endpoints × the retry budget).
 - **P4 — Self-host packaging:** config ✅ (env-driven `loadConfig`) + a runnable single-process
   entrypoint ✅ (`posthorn` bin / `npm start`) + a `/healthz` liveness probe ✅ + an **admin
   provisioning CLI** ✅ (`posthorn admin …`, see P3) + a **single-container `Dockerfile`** ✅ + a
@@ -455,7 +480,10 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     real-socket raw-text test, a running-gateway end-to-end (deliver → scrape → counters reflect it),
     and a **compiled-`dist` smoke** through production ESM (incl. the `version.js`/`node:sqlite`
     `createRequire` paths). Remaining in P4: operator docs (a deploy/monitoring guide).
-- **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization).
+- **P5 — Hosted control plane:** multi-tenant, usage metering, billing, dashboard (monetization). Its
+  **foundation now exists** — the admin-token-gated `/v1/admin/*` provisioning API (see P3) is the
+  control-plane seam a hosted dashboard/billing layer drives tenants and keys through. Remaining:
+  usage metering, billing integration, and the dashboard UI.
 
 ## 5. Out of scope / non-goals
 

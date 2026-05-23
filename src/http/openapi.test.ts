@@ -100,6 +100,20 @@ describe("buildOpenApiDocument — structure", () => {
     }
   });
 
+  it("gates every admin route with the `adminAuth` scheme (never the tenant bearer)", () => {
+    const doc = buildOpenApiDocument();
+    const adminScheme = doc.components.securitySchemes["adminAuth"] as Record<string, unknown>;
+    expect(adminScheme.type).toBe("http");
+    expect(adminScheme.scheme).toBe("bearer");
+    const adminOps = eachOperation(doc).filter(({ key }) => key.includes(" /v1/admin/"));
+    // All seven control-plane operations are documented…
+    expect(adminOps.length).toBe(7);
+    // …and each requires adminAuth (not the global bearerAuth, and not `security: []`).
+    for (const { key, op } of adminOps) {
+      expect(op.security, `${key} security`).toEqual([{ adminAuth: [] }]);
+    }
+  });
+
   it("marks exactly the three unauthenticated routes with `security: []`", () => {
     const doc = buildOpenApiDocument();
     const open = new Set<string>();

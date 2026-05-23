@@ -1268,3 +1268,265 @@ describe("createApi — GET /metrics", () => {
     expect(body(res).error.code).toBe("not_found");
   });
 });
+
+describe("createApi — admin / control-plane API", () => {
+  const ADMIN_TOKEN = "test-admin-token-1234567890";
+
+  interface AdminFixture {
+    readonly apps: InMemoryAppStore;
+    readonly api: ApiHandler;
+  }
+
+  /**
+   * Build an API with the admin surface enabled, or disabled by passing `null`
+   * (a `null` sentinel, not `undefined` — `undefined` would trigger the default).
+   */
+  function setupAdmin(adminToken: string | null = ADMIN_TOKEN): AdminFixture {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      ...(adminToken !== null ? { adminToken } : {}),
+    });
+    return { apps, api };
+  }
+
+  /** An admin request (Bearer = the admin token), with an optional JSON body. */
+  function adminRequest(
+    method: string,
+    path: string,
+    opts: { token?: string; body?: unknown } = {},
+  ): ApiRequest {
+    const headers: Record<string, string> = {};
+    if (opts.token !== undefined) headers["authorization"] = `Bearer ${opts.token}`;
+    if (opts.body !== undefined) headers["content-type"] = "application/json";
+    return request({
+      method,
+      path,
+      headers,
+      rawBody: opts.body !== undefined ? JSON.stringify(opts.body) : "",
+    });
+  }
+
+  /** Provision an app via the admin API and return its id. */
+  async function createAppViaAdmin(api: ApiHandler, name?: string): Promise<string> {
+    const res = await api(
+      adminRequest("POST", "/v1/admin/apps", {
+        token: ADMIN_TOKEN,
+        ...(name !== undefined ? { body: { name } } : {}),
+      }),
+    );
+    expect(res.status).toBe(201);
+    return body(res).id as string;
+  }
+
+  /** A tenant-key GET /v1/endpoints, the cheapest proof a key authenticates. */
+  function tenantProbe(api: ApiHandler, secret: string): Promise<ApiResponse> {
+    return api(
+      request({
+        method: "GET",
+        path: "/v1/endpoints",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+  }
+
+  describe("disabled by default", () => {
+    it("returns 404 (not 401) for every admin route when no admin token is configured", async () => {
+      const { api } = setupAdmin(null);
+      const probes: [string, string][] = [
+        ["POST", "/v1/admin/apps"],
+        ["GET", "/v1/admin/apps"],
+        ["GET", "/v1/admin/apps/app_x"],
+        ["DELETE", "/v1/admin/apps/app_x"],
+        ["POST", "/v1/admin/apps/app_x/keys"],
+        ["GET", "/v1/admin/apps/app_x/keys"],
+        ["DELETE", "/v1/admin/keys/ak_x"],
+      ];
+      for (const [method, path] of probes) {
+        // Presenting a token must NOT reveal the surface exists on a disabled instance.
+        const res = await api(adminRequest(method, path, { token: ADMIN_TOKEN }));
+        expect(res.status, `${method} ${path}`).toBe(404);
+        expect(body(res).error.code, `${method} ${path}`).toBe("not_found");
+      }
+    });
+  });
+
+  describe("admin-token authentication", () => {
+    it("rejects a missing token with 401 + WWW-Authenticate", async () => {
+      const { api } = setupAdmin();
+      const res = await api(adminRequest("GET", "/v1/admin/apps"));
+      expect(res.status).toBe(401);
+      expect(body(res).error.code).toBe("unauthorized");
+      expect(res.headers?.["www-authenticate"]).toBe("Bearer");
+    });
+
+    it("rejects a wrong token with 401", async () => {
+      const { api } = setupAdmin();
+      const res = await api(
+        adminRequest("GET", "/v1/admin/apps", { token: "wrong-but-long-enough-xxxx" }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("does not accept a tenant API key as the admin token", async () => {
+      const { api, apps } = setupAdmin();
+      const app = await apps.create({ name: "Acme" });
+      const { secret: tenantKey } = await apps.createApiKey(app.id);
+      const res = await api(adminRequest("GET", "/v1/admin/apps", { token: tenantKey }));
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe("provisioning (authenticated)", () => {
+    it("creates an app (named and unnamed), lists, and fetches it without leaking secrets", async () => {
+      const { api } = setupAdmin();
+
+      const appId = await createAppViaAdmin(api, "Acme");
+      expect(appId).toMatch(/^app_/);
+
+      // No body → unnamed app.
+      const unnamed = await api(adminRequest("POST", "/v1/admin/apps", { token: ADMIN_TOKEN }));
+      expect(unnamed.status).toBe(201);
+      expect(body(unnamed).name).toBe("");
+
+      const list = await api(adminRequest("GET", "/v1/admin/apps", { token: ADMIN_TOKEN }));
+      expect(list.status).toBe(200);
+      expect((body(list).data as unknown[]).length).toBe(2);
+
+      const got = await api(adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }));
+      expect(got.status).toBe(200);
+      // The view is exactly identity + label + timestamps — no secret material.
+      expect(body(got)).toEqual({
+        id: appId,
+        name: "Acme",
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+      });
+    });
+
+    it("400s a non-string app name", async () => {
+      const { api } = setupAdmin();
+      const res = await api(
+        adminRequest("POST", "/v1/admin/apps", { token: ADMIN_TOKEN, body: { name: 123 } }),
+      );
+      expect(res.status).toBe(400);
+      expect(body(res).error.code).toBe("invalid_request");
+    });
+
+    it("404s fetching an unknown app", async () => {
+      const { api } = setupAdmin();
+      const res = await api(adminRequest("GET", "/v1/admin/apps/app_nope", { token: ADMIN_TOKEN }));
+      expect(res.status).toBe(404);
+    });
+
+    it("mints a key whose secret is shown once and then authenticates a tenant route", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api, "Acme");
+
+      const minted = await api(
+        adminRequest("POST", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN }),
+      );
+      expect(minted.status).toBe(201);
+      const secret = body(minted).secret as string;
+      expect(secret).toMatch(/^phk_/);
+      expect(body(minted).apiKey.appId).toBe(appId);
+      // The metadata view never carries the secret itself.
+      expect(body(minted).apiKey.secret).toBeUndefined();
+
+      // The minted secret is a working tenant credential, end-to-end.
+      const probe = await tenantProbe(api, secret);
+      expect(probe.status).toBe(200);
+      expect(body(probe).data).toEqual([]);
+    });
+
+    it("lists keys (empty vs populated, metadata-only) and 404s an unknown app", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api);
+
+      const empty = await api(
+        adminRequest("GET", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN }),
+      );
+      expect(empty.status).toBe(200);
+      expect(body(empty).data).toEqual([]);
+
+      await api(adminRequest("POST", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN }));
+      const populated = await api(
+        adminRequest("GET", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN }),
+      );
+      expect((body(populated).data as unknown[]).length).toBe(1);
+      expect(body(populated).data[0].secret).toBeUndefined();
+      expect(body(populated).data[0].prefix).toMatch(/^phk_/);
+
+      const unknown = await api(
+        adminRequest("GET", "/v1/admin/apps/app_nope/keys", { token: ADMIN_TOKEN }),
+      );
+      expect(unknown.status).toBe(404);
+    });
+
+    it("404s minting a key for an unknown app", async () => {
+      const { api } = setupAdmin();
+      const res = await api(
+        adminRequest("POST", "/v1/admin/apps/app_nope/keys", { token: ADMIN_TOKEN }),
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("revokes a key (204); afterwards it no longer authenticates, and re-revoke is 404", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api);
+      const minted = await api(
+        adminRequest("POST", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN }),
+      );
+      const secret = body(minted).secret as string;
+      const keyId = body(minted).apiKey.id as string;
+
+      expect((await tenantProbe(api, secret)).status).toBe(200);
+
+      const revoked = await api(
+        adminRequest("DELETE", `/v1/admin/keys/${keyId}`, { token: ADMIN_TOKEN }),
+      );
+      expect(revoked.status).toBe(204);
+
+      expect((await tenantProbe(api, secret)).status).toBe(401);
+
+      // Re-revoking (or an unknown id) is 404.
+      expect(
+        (await api(adminRequest("DELETE", `/v1/admin/keys/${keyId}`, { token: ADMIN_TOKEN }))).status,
+      ).toBe(404);
+      expect(
+        (await api(adminRequest("DELETE", "/v1/admin/keys/ak_nope", { token: ADMIN_TOKEN }))).status,
+      ).toBe(404);
+    });
+
+    it("deletes an app (204) and cascades its keys (the key stops authenticating)", async () => {
+      const { api } = setupAdmin();
+      const appId = await createAppViaAdmin(api);
+      const secret = body(
+        await api(adminRequest("POST", `/v1/admin/apps/${appId}/keys`, { token: ADMIN_TOKEN })),
+      ).secret as string;
+
+      const del = await api(adminRequest("DELETE", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }));
+      expect(del.status).toBe(204);
+
+      // The app is gone…
+      expect(
+        (await api(adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }))).status,
+      ).toBe(404);
+      // …and its key was cascade-removed, so it no longer authenticates.
+      expect((await tenantProbe(api, secret)).status).toBe(401);
+
+      // Deleting again is 404.
+      expect(
+        (await api(adminRequest("DELETE", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }))).status,
+      ).toBe(404);
+    });
+  });
+});

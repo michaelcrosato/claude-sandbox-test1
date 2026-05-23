@@ -261,6 +261,7 @@ export {
   DEFAULT_PORT,
   DEFAULT_DATA_DIR,
   MEMORY_DATA_DIR,
+  MIN_ADMIN_TOKEN_LENGTH,
   type GatewayConfig,
   type WorkerConfig,
   type FanoutConfig,

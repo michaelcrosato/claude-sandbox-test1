@@ -28,6 +28,16 @@
  * | PATCH  | /v1/endpoints/:id    | Bearer | Update an endpoint (tenant-scoped).      |
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
  * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
+ * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
+ * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
+ * | GET    | /v1/admin/apps/:id   | Admin  | Fetch one tenant.                        |
+ * | DELETE | /v1/admin/apps/:id   | Admin  | Delete a tenant (204; cascades its keys).|
+ * | POST   | /v1/admin/apps/:id/keys | Admin | Mint an API key (201, secret once).     |
+ * | GET    | /v1/admin/apps/:id/keys | Admin | List a tenant's keys (metadata only).   |
+ * | DELETE | /v1/admin/keys/:id   | Admin  | Revoke an API key (204).                 |
+ *
+ * `Bearer` = a tenant API key; `Admin` = the operator admin token
+ * (`POSTHORN_ADMIN_TOKEN`). The admin group is `404` unless that token is set.
  *
  * ## Security model (decided, not incidental)
  *
@@ -43,11 +53,16 @@
  *   it is never echoed by list/get/update. The retired secrets kept active during a
  *   rotation overlap are never exposed at all. The receiver-side secret should not
  *   be sprayed across every read.
- * - **App/key provisioning is intentionally not an HTTP route.** Minting a tenant
- *   or an API key is a privileged, bootstrap operation; exposing it unauthenticated
- *   would be an open door, and there is no key yet to authenticate it. It stays on
- *   the programmatic {@link AppStore} (an admin CLI / control-plane route is a
- *   later tick). This API is the *tenant-facing* surface only.
+ * - **App/key provisioning is gated, not absent.** Minting a tenant or an API key
+ *   is privileged: it is never reachable with a tenant key, and the tenant-facing
+ *   routes never create credentials. It lives on a separate **admin/control-plane
+ *   surface** (`/v1/admin/*`) authenticated by an out-of-band operator **admin
+ *   token** ({@link ApiDeps.adminToken} / `POSTHORN_ADMIN_TOKEN`). That surface is
+ *   **disabled by default** — every admin route is `404` unless the token is
+ *   configured — so the door is opt-in, never open, and a disabled instance never
+ *   reveals the surface exists. The keyless `posthorn admin` CLI remains the
+ *   local-shell bootstrap path (no network credential required); this HTTP surface
+ *   is the path for remote/hosted operation and the seam the P5 control plane builds on.
  */
 
 import {
@@ -72,7 +87,14 @@ import type {
   DeliveryAttempt,
   DeliveryAttemptStore,
 } from "../attempts/delivery-attempt.js";
-import type { App, AppStore } from "../apps/app.js";
+import {
+  UnknownAppError,
+  type ApiKey,
+  type App,
+  type AppStore,
+  type NewApp,
+} from "../apps/app.js";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { ingest } from "../fanout/fanout.js";
 import {
   PROMETHEUS_CONTENT_TYPE,
@@ -106,6 +128,16 @@ export interface ApiDeps {
    * `GET /metrics` is `404`. Optional so the API can be composed without it.
    */
   readonly metrics?: MetricsRegistry;
+  /**
+   * The operator admin token enabling the admin/control-plane routes (`/v1/admin/*`).
+   * When supplied (non-empty), those routes authenticate by comparing the presented
+   * Bearer token to this value in constant time and provision apps/keys against
+   * {@link ApiDeps.apps}, cross-tenant. When omitted/empty (the default) every admin
+   * route is `404` — indistinguishable from a nonexistent path — so the surface is
+   * opt-in. It is a *distinct* credential from a tenant API key: a tenant key never
+   * satisfies an admin route, and the admin token is never looked up as a key.
+   */
+  readonly adminToken?: string;
 }
 
 /**
@@ -187,7 +219,7 @@ function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof IdempotencyConflictError) {
     return json(409, { error: { code: "idempotency_conflict", message: err.message } });
   }
-  if (err instanceof UnknownEndpointError) {
+  if (err instanceof UnknownEndpointError || err instanceof UnknownAppError) {
     return json(404, { error: { code: "not_found", message: err.message } });
   }
   // Every intake validator in the codebase (`normalizeNew*`/`apply*Update`) throws
@@ -198,6 +230,19 @@ function toErrorResponse(err: unknown): ApiResponse {
     return json(400, { error: { code: "invalid_request", message: err.message } });
   }
   return json(500, { error: { code: "internal_error", message: "internal server error" } });
+}
+
+/**
+ * Constant-time string equality, used to compare a presented admin token against
+ * the configured one without leaking length or content through timing. Both inputs
+ * are SHA-256'd to fixed-width digests first, so {@link timingSafeEqual} never sees
+ * unequal lengths (which would itself leak) and the comparison does not short-circuit
+ * at the first differing byte.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a, "utf8").digest();
+  const bh = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(ah, bh);
 }
 
 /** Extract the bearer token from an `Authorization` header, or `null` if absent/malformed. */
@@ -361,6 +406,36 @@ function messageView(
   };
 }
 
+/**
+ * The admin (control-plane) view of a tenant. Carries no secret material — an app
+ * is just identity + label. Mapped explicitly so a future internal field is never
+ * leaked by accident, the same discipline as {@link endpointView}.
+ */
+function appView(app: App): Record<string, unknown> {
+  return {
+    id: app.id,
+    name: app.name,
+    createdAt: app.createdAt,
+    updatedAt: app.updatedAt,
+  };
+}
+
+/**
+ * The admin view of an API key's metadata. Never includes the secret — the store
+ * keeps only its hash, and the plaintext is surfaced exactly once at creation (see
+ * the `createApiKey` handler). `prefix` is the non-secret display fragment so an
+ * operator can recognise a key in a list.
+ */
+function apiKeyView(key: ApiKey): Record<string, unknown> {
+  return {
+    id: key.id,
+    appId: key.appId,
+    prefix: key.prefix,
+    createdAt: key.createdAt,
+    revokedAt: key.revokedAt,
+  };
+}
+
 /** Base context every route handler receives. */
 interface BaseContext {
   readonly req: ApiRequest;
@@ -397,6 +472,15 @@ export const API_ROUTE_KEYS = [
   "PATCH /v1/endpoints/:id",
   "DELETE /v1/endpoints/:id",
   "POST /v1/endpoints/:id/rotate-secret",
+  // Admin / control-plane. Authenticated by the operator admin token (not a tenant
+  // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
+  "POST /v1/admin/apps",
+  "GET /v1/admin/apps",
+  "GET /v1/admin/apps/:id",
+  "DELETE /v1/admin/apps/:id",
+  "POST /v1/admin/apps/:id/keys",
+  "GET /v1/admin/apps/:id/keys",
+  "DELETE /v1/admin/keys/:id",
 ] as const;
 
 /** One of the {@link API_ROUTE_KEYS} `"METHOD pattern"` strings. */
@@ -438,6 +522,32 @@ export function createApi(deps: ApiDeps): ApiHandler {
         throw new HttpError(401, "unauthorized", "invalid or revoked API key");
       }
       return handler({ ...ctx, app });
+    };
+
+  /**
+   * Wrap a handler so it requires the operator admin token (the control-plane auth,
+   * distinct from a tenant API key). When no admin token is configured the route is
+   * `404` — indistinguishable from a nonexistent path, so the admin surface's
+   * existence is never revealed by probing a disabled instance. When configured, the
+   * presented Bearer token is compared in constant time; a tenant key (or any other
+   * value) never matches.
+   */
+  const adminAuthed =
+    (handler: RouteHandler): RouteHandler =>
+    async (ctx) => {
+      const adminToken = deps.adminToken;
+      if (adminToken === undefined || adminToken.length === 0) {
+        throw new HttpError(
+          404,
+          "not_found",
+          `no route for ${ctx.req.method} ${ctx.req.path}`,
+        );
+      }
+      const token = extractBearer(ctx.req);
+      if (token === null || !constantTimeEqual(token, adminToken)) {
+        throw new HttpError(401, "unauthorized", "missing or invalid admin token");
+      }
+      return handler(ctx);
     };
 
   /** Load an endpoint, enforcing tenant ownership; 404 if absent or not the caller's. */
@@ -657,6 +767,75 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, { ...endpointView(rotated), secret: rotated.secret });
   };
 
+  // --- Admin / control-plane handlers ---------------------------------------
+  // These provision tenants and API keys cross-tenant; they receive a BaseContext
+  // (no resolved `app`) and are gated by `adminAuthed`, not `authed`.
+
+  const createApp: RouteHandler = async (ctx) => {
+    // The body is optional: no body creates an unnamed app. When present, `name` is
+    // validated by the store's normalizeNewApp (TypeError → 400).
+    const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
+    const input: NewApp = "name" in body ? { name: body["name"] as string } : {};
+    const app = await deps.apps.create(input);
+    return json(201, appView(app));
+  };
+
+  const listApps: RouteHandler = async () => {
+    const apps = await deps.apps.list();
+    return json(200, { data: apps.map(appView) });
+  };
+
+  const getApp: RouteHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const app = await deps.apps.get(id);
+    if (app === null) {
+      throw new HttpError(404, "not_found", `no app with id "${id}"`);
+    }
+    return json(200, appView(app));
+  };
+
+  const deleteApp: RouteHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    // Cascade-deletes the app's API keys (see AppStore.delete). An unknown app is
+    // 404 so a delete is never silently a no-op.
+    const existed = await deps.apps.delete(id);
+    if (!existed) {
+      throw new HttpError(404, "not_found", `no app with id "${id}"`);
+    }
+    return { status: 204, body: undefined };
+  };
+
+  const createApiKey: RouteHandler = async (ctx) => {
+    const appId = requireParam(ctx.params, "id");
+    // createApiKey throws UnknownAppError for an unknown app → mapped to 404.
+    const created = await deps.apps.createApiKey(appId);
+    // The plaintext secret is revealed exactly once, here (the store keeps only its
+    // hash) — the same secret-once rule as endpoint create. Persist it now.
+    return json(201, { apiKey: apiKeyView(created.apiKey), secret: created.secret });
+  };
+
+  const listApiKeys: RouteHandler = async (ctx) => {
+    const appId = requireParam(ctx.params, "id");
+    // Distinguish "unknown app" (404) from "app with no keys" (200, empty) — the
+    // same distinction the `posthorn admin list-keys` CLI makes.
+    if ((await deps.apps.get(appId)) === null) {
+      throw new HttpError(404, "not_found", `no app with id "${appId}"`);
+    }
+    const keys = await deps.apps.listApiKeys(appId);
+    return json(200, { data: keys.map(apiKeyView) });
+  };
+
+  const revokeApiKey: RouteHandler = async (ctx) => {
+    const keyId = requireParam(ctx.params, "id");
+    const revoked = await deps.apps.revokeApiKey(keyId);
+    if (!revoked) {
+      // Unknown id or already-revoked: the store cannot tell them apart, and neither
+      // should the surface (it reveals nothing about which keys ever existed).
+      throw new HttpError(404, "not_found", `no live key with id "${keyId}"`);
+    }
+    return { status: 204, body: undefined };
+  };
+
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
   // exhaustive: a missing key or a stray extra key is a compile error, so the route
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
@@ -675,6 +854,13 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "PATCH /v1/endpoints/:id": authed(updateEndpoint),
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
+    "POST /v1/admin/apps": adminAuthed(createApp),
+    "GET /v1/admin/apps": adminAuthed(listApps),
+    "GET /v1/admin/apps/:id": adminAuthed(getApp),
+    "DELETE /v1/admin/apps/:id": adminAuthed(deleteApp),
+    "POST /v1/admin/apps/:id/keys": adminAuthed(createApiKey),
+    "GET /v1/admin/apps/:id/keys": adminAuthed(listApiKeys),
+    "DELETE /v1/admin/keys/:id": adminAuthed(revokeApiKey),
   };
 
   const routes: readonly Route<RouteHandler>[] = defineRoutes<RouteHandler>(

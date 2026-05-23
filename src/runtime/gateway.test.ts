@@ -341,6 +341,103 @@ describe("createGateway", () => {
     15_000,
   );
 
+  it("disables the admin API by default — /v1/admin/* is 404 (surface hidden)", async () => {
+    const gateway = createGateway(memoryConfig());
+    gateways.push(gateway);
+    const address = await gateway.start();
+    // Even with a plausible Bearer token, a disabled instance reveals nothing.
+    const res = await fetch(`http://127.0.0.1:${address.port}/v1/admin/apps`, {
+      headers: { authorization: "Bearer anything-long-enough-here" },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it(
+    "provisions a tenant + key over the admin API; the minted key works end-to-end and revocation takes effect",
+    async () => {
+      const ADMIN_TOKEN = "gateway-admin-token-1234567890";
+      const gateway = createGateway(memoryConfig({ POSTHORN_ADMIN_TOKEN: ADMIN_TOKEN }));
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+      const adminHeaders = {
+        "content-type": "application/json",
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+      };
+
+      // The surface now exists, but the admin credential is required.
+      expect((await fetch(`${base}/v1/admin/apps`)).status).toBe(401);
+
+      // Create a tenant over HTTP (no shelling into the box).
+      const appRes = await fetch(`${base}/v1/admin/apps`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ name: "Acme" }),
+      });
+      expect(appRes.status).toBe(201);
+      const { id: appId } = (await appRes.json()) as { id: string };
+
+      // Mint a key over HTTP — the secret is returned once here.
+      const keyRes = await fetch(`${base}/v1/admin/apps/${appId}/keys`, {
+        method: "POST",
+        headers: adminHeaders,
+      });
+      expect(keyRes.status).toBe(201);
+      const { apiKey: keyMeta, secret: apiKey } = (await keyRes.json()) as {
+        apiKey: { id: string };
+        secret: string;
+      };
+      expect(apiKey).toMatch(/^phk_/);
+
+      // The minted key authenticates a tenant route and a delivered webhook verifies.
+      const tenantHeaders = {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      };
+      const receiver = await startReceiver();
+      receivers.push(receiver);
+      const epRes = await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: tenantHeaders,
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["user.created"] }),
+      });
+      expect(epRes.status).toBe(201);
+      const { secret: endpointSecret } = (await epRes.json()) as { secret: string };
+
+      const ingestRes = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: tenantHeaders,
+        body: JSON.stringify({ eventType: "user.created", payload: { provisioned: true } }),
+      });
+      expect(ingestRes.status).toBe(202);
+
+      const delivered = await receiver.received;
+      expect(() =>
+        verify(
+          endpointSecret,
+          {
+            id: delivered.headers[HEADERS.id] as string,
+            timestamp: delivered.headers[HEADERS.timestamp] as string,
+            signature: delivered.headers[HEADERS.signature] as string,
+          },
+          delivered.body,
+        ),
+      ).not.toThrow();
+
+      // Revoke the key over the admin API; it then stops authenticating immediately.
+      const revokeRes = await fetch(`${base}/v1/admin/keys/${keyMeta.id}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+      expect(revokeRes.status).toBe(204);
+      const afterRevoke = await fetch(`${base}/v1/endpoints`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      expect(afterRevoke.status).toBe(401);
+    },
+    15_000,
+  );
+
   it("persists durable state across a restart (file-backed, no Redis)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "posthorn-gw-"));
     tempDirs.push(dir);
