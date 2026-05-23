@@ -21,6 +21,11 @@ Early foundation. Implemented so far:
   (fixed or exponential, optional injectable jitter, sensible default schedule) and a delivery
   state machine (`pending → delivering → succeeded`, with policy-driven retries and automatic
   dead-lettering once retries are exhausted).
+- ✅ **Message store + idempotent intake** — a storage interface (`MessageStore`) with a
+  zero-dependency in-memory implementation. Idempotency keys collapse a producer's retried
+  `create` onto the single message first accepted; reusing a key for a *different* request is
+  rejected as a conflict; key bindings expire after a configurable window. This is the seam the
+  SQLite/Postgres backends will implement next.
 
 See the roadmap in [`docs/PROJECT.md`](docs/PROJECT.md).
 
@@ -71,6 +76,31 @@ while (!isTerminal(state)) {
   // On failure, state is `pending` with `nextAttemptAt` set — or `dead_letter`
   // once the retry schedule is exhausted.
 }
+```
+
+## Quickstart (message store)
+
+Accept messages for delivery with built-in idempotency. A retried `create` with the same
+`idempotencyKey` returns the original message instead of duplicating the send.
+
+```ts
+import { InMemoryMessageStore } from "posthorn";
+
+const store = new InMemoryMessageStore();
+
+const { message } = await store.create({
+  eventType: "user.created",
+  payload: JSON.stringify({ id: 42 }),
+  idempotencyKey: "req_abc123", // optional
+});
+
+// A network-retried create with the same key is collapsed onto the original:
+const again = await store.create({
+  eventType: "user.created",
+  payload: JSON.stringify({ id: 42 }),
+  idempotencyKey: "req_abc123",
+});
+again.deduplicated; // true — again.message.id === message.id (no duplicate send)
 ```
 
 ## Development

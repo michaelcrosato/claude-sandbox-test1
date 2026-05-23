@@ -37,3 +37,18 @@ export {
   type DeliveryStatus,
   type DeliveryEvent,
 } from "./delivery/delivery-state.js";
+
+export {
+  IdempotencyConflictError,
+  messageFingerprint,
+  createMessageId,
+  type Message,
+  type NewMessage,
+  type CreateMessageResult,
+  type MessageStore,
+} from "./storage/message-store.js";
+
+export {
+  InMemoryMessageStore,
+  type InMemoryStoreOptions,
+} from "./storage/in-memory-store.js";

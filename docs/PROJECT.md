@@ -87,10 +87,11 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
 
 - **P0 — Foundation (this iteration):** decision record, TS scaffold, and the spec-compliant
   **signer/verifier** (the security heart) with golden-vector tests. ✅
-- **P1 — Delivery core:** retry/backoff schedule ✅, delivery state machine ✅, dead-letter ✅
-  (`src/delivery/`); remaining: idempotency/dedup keys, in-memory store + storage interface.
-  All pure/deterministic, heavily tested.
-- **P2 — Persistence + queue:** SQLite store, durable store-backed queue, crash-safe replay.
+- **P1 — Delivery core (complete):** retry/backoff schedule ✅, delivery state machine ✅,
+  dead-letter ✅ (`src/delivery/`); idempotency/dedup keys ✅, in-memory store + `MessageStore`
+  storage interface ✅ (`src/storage/`). All pure/deterministic, heavily tested.
+- **P2 — Persistence + queue:** SQLite `MessageStore` (implements the P1 interface), durable
+  store-backed queue, crash-safe replay. Delivery-attempt records persisted alongside messages.
 - **P3 — HTTP API + SDK:** Fastify endpoints (apps, endpoints, messages), contract tests,
   TS SDK, OpenAPI.
 - **P4 — Self-host packaging:** single Docker image, config, health/metrics, docs.

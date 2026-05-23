@@ -1,0 +1,129 @@
+/**
+ * The message store: how Posthorn persists the events it is asked to deliver.
+ *
+ * This module defines the *seam* between Posthorn's deterministic core and
+ * whatever backs it durably (an in-memory map today; SQLite/Postgres next —
+ * see docs/PROJECT.md). Every backend implements the same {@link MessageStore}
+ * contract, so the rest of the system never depends on the storage engine.
+ *
+ * It also owns **idempotent intake**: producers routinely retry a create call
+ * after a network blip, and Posthorn must not fan a duplicate event out to a
+ * customer's endpoints. A caller-supplied idempotency key collapses those
+ * retries onto the single message that was first accepted for the key.
+ */
+
+import { createHash, randomBytes } from "node:crypto";
+
+/** A message accepted for delivery. Immutable once created. */
+export interface Message {
+  /** Server-assigned unique id (e.g. `msg_…`). */
+  readonly id: string;
+  /**
+   * The idempotency key the producer supplied, or `null` if none was given.
+   * Recorded for traceability; dedup itself is handled by the store.
+   */
+  readonly idempotencyKey: string | null;
+  /** The event type / topic, e.g. `"user.created"`. */
+  readonly eventType: string;
+  /** The exact serialized body to be signed and delivered, byte-for-byte. */
+  readonly payload: string;
+  /** Creation time, epoch ms. */
+  readonly createdAt: number;
+}
+
+/** The fields a caller provides to create a message. */
+export interface NewMessage {
+  /**
+   * Optional idempotency key. When present, a repeat create with the same key
+   * (within the store's idempotency window) returns the original message
+   * instead of creating a new one. Must be a non-empty string when provided.
+   */
+  readonly idempotencyKey?: string | null;
+  /** The event type / topic. Must be a non-empty string. */
+  readonly eventType: string;
+  /** The exact serialized body to deliver. */
+  readonly payload: string;
+}
+
+/** The outcome of {@link MessageStore.create}. */
+export interface CreateMessageResult {
+  /** The stored message — freshly created, or the one a prior call created. */
+  readonly message: Message;
+  /**
+   * `true` when an existing message was returned because its idempotency key
+   * had already been seen; `false` when a new message was created.
+   */
+  readonly deduplicated: boolean;
+}
+
+/**
+ * Durable storage for messages, plus idempotent intake.
+ *
+ * The interface is asynchronous so that a single contract spans both
+ * synchronous engines (in-memory, better-sqlite3) and asynchronous ones
+ * (Postgres, networked stores); synchronous backends simply resolve eagerly.
+ */
+export interface MessageStore {
+  /**
+   * Accept a message for delivery.
+   *
+   * If {@link NewMessage.idempotencyKey} is set and a non-expired message
+   * already exists for that key, the original is returned with
+   * `deduplicated: true` — *provided the request matches*. A reused key paired
+   * with a different `eventType`/`payload` is a programming error and throws
+   * {@link IdempotencyConflictError}.
+   */
+  create(input: NewMessage): Promise<CreateMessageResult>;
+  /** Fetch a message by its id, or `null` if unknown. */
+  get(id: string): Promise<Message | null>;
+  /**
+   * Fetch the message currently associated with an idempotency key, or `null`
+   * if the key is unknown or its idempotency window has elapsed.
+   */
+  getByIdempotencyKey(key: string): Promise<Message | null>;
+}
+
+/**
+ * Thrown when an idempotency key is reused for a request that differs from the
+ * one it was first stored against. Surfacing this (rather than silently
+ * returning the stale message) catches a real client bug: the same key must
+ * always describe the same request.
+ */
+export class IdempotencyConflictError extends Error {
+  /** The conflicting idempotency key. */
+  readonly key: string;
+  constructor(key: string) {
+    super(
+      `idempotency key "${key}" was already used for a different request`,
+    );
+    this.name = "IdempotencyConflictError";
+    this.key = key;
+  }
+}
+
+/**
+ * Compute a stable fingerprint of a message's identifying content.
+ *
+ * Pure and deterministic. Each field is length-prefixed before hashing so that
+ * no pair of distinct `(eventType, payload)` inputs can collide by shifting the
+ * boundary between them (e.g. `("ab","c")` vs `("a","bc")`).
+ */
+export function messageFingerprint(eventType: string, payload: string): string {
+  return createHash("sha256")
+    .update(`${Buffer.byteLength(eventType, "utf8")}:`, "utf8")
+    .update(eventType, "utf8")
+    .update(`:${Buffer.byteLength(payload, "utf8")}:`, "utf8")
+    .update(payload, "utf8")
+    .digest("hex");
+}
+
+/** Prefix on generated message ids. */
+const MESSAGE_ID_PREFIX = "msg_";
+
+/**
+ * The default message-id generator: a `msg_`-prefixed, URL-safe token with 144
+ * bits of CSPRNG entropy. Inject a deterministic generator in tests.
+ */
+export function createMessageId(): string {
+  return MESSAGE_ID_PREFIX + randomBytes(18).toString("base64url");
+}

@@ -4,6 +4,42 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-22 — Iteration 3: P1 finished — idempotent message store + storage seam
+
+**Repo truth at start:** clean main @ `d2f06f8`. Baseline re-verified before any change:
+`tsc --noEmit` clean, vitest **60/60**, `npm run build` clean, integrity gate + local gate
+both exit 0. Node 24 / vitest 2.1.9. Strict tsconfig confirmed (`exactOptionalPropertyTypes`,
+`noUncheckedIndexedAccess`, `verbatimModuleSyntax`). Roadmap's open P1 items: idempotency/dedup
+keys + in-memory store behind a storage interface.
+
+**High-leverage move chosen:** Build the **persistence seam** — the `MessageStore` interface +
+its in-memory reference implementation + idempotent intake. Highest-leverage because it is the
+load-bearing contract every later phase depends on: P2 (SQLite/Postgres) just implements the
+same interface, and P3's HTTP handlers await it. Kept to message *intake* (not delivery-attempt
+records, deferred to P2) to stay one small, fully-validatable green unit.
+
+**Built this tick (`src/storage/`):**
+- `message-store.ts` — `Message`/`NewMessage`/`CreateMessageResult` types, the async
+  `MessageStore` interface (async so one contract spans sync better-sqlite3 *and* async
+  Postgres), `IdempotencyConflictError`, a pure **length-prefixed** `messageFingerprint`
+  (so `("ab","c")` ≠ `("a","bc")`), and the default `createMessageId` (144-bit base64url).
+- `in-memory-store.ts` — `InMemoryMessageStore`: idempotent `create` (dedup on key → returns
+  original w/ `deduplicated:true`; **conflict** on same-key/different-fingerprint → throws;
+  **TTL** binding expiry, default 24h, `Infinity` = never), `get`, `getByIdempotencyKey`.
+  Clock + id generator injected for determinism (matches signer/delivery convention). The
+  message map is never pruned on expiry — only the key→id index ages out (Axiom 3 in spirit).
+  Both surfaces re-exported from `src/index.ts`.
+
+**Validation:** `tsc --noEmit` clean (strict). vitest **81/81** (was 60; +21: 6 fingerprint/
+id/error, 15 store incl. conflict + TTL-boundary + Infinity-window + construction guard).
+`npm run build` clean. Integrity gate + local gate: exit 0. git status: only `src/index.ts`,
+new `src/storage/`, README, PROJECT.md (dist/ gitignored).
+
+**State:** GREEN → committing to main. P1 complete. Next tick: P2 — a SQLite `MessageStore`
+implementing this interface, then delivery-attempt persistence + a durable store-backed queue.
+
+---
+
 ## 2026-05-22 — Iteration 2: P1 delivery decision core (retry + state machine)
 
 **Repo truth at start:** clean main @ `671bfff`. P0 (signer/verifier) green, 23 tests.
