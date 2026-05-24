@@ -4,6 +4,101 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 41: Consumer App Portal
+
+**Repo truth at start:** clean main @ `0aa6540` (iter-40, `GET /v1/deliveries?status=`).
+Baseline verified: `tsc --noEmit` clean, vitest **919/919** (38 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Consumer App Portal — the feature Svix monetizes most
+heavily, the largest competitive moat gap, and the closing piece of the "SaaS gives customers a
+managed webhook UI" use case. A SaaS tenant calls `POST /v1/portal/sessions` (tenant API key auth),
+receives a short-lived token + `portalUrl`; the customer is redirected there, the token is exchanged
+for an `HttpOnly; SameSite=Strict` session cookie; all subsequent portal pages (endpoint list, detail,
+create, update, rotate-secret, delete, logout) run scoped to the session's `appId` — appId comes from
+the session only, never a URL param; cross-tenant endpoints return 404; signing secret shown exactly
+once (create + rotate). Portal always enabled — no new credential surface beyond existing API keys.
+The shared `InMemoryPortalSessionStore` instance between the JSON API and the portal handler makes
+the token exchange work correctly.
+
+**Built this tick:**
+
+- **`src/portal/portal-session.ts`** (new) — `PortalSession` interface; `PortalSessionStore`
+  interface (`createSession`, `getSession`, `deleteSession`); `InMemoryPortalSessionStore` (Map-backed,
+  prunes expired on `getSession`); `MAX_PORTAL_SESSION_TTL_MS` (7 d), `DEFAULT_PORTAL_SESSION_TTL_MS`
+  (24 h).
+
+- **`src/portal/portal-views.ts`** (new) — pure HTML builders with `esc()` XSS guard; exports
+  `portalExpiredPage()`, `portalEndpointsPage(endpoints, createdSecret?)`,
+  `portalEndpointDetailPage(endpoint, rows, error?)`, `portalRotatedSecretPage(endpoint, newSecret)`,
+  and `DeliveryRow` interface. Neutral "Webhooks" branding (not "Posthorn"). CSS inlined.
+
+- **`src/portal/portal-handler.ts`** (new) — `createPortalHandler(deps)` dispatches 10 routes:
+  `GET /portal`, `GET /portal/login?token=` (token exchange → cookie + redirect), `POST /portal/logout`
+  (clear cookie), `GET /portal/endpoints`, `POST /portal/endpoints` (create, secret shown once),
+  `GET /portal/endpoints/:id`, `POST /portal/endpoints/:id/update`, `POST /portal/endpoints/:id/rotate-secret`,
+  `POST /portal/endpoints/:id/delete`. All mutating routes guard via `requireAuth()`.
+
+- **`src/http/api.ts`** — `ApiDeps` gains optional `portalSessions?: PortalSessionStore`;
+  `"POST /v1/portal/sessions"` added to `API_ROUTE_KEYS`; `createPortalSession` handler: validates
+  `externalUserId` (non-empty string), `expiresIn` (1..604800 seconds, default 86400); derives
+  `portalUrl` from `x-forwarded-proto` + `host` headers; returns `{ token, portalUrl, expiresAt }`;
+  returns 404 when `portalSessions` not configured.
+
+- **`src/http/openapi.ts`** — `Portal` tag; `"/v1/portal/sessions"` path + `createPortalSession`
+  POST operation; `NewPortalSession` schema (`externalUserId: string` required, `expiresIn?: integer
+  1..604800`); `PortalSessionResult` schema (`token: string`, `portalUrl: string uri`, `expiresAt:
+  epoch ms`). The OpenAPI drift test *forced* all three additions.
+
+- **`src/http/server.ts`** — `HttpServerOptions` gains `portalHandler?: ApiHandler`; `serve()`
+  dispatches to portal handler when `pathname === "/portal"` or `pathname.startsWith("/portal/")`;
+  priority order: tenant-dashboard > admin-dashboard > portal > main API.
+
+- **`src/runtime/gateway.ts`** — instantiates `InMemoryPortalSessionStore` shared between
+  `createApi` deps (`portalSessions`) and `createPortalHandler` so the token exchange round-trips;
+  `portalHandler` passed to `createHttpServer` options.
+
+- **`src/sdk/client.ts`** — `CreatePortalSessionInput` (`externalUserId: string`, `expiresIn?:
+  number`); `PortalSessionResult` (`token`, `portalUrl`, `expiresAt`);
+  `PosthornClient.createPortalSession(input)` → `POST /v1/portal/sessions`.
+
+**Tests:**
+
+- **`src/portal/portal-session.test.ts`** (new, 8 tests) — createSession returns token; getSession
+  before expiry; null for unknown; prunes expired; deleteSession removes; deleteSession no-op on
+  unknown; custom TTL; MAX constant value.
+
+- **`src/portal/portal-handler.test.ts`** (new, 14 tests) — expired page; valid token exchange (cookie
+  headers); auth guard redirect; endpoints page; GET /portal redirect; POST create shows `whsec_`
+  banner; detail page; cross-tenant 404; delete + redirect; rotate secret; logout clears session;
+  unknown route 404; and more.
+
+- **`src/http/api.test.ts`** — 8-test `POST /v1/portal/sessions` describe block: 401 unauthenticated;
+  404 when portalSessions unconfigured; 400 blank externalUserId; 400 missing externalUserId; 201
+  token + portalUrl + expiresAt; 201 custom expiresIn; 400 expiresIn > 7d max; 400 expiresIn = 0;
+  portalUrl uses x-forwarded-proto + host.
+
+- **`src/sdk/client.test.ts`** — 3 tests: full integration (real server with portalSessions wired)
+  verifying token, portalUrl, expiresAt; fakeClient verifying expiresIn forwarded; fakeClient
+  verifying expiresIn omitted when not provided.
+
+**Fixes applied mid-tick:**
+
+- `exactOptionalPropertyTypes` strictness in portal-handler.ts — `form["description"]` yields
+  `string | undefined`; fixed by `const rawDesc = form["description"] ?? ""` then `description:
+  rawDesc`. Same for `url` in the update handler: spread pattern `...(rawUrl2.length > 0 ? { url:
+  rawUrl2 } : {})`.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**953/953, 40 files** (+34 over baseline: +8 session, +14 handler, +8 API handler, +3 SDK). `npm run
+build` clean. **compiled-`dist` smoke** (7/7 checks through production ESM on `:memory:`): key
+minted; portal session 201 with token + portalUrl; login exchange → 302 + set-cookie; endpoints page
+200 with "Endpoints" heading.
+
+**State:** GREEN → committed to main @ iter-41 (`07a96b5`).
+
+---
+
 ## 2026-05-23 — Iteration 40: `GET /v1/deliveries?status=`
 
 **Repo truth at start:** clean main @ `cbdabef` (iter-39, `GET /v1/endpoints/:id/deliveries`).
