@@ -4,6 +4,82 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 65: Message Expiry (`expiresAt`)
+
+**Repo truth at start:** clean main @ `1832282` (iter-64, stored deliverAt). Baseline
+verified: `tsc --noEmit` clean, vitest **1350/1350** (46 files), `npm run build` clean.
+
+**Problem:** Posthorn had `deliverAt` (don't deliver *before* this time) but no
+complementary deadline: a scheduled message for "your OTP expires in 5 minutes" or
+"your session expires at 10:00" could, if the receiver was down during that window, be
+delivered hours later — actively harmful. Every production webhook platform (Svix,
+Hookdeck, AWS SNS) lets operators set a message TTL / expiry deadline.
+
+**Move chosen:** `expiresAt: number | null` (epoch-ms stored; ISO 8601 on the wire)
+on the `Message` model. When the delivery worker picks up a task and finds
+`now > message.expiresAt`, it dead-letters immediately without retrying — the same
+`{ delaysMs: [] }` force-policy used by `nonRetryable`. No new delivery states; no
+change to the queue FSM; clean additive column migrations for both SQLite and Postgres.
+
+**Architecture (16 files, +294 / −50):**
+
+1. **`src/storage/message-store.ts`** — `expiresAt: number | null` on `Message`,
+   `NewMessage`, `NormalizedNewMessage`; validation in `normalizeNewMessage`
+   (non-negative integer; same pattern as `deliverAt`).
+
+2. **`src/storage/in-memory-store.ts`** — destructure and store `expiresAt` in
+   the message literal.
+
+3. **`src/storage/sqlite-store.ts`** — `expires_at: number | null` in `MessageRow`;
+   `rowToMessage` maps `expires_at ?? null`; all SELECT column lists and INSERT
+   updated; `#migrateExpiresAtColumn()` additive migration (PRAGMA + ALTER TABLE ADD
+   COLUMN, same idiom as `deliverAt`); SCHEMA includes `expires_at INTEGER`.
+
+4. **`src/storage/postgres-store.ts`** — same pattern; `expires_at BIGINT` in SCHEMA;
+   `ADD COLUMN IF NOT EXISTS expires_at BIGINT` migration; BIGINT → `Number()` in
+   `rowToMessage`; INSERT parameterized with `$9`.
+
+5. **`src/worker/delivery-worker.ts`** — expiry check after message load, before
+   resolver call (sets `failure` and `messageExpired = true`; `else` branch skips
+   resolver + HTTP entirely); `nonRetryable` check extended with `|| messageExpired`
+   so the settle uses `{ delaysMs: [] }` → immediate dead-letter, no retry scheduled.
+
+6. **`src/fanout/fanout.ts`** — `expiresAt` added to the `Pick<Message, …>` type so
+   the function signature accepts the full `Message` struct from the test literals.
+
+7. **`src/http/api.ts`** — `parseExpiresAt` helper (mirrors `parseSendAt`); wired
+   into `createMessage` and `batchSendMessages`; `expiresAt` in `messageListItemView`,
+   `messageView`, create response, batch item response; synthetic test message
+   literal updated with `expiresAt: null`.
+
+8. **`src/http/openapi.ts`** — `expiresAt` (integer|null, int64) in `MessageSummary`
+   and `Message` required+properties; `expiresAt` (string|null, date-time) in
+   `NewMessage` properties.
+
+9. **`src/sdk/client.ts`** — `expiresAt?: string | null` on `SendMessageInput`;
+   `expiresAt: number | null` on `MessageRef` and `MessageWithDeliveries`;
+   `sendMessage` and `sendMessageBatch` serialize `expiresAt` when present.
+
+10. **Test literal fixes** — `delivery-worker.test.ts`, `endpoint-resolver.test.ts`,
+    `fanout.test.ts`, `portal/portal-handler.ts` updated with `expiresAt: null`.
+
+**Tests (+11 cases, total 1361/1361 green):**
+- `storage/conformance.ts`: 3 new cases × 2 backends (in-memory + SQLite) = 6 —
+  stores/retrieves `expiresAt`; defaults to `null`; rejects non-integer/negative.
+- `worker/delivery-worker.test.ts`: 2 new cases — expired message dead-letters
+  immediately with no HTTP call (`deadLettered: 1`); future `expiresAt` delivers
+  normally (`succeeded: 1`).
+- `http/api.test.ts`: 1 new case — `expiresAt` stored and returned in POST
+  `/v1/messages`.
+- `sdk/client.test.ts`: 2 new cases — serializes `expiresAt`; omits when not
+  provided.
+
+**Validation:** `tsc --noEmit` clean → vitest **1361/1361** (46 files, 6 Postgres
+skipped), up from 1350. All 11 new tests green. `npm run build` clean → committed
+`2ee4fbd`.
+
+---
+
 ## 2026-05-24 — Iteration 64: Stored `deliverAt` — Completing Scheduled Delivery
 
 **Repo truth at start:** clean main @ `e56d3aa` (iter-63, endpoint message replay). Baseline
