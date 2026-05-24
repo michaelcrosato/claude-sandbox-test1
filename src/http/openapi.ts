@@ -22,7 +22,11 @@ import {
   MAX_LIST_MESSAGES_LIMIT,
   MAX_USAGE_RANGE_DAYS,
 } from "../storage/message-store.js";
-import { MAX_LIST_ATTEMPTS_LIMIT } from "../attempts/delivery-attempt.js";
+import {
+  DEFAULT_STATS_DAYS,
+  MAX_LIST_ATTEMPTS_LIMIT,
+  MAX_STATS_DAYS,
+} from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import { POSTHORN_VERSION } from "../version.js";
 
@@ -476,6 +480,36 @@ export function buildOpenApiDocument(): OpenApiDocument {
               ref("EndpointDeliveryList"),
             ),
             "400": errorResponse("Malformed `?limit=` or `?cursor=` parameter."),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
+      "/v1/endpoints/{id}/stats": {
+        get: {
+          operationId: "getEndpointStats",
+          tags: ["Endpoints"],
+          summary: "Get an endpoint's delivery statistics",
+          description:
+            "Aggregate delivery-attempt statistics for a single endpoint over a trailing " +
+            `window of 1–${MAX_STATS_DAYS} calendar days (default ${DEFAULT_STATS_DAYS}). ` +
+            "Returns total attempts, success/failure counts, overall success rate, mean " +
+            "attempt duration, and a per-UTC-day breakdown for trend analysis. All counts " +
+            "are zero and `successRate`/`avgDurationMs` are `null` when no attempts were " +
+            "recorded in the window. Another tenant's (or an unknown) endpoint is `404`.",
+          parameters: [
+            idParam("The endpoint id."),
+            {
+              name: "days",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: MAX_STATS_DAYS, default: DEFAULT_STATS_DAYS },
+              description: `Trailing window in calendar days (1–${MAX_STATS_DAYS}). Defaults to ${DEFAULT_STATS_DAYS}.`,
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Delivery statistics for the endpoint.", ref("EndpointStats")),
+            "400": errorResponse("Malformed `?days=` parameter."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such endpoint for this tenant."),
           },
@@ -1416,6 +1450,48 @@ export function buildOpenApiDocument(): OpenApiDocument {
             nextCursor: {
               type: ["string", "null"],
               description: "Opaque cursor for the next page, or null when this is the last page.",
+            },
+          },
+        },
+        EndpointStatsDay: {
+          type: "object",
+          description: "Delivery-attempt counts for a single endpoint on one UTC calendar day.",
+          required: ["date", "attempts", "succeeded", "failed"],
+          properties: {
+            date: { type: "string", format: "date", description: "UTC day, ISO `YYYY-MM-DD`." },
+            attempts: { type: "integer", minimum: 0, description: "Total delivery attempts on this day." },
+            succeeded: { type: "integer", minimum: 0, description: "Attempts that reached the receiver with a 2xx." },
+            failed: { type: "integer", minimum: 0, description: "Attempts that failed (non-2xx, transport, or pre-flight)." },
+          },
+        },
+        EndpointStats: {
+          type: "object",
+          description:
+            "Aggregate delivery-attempt statistics for a single endpoint over a trailing " +
+            "calendar-day window. Use `GET /v1/endpoints/{id}/stats` to retrieve.",
+          required: ["endpointId", "fromMs", "toMs", "total", "succeeded", "failed", "successRate", "avgDurationMs", "daily"],
+          properties: {
+            endpointId: { type: "string", description: "The endpoint these statistics are for." },
+            fromMs: epochMs("Inclusive start of the window (epoch ms)."),
+            toMs: epochMs("Exclusive end of the window (epoch ms)."),
+            total: { type: "integer", minimum: 0, description: "Total delivery attempts in the window." },
+            succeeded: { type: "integer", minimum: 0, description: "Attempts that reached the receiver with a 2xx." },
+            failed: { type: "integer", minimum: 0, description: "Attempts that failed." },
+            successRate: {
+              type: ["number", "null"],
+              minimum: 0,
+              maximum: 1,
+              description: "`succeeded / total` rounded to 4 decimal places, or `null` when `total` is 0.",
+            },
+            avgDurationMs: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description: "Mean attempt duration in ms (all attempts, succeeded and failed), or `null` when `total` is 0.",
+            },
+            daily: {
+              type: "array",
+              items: ref("EndpointStatsDay"),
+              description: "Per-UTC-day breakdown, oldest day first; only days with at least one attempt.",
             },
           },
         },

@@ -110,10 +110,13 @@ import type { DeliveryStatus } from "../delivery/delivery-state.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import { retryAppDeliveries, type BulkRetryResult } from "../queue/retry-app.js";
 import {
+  DEFAULT_STATS_DAYS,
   MAX_LIST_ATTEMPTS_LIMIT,
+  MAX_STATS_DAYS,
   type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptStore,
+  type EndpointStats,
   type ListAttemptsOptions,
 } from "../attempts/delivery-attempt.js";
 import {
@@ -806,6 +809,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/endpoints/:id/rotate-secret",
   "POST /v1/endpoints/:id/test",
   "GET /v1/endpoints/:id/deliveries",
+  "GET /v1/endpoints/:id/stats",
   "GET /v1/deliveries",
   "POST /v1/deliveries/retry",
   "GET /v1/usage",
@@ -1350,6 +1354,32 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const getEndpointStats: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    // Ownership check — another tenant's (or absent) endpoint is 404, same as every
+    // other endpoint sub-route. Stats expose delivery data; we must never return
+    // another tenant's stats even if the endpointId is guessed correctly.
+    await loadOwnedEndpoint(ctx.app.id, id);
+    // Parse ?days=N (1..MAX_STATS_DAYS). Default: DEFAULT_STATS_DAYS.
+    const rawDays = ctx.req.query["days"];
+    let days = DEFAULT_STATS_DAYS;
+    if (rawDays !== undefined) {
+      const parsed = Number(rawDays);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_STATS_DAYS) {
+        throw new HttpError(
+          400,
+          "invalid_request",
+          `days must be an integer in [1, ${MAX_STATS_DAYS}]`,
+        );
+      }
+      days = parsed;
+    }
+    const toMs = now();
+    const fromMs = toMs - days * USAGE_DAY_MS;
+    const stats: EndpointStats = await deps.attempts.statsByEndpoint(id, { fromMs, toMs });
+    return json(200, stats);
+  };
+
   const getAppDeliveries: AuthedHandler = async (ctx) => {
     const page = await deps.queue.listByApp(
       ctx.app.id,
@@ -1662,6 +1692,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
     "POST /v1/endpoints/:id/test": authed(testEndpoint),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
+    "GET /v1/endpoints/:id/stats": authed(getEndpointStats),
     "GET /v1/deliveries": authed(getAppDeliveries),
     "POST /v1/deliveries/retry": authed(retryAllDeliveries),
     "GET /v1/usage": authed(getUsage),

@@ -567,6 +567,50 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(seenUrl.endsWith("/v1/endpoints/ep_1/deliveries")).toBe(true);
   });
 
+  it("getEndpointStats GETs /v1/endpoints/{id}/stats and returns the stats payload", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const statsPayload = {
+      endpointId: "ep_1",
+      fromMs: 1_000,
+      toMs: 2_000,
+      total: 10,
+      succeeded: 9,
+      failed: 1,
+      successRate: 0.9,
+      avgDurationMs: 123,
+      daily: [{ date: "2026-05-17", attempts: 10, succeeded: 9, failed: 1 }],
+    };
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      return Promise.resolve(fakeResponse(200, JSON.stringify(statsPayload)));
+    });
+    const res = await client.getEndpointStats("ep_1");
+    expect(seenMethod).toBe("GET");
+    expect(seenUrl.endsWith("/v1/endpoints/ep_1/stats")).toBe(true);
+    expect(res.endpointId).toBe("ep_1");
+    expect(res.total).toBe(10);
+    expect(res.successRate).toBe(0.9);
+    expect(res.avgDurationMs).toBe(123);
+    expect(res.daily).toHaveLength(1);
+  });
+
+  it("includes days in getEndpointStats query string when provided", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({
+          endpointId: "ep_1", fromMs: 0, toMs: 1, total: 0, succeeded: 0, failed: 0,
+          successRate: null, avgDurationMs: null, daily: [],
+        })),
+      );
+    });
+    await client.getEndpointStats("ep_1", { days: 14 });
+    expect(seenUrl).toContain("days=14");
+  });
+
   it("includes limit, cursor, and status in listDeliveries query string", async () => {
     let seenUrl = "";
     const client = fakeClient((url) => {

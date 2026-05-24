@@ -2330,6 +2330,119 @@ describe("createApi — GET /v1/endpoints/:id/deliveries (endpoint delivery hist
   });
 });
 
+describe("createApi — GET /v1/endpoints/:id/stats (endpoint delivery statistics)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/endpoints/ep_1/stats" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown or another tenant's endpoint", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/endpoints/ep_unknown/stats",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns zero stats when the endpoint has no recorded attempts", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/stats`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const stats = body(res);
+    expect(stats.endpointId).toBe(epId);
+    expect(stats.total).toBe(0);
+    expect(stats.succeeded).toBe(0);
+    expect(stats.failed).toBe(0);
+    expect(stats.successRate).toBeNull();
+    expect(stats.avgDurationMs).toBeNull();
+    expect(stats.daily).toEqual([]);
+  });
+
+  it("counts attempts for the endpoint and computes successRate + avgDurationMs", async () => {
+    const { api, secret, attempts, appId } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const nowMs = Date.now();
+    // Record 3 succeeded (dur 100ms each) + 1 failed (dur 200ms) within the window.
+    for (let i = 0; i < 3; i++) {
+      await attempts.record({
+        taskId: `task_${i}`,
+        messageId: `msg_${i}`,
+        appId,
+        endpointId: epId,
+        attemptNumber: 1,
+        outcome: "succeeded",
+        responseStatus: 200,
+        durationMs: 100,
+        attemptedAt: nowMs - 1000 * (i + 1),
+      });
+    }
+    await attempts.record({
+      taskId: "task_fail",
+      messageId: "msg_fail",
+      appId,
+      endpointId: epId,
+      attemptNumber: 1,
+      outcome: "failed",
+      responseStatus: 500,
+      error: "internal error",
+      durationMs: 200,
+      attemptedAt: nowMs - 5000,
+    });
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/stats`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const stats = body(res);
+    expect(stats.total).toBe(4);
+    expect(stats.succeeded).toBe(3);
+    expect(stats.failed).toBe(1);
+    expect(stats.successRate).toBe(0.75);
+    // (100 * 3 + 200) / 4 = 125
+    expect(stats.avgDurationMs).toBe(125);
+    expect(stats.daily.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects an out-of-range ?days= with 400", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/stats`,
+        headers: { authorization: `Bearer ${secret}` },
+        query: { days: "0" },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});
+
 describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
   it("rejects an unauthenticated request with 401", async () => {
     const { api } = await setup();

@@ -160,6 +160,16 @@ export interface DeliveryAttemptStore {
     appId: string,
     range: UsageRange,
   ): Promise<AttemptUsageSummary>;
+  /**
+   * Aggregate delivery-attempt statistics for a single endpoint over the
+   * half-open epoch-ms range `[range.fromMs, range.toMs)` — the data behind
+   * `GET /v1/endpoints/:id/stats`. Returns totals (total, succeeded, failed),
+   * the overall success rate and average attempt duration, and a per-UTC-day
+   * breakdown for trend analysis. All counts are zero and rates/averages are
+   * `null` when no attempts were recorded. Rides a `(endpoint_id, attempted_at)`
+   * index so it stays a bounded range scan as the log grows.
+   */
+  statsByEndpoint(endpointId: string, range: UsageRange): Promise<EndpointStats>;
 }
 
 /** One UTC calendar day's delivery-attempt counts for a tenant. */
@@ -195,6 +205,64 @@ export interface AttemptUsageSummary {
   /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
   readonly daily: readonly AttemptUsageDay[];
 }
+
+/** One UTC calendar day's delivery-attempt counts for a single endpoint. */
+export interface EndpointStatsDay {
+  /** The UTC day, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Total attempts against the endpoint on this day. */
+  readonly attempts: number;
+  /** Of those, attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Of those, attempts that failed (non-2xx, transport, or pre-flight). */
+  readonly failed: number;
+}
+
+/**
+ * Delivery-attempt statistics for a single endpoint over a time window —
+ * the data returned by `GET /v1/endpoints/:id/stats`. Totals are zero and
+ * `successRate`/`avgDurationMs` are `null` when no attempts were recorded in
+ * the window.
+ */
+export interface EndpointStats {
+  /** The endpoint the statistics are for. */
+  readonly endpointId: string;
+  /** The query's inclusive lower bound (epoch ms), echoed back. */
+  readonly fromMs: number;
+  /** The query's exclusive upper bound (epoch ms), echoed back. */
+  readonly toMs: number;
+  /** Total attempts against the endpoint over the window. */
+  readonly total: number;
+  /** Of `total`, attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Of `total`, attempts that failed (non-2xx, transport, or pre-flight). */
+  readonly failed: number;
+  /**
+   * `succeeded / total` as a fraction in `[0, 1]`, or `null` when there are no
+   * attempts. Rounded to 4 decimal places for display; use `succeeded`/`total`
+   * for exact computation.
+   */
+  readonly successRate: number | null;
+  /**
+   * Mean attempt duration in ms (wall-clock from send start to final byte),
+   * rounded to the nearest ms, or `null` when there are no attempts. Includes
+   * both succeeded and failed attempts: a long average on failed attempts
+   * typically indicates a slow-to-respond or timing-out receiver.
+   */
+  readonly avgDurationMs: number | null;
+  /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
+  readonly daily: readonly EndpointStatsDay[];
+}
+
+/**
+ * Maximum number of calendar days {@link DeliveryAttemptStore.statsByEndpoint}
+ * will cover in one call. The HTTP handler enforces this so a single request
+ * cannot request an unbounded daily breakdown.
+ */
+export const MAX_STATS_DAYS = 30;
+
+/** Default window for {@link DeliveryAttemptStore.statsByEndpoint}: last 7 days. */
+export const DEFAULT_STATS_DAYS = 7;
 
 /** Default page size for {@link DeliveryAttemptStore.listByMessage}. */
 export const DEFAULT_LIST_ATTEMPTS_LIMIT = 50;

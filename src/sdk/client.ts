@@ -235,6 +235,48 @@ export interface EndpointDeliveryListPage {
   readonly nextCursor: string | null;
 }
 
+/** Options for {@link PosthornClient.getEndpointStats}. */
+export interface GetEndpointStatsParams {
+  /**
+   * Trailing window in calendar days (1–30). Defaults to 7. Larger windows give
+   * a longer trend line at the cost of a slightly heavier query.
+   */
+  readonly days?: number;
+}
+
+/** One UTC calendar day's delivery-attempt counts, as returned by {@link PosthornClient.getEndpointStats}. */
+export interface EndpointStatsDayView {
+  /** UTC day, ISO `YYYY-MM-DD`. */
+  readonly date: string;
+  /** Total delivery attempts on this day. */
+  readonly attempts: number;
+  /** Attempts that reached the receiver with a 2xx. */
+  readonly succeeded: number;
+  /** Attempts that failed (non-2xx, transport, or pre-flight). */
+  readonly failed: number;
+}
+
+/**
+ * Aggregate delivery-attempt statistics for an endpoint, as returned by
+ * {@link PosthornClient.getEndpointStats}.
+ */
+export interface EndpointStatsView {
+  readonly endpointId: string;
+  /** Inclusive start of the window (epoch ms). */
+  readonly fromMs: number;
+  /** Exclusive end of the window (epoch ms). */
+  readonly toMs: number;
+  readonly total: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  /** `succeeded / total` (0–1), or `null` when `total` is 0. */
+  readonly successRate: number | null;
+  /** Mean attempt duration in ms, or `null` when `total` is 0. */
+  readonly avgDurationMs: number | null;
+  /** Per-UTC-day breakdown, oldest day first. */
+  readonly daily: readonly EndpointStatsDayView[];
+}
+
 /** Options for {@link PosthornClient.listDeliveries}. */
 export interface ListDeliveriesParams {
   /** Page size, 1..200. Defaults to the gateway's default (50). */
@@ -843,6 +885,27 @@ export class PosthornClient {
     return this.#transport.request<EndpointDeliveryListPage>(
       "GET",
       `/v1/endpoints/${encodeURIComponent(id)}/deliveries${qs.length > 0 ? `?${qs}` : ""}`,
+    );
+  }
+
+  /**
+   * Get delivery statistics for an endpoint — `GET /v1/endpoints/{id}/stats`.
+   * Returns totals (total, succeeded, failed), the overall success rate and mean
+   * attempt duration, and a per-UTC-day breakdown over a trailing window of up to
+   * 30 calendar days (default 7). Use the `daily` array to spot failure trends; use
+   * `successRate` for a quick health gauge. Another tenant's (or an unknown) endpoint
+   * is `404`.
+   */
+  async getEndpointStats(
+    id: string,
+    params: GetEndpointStatsParams = {},
+  ): Promise<EndpointStatsView> {
+    const query = new URLSearchParams();
+    if (params.days !== undefined) query.set("days", String(params.days));
+    const qs = query.toString();
+    return this.#transport.request<EndpointStatsView>(
+      "GET",
+      `/v1/endpoints/${encodeURIComponent(id)}/stats${qs.length > 0 ? `?${qs}` : ""}`,
     );
   }
 

@@ -358,6 +358,65 @@ export function describeDeliveryAttemptStoreContract(
       });
     });
 
+    describe("statsByEndpoint", () => {
+      const DAY_A = Date.UTC(2024, 2, 10); // 2024-03-10T00:00:00Z
+      const DAY_B = Date.UTC(2024, 2, 11); // 2024-03-11T00:00:00Z
+      const DAY_C = Date.UTC(2024, 2, 12); // 2024-03-12T00:00:00Z
+
+      it("returns zeros and null rates when no attempts exist for the endpoint in range", async () => {
+        const stats = await store.statsByEndpoint("ep_none", { fromMs: DAY_A, toMs: DAY_C });
+        expect(stats).toEqual({
+          endpointId: "ep_none",
+          fromMs: DAY_A,
+          toMs: DAY_C,
+          total: 0,
+          succeeded: 0,
+          failed: 0,
+          successRate: null,
+          avgDurationMs: null,
+          daily: [],
+        });
+      });
+
+      it("counts attempts per day, computes successRate and avgDurationMs, oldest-day-first", async () => {
+        // ep_1: day A → 2 succeeded (dur 100ms each) + 1 failed (dur 50ms)
+        //        day B → 1 failed (dur 200ms)
+        await store.record(attemptInput({ endpointId: "ep_1", outcome: "succeeded", durationMs: 100, attemptedAt: DAY_A + 1 }));
+        await store.record(attemptInput({ endpointId: "ep_1", outcome: "succeeded", durationMs: 100, attemptedAt: DAY_A + 2 }));
+        await store.record(
+          attemptInput({ endpointId: "ep_1", outcome: "failed", responseStatus: 500, error: "x", durationMs: 50, attemptedAt: DAY_A + 3 }),
+        );
+        await store.record(
+          attemptInput({ endpointId: "ep_1", outcome: "failed", responseStatus: 503, error: "y", durationMs: 200, attemptedAt: DAY_B + 1 }),
+        );
+        const stats = await store.statsByEndpoint("ep_1", { fromMs: DAY_A, toMs: DAY_C });
+        expect(stats.total).toBe(4);
+        expect(stats.succeeded).toBe(2);
+        expect(stats.failed).toBe(2);
+        expect(stats.successRate).toBe(0.5);
+        // (100 + 100 + 50 + 200) / 4 = 112.5 → rounds to 113
+        expect(stats.avgDurationMs).toBe(113);
+        expect(stats.daily).toEqual([
+          { date: "2024-03-10", attempts: 3, succeeded: 2, failed: 1 },
+          { date: "2024-03-11", attempts: 1, succeeded: 0, failed: 1 },
+        ]);
+      });
+
+      it("scopes to the endpoint — another endpoint's attempts are never counted", async () => {
+        await store.record(attemptInput({ endpointId: "ep_A", outcome: "succeeded", attemptedAt: DAY_A + 1 }));
+        await store.record(attemptInput({ endpointId: "ep_B", outcome: "failed", responseStatus: 500, error: "x", attemptedAt: DAY_A + 2 }));
+        const range = { fromMs: DAY_A, toMs: DAY_B };
+        const statsA = await store.statsByEndpoint("ep_A", range);
+        expect(statsA.total).toBe(1);
+        expect(statsA.succeeded).toBe(1);
+        expect(statsA.successRate).toBe(1);
+        const statsB = await store.statsByEndpoint("ep_B", range);
+        expect(statsB.total).toBe(1);
+        expect(statsB.succeeded).toBe(0);
+        expect(statsB.successRate).toBe(0);
+      });
+    });
+
     describe("pruneOldAttempts", () => {
       it("deletes attempts older than the cutoff, returns deleted count", async () => {
         await store.record(attemptInput({ messageId: "msg_1", attemptedAt: 1_000 }));

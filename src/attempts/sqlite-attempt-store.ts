@@ -29,6 +29,8 @@ import {
   type DeliveryAttempt,
   type DeliveryAttemptOutcome,
   type DeliveryAttemptStore,
+  type EndpointStats,
+  type EndpointStatsDay,
   type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
@@ -103,6 +105,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
   readonly #selectByMessageAfter: StatementSync;
   readonly #countAll: StatementSync;
   readonly #summarizeByApp: StatementSync;
+  readonly #statsByEndpoint: StatementSync;
 
   constructor(options: SqliteDeliveryAttemptStoreOptions = {}) {
     const { location = ":memory:", generateId = createAttemptId } = options;
@@ -120,6 +123,11 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#db.exec(
       "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_message_paged" +
         " ON delivery_attempts (message_id, attempted_at, id)",
+    );
+    // Backs statsByEndpoint — per-endpoint range scan ordered by day.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_endpoint" +
+        " ON delivery_attempts (endpoint_id, attempted_at)",
     );
 
     this.#insert = this.#db.prepare(
@@ -159,6 +167,19 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
         " SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS bad" +
         " FROM delivery_attempts" +
         " WHERE app_id = ? AND attempted_at >= ? AND attempted_at < ?" +
+        " GROUP BY day ORDER BY day ASC",
+    );
+    // Per-endpoint stats grouped by UTC day: count + outcome split + total duration
+    // for avg computation. `endpoint_id = ?` + range rides idx_delivery_attempts_endpoint.
+    // `SUM(duration_ms)` enables a weighted avg across the whole window without a
+    // second query. The in-memory backend uses the same arithmetic.
+    this.#statsByEndpoint = this.#db.prepare(
+      "SELECT date(attempted_at / 1000, 'unixepoch') AS day, COUNT(*) AS n," +
+        " SUM(CASE WHEN outcome = 'succeeded' THEN 1 ELSE 0 END) AS ok," +
+        " SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS bad," +
+        " SUM(duration_ms) AS total_dur" +
+        " FROM delivery_attempts" +
+        " WHERE endpoint_id = ? AND attempted_at >= ? AND attempted_at < ?" +
         " GROUP BY day ORDER BY day ASC",
     );
   }
@@ -276,6 +297,42 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
       .prepare("DELETE FROM delivery_attempts WHERE attempted_at < ?")
       .run(olderThanMs);
     return Number(result.changes);
+  }
+
+  async statsByEndpoint(endpointId: string, range: UsageRange): Promise<EndpointStats> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const rows = this.#statsByEndpoint.all(endpointId, fromMs, toMs) as unknown as {
+      day: string;
+      n: number;
+      ok: number;
+      bad: number;
+      total_dur: number;
+    }[];
+    let total = 0;
+    let succeeded = 0;
+    let failed = 0;
+    let totalDurationMs = 0;
+    const daily: EndpointStatsDay[] = rows.map((row) => {
+      const attempts = Number(row.n);
+      const ok = Number(row.ok);
+      const bad = Number(row.bad);
+      total += attempts;
+      succeeded += ok;
+      failed += bad;
+      totalDurationMs += Number(row.total_dur);
+      return { date: row.day, attempts, succeeded: ok, failed: bad };
+    });
+    return {
+      endpointId,
+      fromMs,
+      toMs,
+      total,
+      succeeded,
+      failed,
+      successRate: total > 0 ? Math.round((succeeded / total) * 10_000) / 10_000 : null,
+      avgDurationMs: total > 0 ? Math.round(totalDurationMs / total) : null,
+      daily,
+    };
   }
 
   /** Close the underlying database handle. */

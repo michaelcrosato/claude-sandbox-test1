@@ -128,6 +128,10 @@ export {
   type DeliveryAttemptStore,
   type AttemptUsageDay,
   type AttemptUsageSummary,
+  type EndpointStats,
+  type EndpointStatsDay,
+  DEFAULT_STATS_DAYS,
+  MAX_STATS_DAYS,
 } from "./attempts/delivery-attempt.js";
 
 export {

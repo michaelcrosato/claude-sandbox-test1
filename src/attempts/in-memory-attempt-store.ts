@@ -23,6 +23,8 @@ import {
   type AttemptUsageSummary,
   type DeliveryAttempt,
   type DeliveryAttemptStore,
+  type EndpointStats,
+  type EndpointStatsDay,
   type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
@@ -126,5 +128,45 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
       .map(([date, c]) => ({ date, attempts: c.attempts, succeeded: c.succeeded, failed: c.failed }))
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     return { appId, fromMs, toMs, total, succeeded, failed, daily };
+  }
+
+  async statsByEndpoint(endpointId: string, range: UsageRange): Promise<EndpointStats> {
+    const { fromMs, toMs } = resolveUsageRange(range);
+    const byDay = new Map<string, { attempts: number; succeeded: number; failed: number }>();
+    let total = 0;
+    let succeeded = 0;
+    let failed = 0;
+    let totalDurationMs = 0;
+    for (const attempt of this.#attempts.values()) {
+      if (attempt.endpointId !== endpointId) continue;
+      if (attempt.attemptedAt < fromMs || attempt.attemptedAt >= toMs) continue;
+      const day = utcDayKey(attempt.attemptedAt);
+      const bucket = byDay.get(day) ?? { attempts: 0, succeeded: 0, failed: 0 };
+      bucket.attempts += 1;
+      total += 1;
+      totalDurationMs += attempt.durationMs;
+      if (attempt.outcome === "succeeded") {
+        bucket.succeeded += 1;
+        succeeded += 1;
+      } else {
+        bucket.failed += 1;
+        failed += 1;
+      }
+      byDay.set(day, bucket);
+    }
+    const daily: EndpointStatsDay[] = [...byDay.entries()]
+      .map(([date, c]) => ({ date, attempts: c.attempts, succeeded: c.succeeded, failed: c.failed }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    return {
+      endpointId,
+      fromMs,
+      toMs,
+      total,
+      succeeded,
+      failed,
+      successRate: total > 0 ? Math.round((succeeded / total) * 10_000) / 10_000 : null,
+      avgDurationMs: total > 0 ? Math.round(totalDurationMs / total) : null,
+      daily,
+    };
   }
 }
