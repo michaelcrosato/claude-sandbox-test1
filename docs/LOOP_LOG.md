@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 48: `message.dead_lettered` System Event
+
+**Repo truth at start:** clean main @ `6be0675` (iter-47, scheduled delivery). Baseline verified:
+`tsc --noEmit` clean, vitest **1053/1053** (42 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** `message.dead_lettered` system event — the missing
+partner to `endpoint.disabled` (iter-36). When a delivery exhausts all retry attempts and
+permanently moves to `dead_letter`, Posthorn fires a signed Standard Webhooks notification to the
+app's configured `systemWebhookUrl`. Without this, operators had no push signal that a delivery
+permanently failed: they had to poll `GET /v1/deliveries?status=dead_letter` or set up a Prometheus
+alert on the `posthorn_delivery_tasks{status="dead_letter"}` gauge. Every serious incident response
+workflow needs a push event ("page the on-call"), not a pull read model. `endpoint.disabled` fires
+when an endpoint is condemned; `message.dead_lettered` fires when an individual delivery is lost —
+the two system events that bracket the failure life-cycle.
+
+**Architecture (additive, zero blast radius):** the system-event pattern was already established
+(iter-36): `buildSystemEventRequest` signs a JSON payload with Standard Webhooks and posts it via
+an injected transport. The worker already exposes `onDeliveryOutcome` (the endpoint-health seam) as
+a best-effort hook. A **new, separate `onDeadLettered` hook** was added to `DeliveryWorkerOptions`
+(not conflated with `onDeliveryOutcome`) — it is called only when `outcome === "deadLettered"`,
+after `#reportEndpointOutcome`, with the full task identity (`taskId`, `messageId`, `endpointId`,
+`appId`). Best-effort: a thrown/rejected call is routed to `onError` and never changes the delivery
+outcome. The gateway wires it to look up `apps.getSystemWebhookConfig(appId)` and call
+`emitMessageDeadLetteredEvent` if configured — identical delegation pattern to `endpoint.disabled`.
+
+**Built this tick:**
+
+- **`src/system-events/index.ts`** — Added `MessageDeadLetteredPayload` interface (`event:
+  "message.dead_lettered"`, `data: { messageId, endpointId, appId, deadLetteredAt }`). Added
+  `emitMessageDeadLetteredEvent(config, info, opts)` — builds and posts the signed payload via
+  `buildSystemEventRequest` + injected transport, same pattern as `emitEndpointDisabledEvent`.
+  Updated module-level JSDoc to list both system events. `normalizeSecretForSigning` is shared by
+  both emitters (no duplication).
+
+- **`src/worker/delivery-worker.ts`** — Added `readonly onDeadLettered?` to
+  `DeliveryWorkerOptions` (full signature: `taskId, messageId, endpointId, appId, nowMs` → void |
+  Promise<void>); added `#onDeadLettered` private field; assigned in constructor; added
+  `#reportDeadLettered(task, nowMs)` private method (best-effort, mirrors `#reportEndpointOutcome`
+  exactly); wired the call in `#deliver`: `if (outcome === "deadLettered") { await
+  this.#reportDeadLettered(task, nowMs); }` — after `#reportEndpointOutcome` so health tracking
+  always fires first.
+
+- **`src/runtime/gateway.ts`** — Imported `emitMessageDeadLetteredEvent` alongside
+  `emitEndpointDisabledEvent`; added `onDeadLettered` in the `DeliveryWorker` constructor options:
+  skips when `appId === null` (pre-migration tasks), looks up `getSystemWebhookConfig(appId)`, and
+  calls `emitMessageDeadLetteredEvent` when configured — best-effort by the worker's contract.
+
+- **`src/http/openapi.ts`** — Updated `systemWebhookUrl` descriptions on `App`, `NewApp`, and
+  `AppUpdate` schemas to enumerate both fired events (`endpoint.disabled` and
+  `message.dead_lettered`), so API consumers know what to expect from their system webhook receiver
+  without reading source code.
+
+**Tests (+9 over baseline):**
+- **`src/system-events/system-events.test.ts`** (+5, new `describe`): POSTs to the correct URL
+  with POST method; body has `event: "message.dead_lettered"` with correct `messageId`,
+  `endpointId`, `appId`, `deadLetteredAt`; accepts `null` endpointId and appId; Standard Webhooks
+  headers present + signature verifiable end-to-end; transport error propagates (best-effort is
+  caller-decided, not module-level).
+- **`src/worker/delivery-worker.test.ts`** (+4, new `describe`): called with correct
+  `taskId/messageId/endpointId/appId/nowMs` on dead-letter; NOT called on succeeded; NOT called for
+  retryable failed attempt; best-effort — a thrown call is absorbed into `onError`, delivery
+  succeeds.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**1062/1062, 42 files** (+9 over baseline). `npm run build` clean.
+
+**State:** GREEN → committed to main @ iter-48 (`f5317e1`).
+
+---
+
 ## 2026-05-24 — Iteration 47: Scheduled Delivery (sendAt)
 
 **Repo truth at start:** clean main @ `6a5a562` (iter-46 LOOP_LOG commit). The iter-46
