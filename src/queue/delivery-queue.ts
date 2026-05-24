@@ -349,6 +349,13 @@ export interface DeliveryQueue {
    */
   listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage>;
   /**
+   * Delete terminal delivery tasks (`succeeded` or `dead_letter`) whose `updatedAt`
+   * is older than `olderThanMs` (epoch ms). Active tasks (`pending`/`delivering`) are
+   * never deleted. Returns the count of tasks deleted. Called by the data pruner when
+   * `POSTHORN_RETENTION_DAYS` is set.
+   */
+  pruneTerminalTasks(olderThanMs: number): Promise<number>;
+  /**
    * Count tasks grouped by delivery status — the point-in-time backlog/health
    * gauge behind the metrics surface ("how much is queued / in flight / stuck in
    * dead_letter right now?"). Always returns every status key (zero when none),

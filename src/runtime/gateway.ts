@@ -29,6 +29,7 @@ import { SqliteEventTypeStore } from "../event-types/sqlite-event-type-store.js"
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
+import { DataPruner } from "../pruner/data-pruner.js";
 import { createHttpServer } from "../http/server.js";
 import { createDashboardHandler } from "../dashboard/handler.js";
 import { InMemorySessionStore } from "../dashboard/sessions.js";
@@ -86,6 +87,12 @@ export interface Gateway {
    * Started/halted alongside the worker.
    */
   readonly dispatcher: FanoutDispatcher;
+  /**
+   * The data-retention pruner, or `null` when `POSTHORN_RETENTION_DAYS` is `0`
+   * (the default — pruning disabled). When non-null, sweeps the stores hourly
+   * and deletes data older than the retention window.
+   */
+  readonly pruner: DataPruner | null;
   /**
    * Operational metrics: counters fed by the worker + ingest, served as Prometheus
    * exposition at the unauthenticated `GET /metrics`.
@@ -244,6 +251,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     idlePollMs: config.fanout.idlePollMs,
   });
 
+  const pruner =
+    config.retentionDays > 0
+      ? new DataPruner({ attempts, queue, messages, retentionDays: config.retentionDays })
+      : null;
+
   // The admin dashboard reuses POSTHORN_ADMIN_TOKEN as its login password, so it is
   // also disabled by default (no token = no dashboard). Sessions are ephemeral.
   const dashboardHandler =
@@ -302,6 +314,7 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   let runPromise: Promise<void> | null = null;
   let dispatcherRunPromise: Promise<void> | null = null;
+  let prunerRunPromise: Promise<void> | null = null;
   let started = false;
   let stopped = false;
 
@@ -324,6 +337,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     // normal operation.
     runPromise = worker.run();
     dispatcherRunPromise = dispatcher.run();
+    if (pruner !== null) prunerRunPromise = pruner.run();
 
     const address = httpServer.address();
     if (address === null || typeof address === "string") {
@@ -340,10 +354,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     stopped = true;
     worker.stop();
     dispatcher.stop();
+    pruner?.stop();
     // run() swallows errors via its onError path; guard anyway so a stray
     // rejection never masks the rest of shutdown.
     await Promise.all(
-      [runPromise, dispatcherRunPromise].map((p) =>
+      [runPromise, dispatcherRunPromise, prunerRunPromise].map((p) =>
         p === null ? Promise.resolve() : p.catch(() => undefined),
       ),
     );
@@ -371,6 +386,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     eventTypes,
     worker,
     dispatcher,
+    pruner,
     metrics,
     httpServer,
     start,

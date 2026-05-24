@@ -163,6 +163,14 @@ export interface MessageStore {
    */
   listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage>;
   /**
+   * Delete messages that are older than `olderThanMs` (epoch ms) and have already
+   * been fanned out (outbox marker cleared), plus their idempotency-key bindings.
+   * Messages with a pending fan-out are never deleted. Returns the count of messages
+   * deleted. Called by the data pruner when `POSTHORN_RETENTION_DAYS` is set; safe to
+   * call on a live gateway (WAL mode in the SQLite backend makes it non-blocking).
+   */
+  pruneMessages(olderThanMs: number): Promise<number>;
+  /**
    * Summarize a tenant's message volume over the half-open epoch-ms range
    * `[range.fromMs, range.toMs)`, broken down by **UTC calendar day** — the data a
    * hosted control plane meters and bills usage on (this market prices per message;

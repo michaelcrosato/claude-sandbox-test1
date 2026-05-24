@@ -790,6 +790,49 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("pruneTerminalTasks", () => {
+      it("deletes terminal tasks older than the cutoff, returns deleted count", async () => {
+        // Drive one task to succeeded and another to dead_letter; both at the base clock.
+        const tOk = await queue.enqueue({ messageId: "m-ok" });
+        const [claimedOk] = await queue.claimDue({ nowMs: clock.now() });
+        await queue.complete(claimedOk!.id, claimedOk!.leaseToken!);
+
+        const tDead = await queue.enqueue({ messageId: "m-dead" });
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "x", nowMs: clock.now() });
+        }
+        expect((await queue.get(tDead.id))?.status).toBe("dead_letter");
+
+        // Cutoff is strictly after both tasks' updatedAt.
+        clock.advance(1);
+        const cutoff = clock.now();
+
+        const deleted = await queue.pruneTerminalTasks(cutoff);
+        expect(deleted).toBe(2);
+        expect(await queue.get(tOk.id)).toBeNull();
+        expect(await queue.get(tDead.id)).toBeNull();
+      });
+
+      it("never deletes pending or delivering tasks regardless of age", async () => {
+        const pending = await queue.enqueue({ messageId: "m-pending" });
+        await queue.enqueue({ messageId: "m-delivering" });
+        const [delivering] = await queue.claimDue({ nowMs: clock.now() });
+
+        // Far-future cutoff — active tasks must survive.
+        clock.advance(100_000);
+        const deleted = await queue.pruneTerminalTasks(clock.now());
+        expect(deleted).toBe(0);
+        expect(await queue.get(pending.id)).not.toBeNull();
+        expect(await queue.get(delivering!.id)).not.toBeNull();
+      });
+
+      it("returns 0 when there is nothing to prune", async () => {
+        expect(await queue.pruneTerminalTasks(clock.now())).toBe(0);
+      });
+    });
+
     describe("full lifecycle", () => {
       it("enqueue → claim → fail → reclaim → complete, counting attempts", async () => {
         const enq = await queue.enqueue({ messageId: "m" });

@@ -776,5 +776,36 @@ export function describeMessageStoreContract(
         ).rejects.toThrow(RangeError);
       });
     });
+
+    describe("pruneMessages — data retention", () => {
+      it("deletes fanned-out messages older than the cutoff, returns deleted count", async () => {
+        const r = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        await store.markFannedOut(r.message.id);
+        // Cutoff exactly at createdAt: message is NOT deleted (< is strict).
+        expect(await store.pruneMessages(r.message.createdAt)).toBe(0);
+        expect(await store.get(r.message.id)).not.toBeNull();
+        // Cutoff one ms later: message IS deleted.
+        expect(await store.pruneMessages(r.message.createdAt + 1)).toBe(1);
+        expect(await store.get(r.message.id)).toBeNull();
+      });
+
+      it("never deletes a message whose fan-out is still pending", async () => {
+        const r = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        // fanned_out_at IS NULL — must not be pruned regardless of age.
+        expect(await store.pruneMessages(r.message.createdAt + 1_000_000)).toBe(0);
+        expect(await store.get(r.message.id)).not.toBeNull();
+      });
+
+      it("also prunes stale idempotency keys so the dedup binding can be reused after retention", async () => {
+        const input = { appId: APP, eventType: "e", payload: "{}", idempotencyKey: "k" };
+        const r = await store.create(input);
+        await store.markFannedOut(r.message.id);
+        await store.pruneMessages(r.message.createdAt + 1);
+        // After pruning, a new create with the same key should produce a fresh message.
+        const r2 = await store.create(input);
+        expect(r2.deduplicated).toBe(false);
+        expect(r2.message.id).not.toBe(r.message.id);
+      });
+    });
   });
 }

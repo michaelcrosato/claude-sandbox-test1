@@ -238,6 +238,20 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     return { deliveries, nextCursor };
   }
 
+  async pruneTerminalTasks(olderThanMs: number): Promise<number> {
+    let deleted = 0;
+    for (const [id, task] of this.#tasks) {
+      if (
+        (task.status === "succeeded" || task.status === "dead_letter") &&
+        task.updatedAt < olderThanMs
+      ) {
+        this.#tasks.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async countByStatus(): Promise<DeliveryCountsByStatus> {
     const counts = zeroDeliveryCounts();
     for (const task of this.#tasks.values()) {

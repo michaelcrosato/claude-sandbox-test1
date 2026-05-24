@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 49: Data Retention / Automatic Pruning (`POSTHORN_RETENTION_DAYS`)
+
+**Repo truth at start:** clean main @ `e120fb5` (iter-48, `message.dead_lettered`). Baseline verified:
+`tsc --noEmit` clean, vitest **1062/1062** (42 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Data retention — automatic pruning of old delivery
+attempts, terminal delivery tasks, and messages via a new `POSTHORN_RETENTION_DAYS` environment
+variable. Without this, all three stores grow unbounded with deployment volume; operators managing
+long-running Posthorn instances have no built-in way to cap disk usage. The feature mirrors industry
+defaults (Svix defaults 90 days), provides an opt-in `0`-disabled default (safe for existing
+deployments), and closes the "eventually runs out of disk" gap that blocks production viability.
+
+**Architecture (additive, zero blast radius):**
+
+Three-phase pruning order (safe, no cross-store FK issues since queue and messages live in separate
+SQLite files): (1) `pruneOldAttempts`, (2) `pruneTerminalTasks`, (3) `pruneMessages`. Attempting to
+delete messages with pending fan-out is safe because `pruneMessages` guards on `fanned_out_at IS NOT
+NULL` (SQLite) / `!#pendingFanout.has(id)` (in-memory). Active tasks (pending/delivering) are never
+touched regardless of age.
+
+**`DataPruner`** is the structural twin of `FanoutDispatcher`: `pruneOnce()` is the deterministic
+unit, `run()` / `stop()` is the continuous hourly sweep loop with injectable clock, sleep, and
+`onError`. The gateway wires it when `retentionDays > 0` and exposes it as `pruner: DataPruner |
+null` on the `Gateway` interface.
+
+**Built this tick:**
+
+- **`src/attempts/delivery-attempt.ts`** — Added `pruneOldAttempts(olderThanMs): Promise<number>` to
+  `DeliveryAttemptStore` interface.
+- **`src/queue/delivery-queue.ts`** — Added `pruneTerminalTasks(olderThanMs): Promise<number>` to
+  `DeliveryQueue` interface.
+- **`src/storage/message-store.ts`** — Added `pruneMessages(olderThanMs): Promise<number>` to
+  `MessageStore` interface.
+- **`src/attempts/in-memory-attempt-store.ts`** — `pruneOldAttempts` iterates `#attempts`, deletes
+  entries where `attemptedAt < olderThanMs`.
+- **`src/queue/in-memory-queue.ts`** — `pruneTerminalTasks` iterates `#tasks`, deletes
+  `succeeded`/`dead_letter` entries where `updatedAt < olderThanMs`.
+- **`src/storage/in-memory-store.ts`** — `pruneMessages` prunes stale idempotency keys then deletes
+  messages where `createdAt < olderThanMs && !#pendingFanout.has(id)`.
+- **`src/attempts/sqlite-attempt-store.ts`** — `pruneOldAttempts` via `DELETE WHERE attempted_at < ?`.
+- **`src/queue/sqlite-queue.ts`** — `pruneTerminalTasks` via `DELETE WHERE updated_at < ? AND status IN
+  ('succeeded', 'dead_letter')`.
+- **`src/storage/sqlite-store.ts`** — `pruneMessages` via two-step `DELETE` (idempotency keys, then
+  messages where `fanned_out_at IS NOT NULL`). Fixed `result.changes` casts to `Number()` across all
+  three SQLite prune methods (`number | bigint` → `number`).
+- **`src/storage/conformance.ts`** — Added `pruneMessages` describe block (3 test cases × 2 backends).
+- **`src/queue/conformance.ts`** — Added `pruneTerminalTasks` describe block (3 test cases × 2 backends).
+- **`src/attempts/conformance.ts`** — Added `pruneOldAttempts` describe block (3 test cases × 2 backends).
+- **`src/pruner/data-pruner.ts`** *(new)* — `DataPruner` class, `PruneResult` interface,
+  `DataPrunerOptions` interface, `DEFAULT_PRUNER_SWEEP_INTERVAL_MS = 3_600_000`. `pruneOnce()` calls
+  all three store-level prune methods in safe order and returns a tally. `run()`/`stop()` continuous
+  loop with injectable sleep and `onError`.
+- **`src/pruner/data-pruner.test.ts`** *(new)* — Unit tests: constructor validation, `pruneOnce`
+  cutoff math and call order, `run`/`stop` lifecycle, error routing.
+- **`src/runtime/config.ts`** — Added `retentionDays: number` to `GatewayConfig`. Parsed
+  `POSTHORN_RETENTION_DAYS` (default `0`, min `0`) via existing `readInt` helper.
+- **`src/runtime/config.test.ts`** — Added `POSTHORN_RETENTION_DAYS` describe block (3 tests). Updated
+  default snapshot to include `retentionDays: 0`.
+- **`src/runtime/gateway.ts`** — Imported `DataPruner`. Added `pruner: DataPruner | null` to `Gateway`
+  interface. Instantiated when `config.retentionDays > 0`. Wired `pruner.run()` into `start()` and
+  `pruner.stop()` + await into `stop()`.
+- **`src/worker/delivery-worker.test.ts`** — Added `pruneTerminalTasks: async () => 0` to the two
+  hand-rolled `DeliveryQueue` stubs (lines 505 and 1202) to satisfy the updated interface.
+- **`src/index.ts`** — Exported `DataPruner`, `DEFAULT_PRUNER_SWEEP_INTERVAL_MS`, `DataPrunerOptions`,
+  `PruneResult`.
+
+**Validation:** `tsc --noEmit` clean, vitest **1093/1093** (43 files), `npm run build` clean. Main green.
+
+---
+
 ## 2026-05-24 — Iteration 48: `message.dead_lettered` System Event
 
 **Repo truth at start:** clean main @ `6be0675` (iter-47, scheduled delivery). Baseline verified:

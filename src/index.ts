@@ -213,6 +213,13 @@ export {
 } from "./fanout/fanout-dispatcher.js";
 
 export {
+  DataPruner,
+  DEFAULT_PRUNER_SWEEP_INTERVAL_MS,
+  type DataPrunerOptions,
+  type PruneResult,
+} from "./pruner/data-pruner.js";
+
+export {
   UnknownAppError,
   createAppId,
   createApiKeyId,

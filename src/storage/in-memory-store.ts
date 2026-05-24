@@ -225,6 +225,28 @@ export class InMemoryMessageStore implements MessageStore {
     return { appId, fromMs, toMs, total, daily };
   }
 
+  async pruneMessages(olderThanMs: number): Promise<number> {
+    // First prune stale idempotency bindings so there are no orphaned entries after
+    // message deletion.
+    for (const [appId, perApp] of this.#idempotency) {
+      for (const [key, entry] of perApp) {
+        if (entry.storedAt < olderThanMs) {
+          perApp.delete(key);
+        }
+      }
+      if (perApp.size === 0) this.#idempotency.delete(appId);
+    }
+    // Delete messages that predate the cutoff and whose fan-out is done.
+    let deleted = 0;
+    for (const [id, message] of this.#messages) {
+      if (message.createdAt < olderThanMs && !this.#pendingFanout.has(id)) {
+        this.#messages.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async getByIdempotencyKey(
     appId: string,
     key: string,

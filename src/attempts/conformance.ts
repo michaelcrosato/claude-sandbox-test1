@@ -357,5 +357,30 @@ export function describeDeliveryAttemptStoreContract(
         ).rejects.toThrow(RangeError);
       });
     });
+
+    describe("pruneOldAttempts", () => {
+      it("deletes attempts older than the cutoff, returns deleted count", async () => {
+        await store.record(attemptInput({ messageId: "msg_1", attemptedAt: 1_000 }));
+        await store.record(attemptInput({ messageId: "msg_1", attemptedAt: 2_000 }));
+        const recent = await store.record(attemptInput({ messageId: "msg_1", attemptedAt: 5_000 }));
+
+        const deleted = await store.pruneOldAttempts(4_000);
+        expect(deleted).toBe(2);
+
+        const page = await store.listByMessage("msg_1");
+        expect(page.data.map((a) => a.id)).toEqual([recent.id]);
+      });
+
+      it("honours the strict < boundary: an attempt exactly at the cutoff is kept", async () => {
+        const boundary = await store.record(attemptInput({ messageId: "msg_1", attemptedAt: 3_000 }));
+        expect(await store.pruneOldAttempts(3_000)).toBe(0);
+        const page = await store.listByMessage("msg_1");
+        expect(page.data.map((a) => a.id)).toEqual([boundary.id]);
+      });
+
+      it("returns 0 when there is nothing to prune", async () => {
+        expect(await store.pruneOldAttempts(1_700_000_000_000)).toBe(0);
+      });
+    });
   });
 }

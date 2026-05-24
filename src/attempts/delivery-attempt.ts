@@ -130,6 +130,14 @@ export interface DeliveryAttemptStore {
    */
   listByMessage(messageId: string, options?: ListAttemptsOptions): Promise<AttemptPage>;
   /**
+   * Delete delivery attempts whose `attemptedAt` is older than `olderThanMs` (epoch
+   * ms). Returns the count of attempts deleted. Called by the data pruner when
+   * `POSTHORN_RETENTION_DAYS` is set; the audit log is append-only during normal
+   * operation, but pruning old rows is expected and safe (WAL mode in the SQLite
+   * backend makes it non-blocking).
+   */
+  pruneOldAttempts(olderThanMs: number): Promise<number>;
+  /**
    * Summarize a tenant's **delivery-attempt usage** over the half-open epoch-ms range
    * `[range.fromMs, range.toMs)`, broken down by **UTC calendar day** — the *operations*
    * read model a hosted control plane bills on, the companion to

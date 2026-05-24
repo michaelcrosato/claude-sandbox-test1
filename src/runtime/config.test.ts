@@ -41,6 +41,7 @@ describe("loadConfig", () => {
         idlePollMs: DEFAULT_IDLE_POLL_MS,
         visibilityTimeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
       },
+      retentionDays: 0,
       fanout: {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
@@ -183,6 +184,24 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_ADMIN_TOKEN: tooShort })).toThrow(
         /POSTHORN_ADMIN_TOKEN must be at least/,
       );
+    });
+  });
+
+  describe("POSTHORN_RETENTION_DAYS", () => {
+    it("defaults to 0 (pruning disabled) when unset", () => {
+      expect(loadConfig({}).retentionDays).toBe(0);
+    });
+
+    it("accepts 0 (explicitly disabling pruning) and valid positive values", () => {
+      expect(loadConfig({ POSTHORN_RETENTION_DAYS: "0" }).retentionDays).toBe(0);
+      expect(loadConfig({ POSTHORN_RETENTION_DAYS: "30" }).retentionDays).toBe(30);
+      expect(loadConfig({ POSTHORN_RETENTION_DAYS: "1" }).retentionDays).toBe(1);
+    });
+
+    it("rejects a negative or non-integer value", () => {
+      expect(() => loadConfig({ POSTHORN_RETENTION_DAYS: "-1" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_RETENTION_DAYS: "1.5" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_RETENTION_DAYS: "abc" })).toThrow(ConfigError);
     });
   });
 

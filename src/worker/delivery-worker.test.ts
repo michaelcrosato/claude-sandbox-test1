@@ -516,6 +516,7 @@ describe("DeliveryWorker.processOnce", () => {
       listByMessage: async () => [claimedTask],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
       listByApp: async () => ({ deliveries: [], nextCursor: null }),
+      pruneTerminalTasks: async () => 0,
       countByStatus: async () => ({
         pending: 0,
         delivering: 1,
@@ -1218,6 +1219,7 @@ describe("DeliveryWorker.run", () => {
       listByMessage: async () => [],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
       listByApp: async () => ({ deliveries: [], nextCursor: null }),
+      pruneTerminalTasks: async () => 0,
       countByStatus: async () => ({
         pending: 0,
         delivering: 0,

@@ -271,6 +271,13 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     return { appId, fromMs, toMs, total, succeeded, failed, daily };
   }
 
+  async pruneOldAttempts(olderThanMs: number): Promise<number> {
+    const result = this.#db
+      .prepare("DELETE FROM delivery_attempts WHERE attempted_at < ?")
+      .run(olderThanMs);
+    return Number(result.changes);
+  }
+
   /** Close the underlying database handle. */
   close(): void {
     this.#db.close();

@@ -83,6 +83,17 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
     };
   }
 
+  async pruneOldAttempts(olderThanMs: number): Promise<number> {
+    let deleted = 0;
+    for (const [id, attempt] of this.#attempts) {
+      if (attempt.attemptedAt < olderThanMs) {
+        this.#attempts.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async summarizeAttemptsByApp(
     appId: string,
     range: UsageRange,

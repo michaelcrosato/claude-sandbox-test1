@@ -103,6 +103,13 @@ export interface GatewayConfig {
    * See {@link DEFAULT_AUTO_DISABLE_AFTER_MS}.
    */
   readonly endpointAutoDisableAfterMs: number;
+  /**
+   * Data-retention window in days. Data older than this many days is deleted
+   * by the {@link DataPruner} on its hourly sweep. `0` disables pruning (the
+   * default — stores grow unbounded). When non-zero, must be >= 1.
+   * See `POSTHORN_RETENTION_DAYS`.
+   */
+  readonly retentionDays: number;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -207,7 +214,8 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
  * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
- * `POSTHORN_FANOUT_IDLE_POLL_MS`.
+ * `POSTHORN_FANOUT_IDLE_POLL_MS`,
+ * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -253,6 +261,7 @@ export function loadConfig(env: Env): GatewayConfig {
         { min: 1 },
       ),
     }),
+    retentionDays: readInt(env, "POSTHORN_RETENTION_DAYS", 0, { min: 0 }),
     fanout: Object.freeze<FanoutConfig>({
       graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
         min: 0,

@@ -468,6 +468,15 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     return { deliveries, nextCursor };
   }
 
+  async pruneTerminalTasks(olderThanMs: number): Promise<number> {
+    const result = this.#db
+      .prepare(
+        "DELETE FROM delivery_tasks WHERE updated_at < ? AND status IN ('succeeded', 'dead_letter')",
+      )
+      .run(olderThanMs);
+    return Number(result.changes);
+  }
+
   async countByStatus(): Promise<DeliveryCountsByStatus> {
     const counts = zeroDeliveryCounts();
     const rows = this.#countByStatus.all() as unknown as {

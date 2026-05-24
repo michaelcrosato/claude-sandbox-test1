@@ -435,6 +435,17 @@ export class SqliteMessageStore implements MessageStore {
     return { appId, fromMs, toMs, total, daily };
   }
 
+  async pruneMessages(olderThanMs: number): Promise<number> {
+    // Two-step: prune stale idempotency bindings first (they reference messages),
+    // then prune old fanned-out messages. Messages still owing a fan-out are left
+    // untouched (fanned_out_at IS NOT NULL guard).
+    this.#db.prepare("DELETE FROM idempotency_keys WHERE stored_at < ?").run(olderThanMs);
+    const result = this.#db
+      .prepare("DELETE FROM messages WHERE created_at < ? AND fanned_out_at IS NOT NULL")
+      .run(olderThanMs);
+    return Number(result.changes);
+  }
+
   /** Close the underlying database handle. Idempotent-safe to call once. */
   close(): void {
     this.#db.close();
