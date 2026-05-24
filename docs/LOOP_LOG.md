@@ -4,6 +4,96 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 53: Attempt Request/Response Body Capture
+
+**Repo truth at start:** clean main @ `f86671b` (iter-52, endpoint delivery statistics). Baseline verified:
+`tsc --noEmit` clean, vitest **1133/1133** (44 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Attempt request/response body capture — `requestBody`
+and `responseBody` on every `DeliveryAttempt`. The `fetchTransport` had a comment literally marking
+this as "a later add-on": it already drained the response body and threw the bytes away. The attempt
+audit log (iter-22) records outcome, status, error, and latency, but without the actual payloads it
+cannot answer the most common debugging question: "what exactly was sent, and what did the receiver
+say?". Operators had to re-send the message (side-effecting) or cross-reference the message store
+(two API calls, and impossible for non-2xx responses where the receiver's error body is lost entirely).
+Every incumbent (Svix, Hookdeck, Convoy) captures both bodies in the attempt view as a first-class
+feature; this closes that observability gap while keeping the per-row footprint bounded.
+
+**Architecture (additive, zero blast radius):**
+
+Both fields are `string | null`, truncated at `MAX_CAPTURED_BODY_BYTES = 4096` characters before
+recording — standard for this use case (Svix uses 4 KB too). `null` signals "not captured" (pre-flight
+failure or transport error before the request/response existed), not "empty body" (which is `""`).
+Truncation happens in two places, uniformly:
+
+1. **`requestBody`** in `DeliveryWorker.#deliver` — after `buildSignedRequest` builds the signed
+   payload and before `#send` is called. Captures exactly what was signed and sent; `null` when the
+   endpoint could not be resolved or the message had vanished (no send happened).
+
+2. **`responseBody`** in two layers: `fetchTransport` captures `await response.text()` (already
+   drained — only the assignment changed) and truncates; `DeliveryWorker.#deliver` also truncates
+   whatever the transport returns, so custom transports in tests or future integrations are also
+   bounded. `null` when no response arrived (transport throw or pre-flight failure).
+
+Both are optional fields (`?:`) on `HttpDeliveryResponse` (exactOptionalPropertyTypes-safe) and
+optional on `NewDeliveryAttempt` (backwards-compatible: callers that don't supply them get `null`).
+The `NormalizedNewAttempt` / `DeliveryAttempt` interfaces carry them as required `string | null`
+(always present, never absent, from the store's perspective).
+
+**SQLite migration — additive only:** New columns `request_body TEXT` and `response_body TEXT`
+added to the SCHEMA for fresh databases. `#migrateBodyColumns()` (mirroring `#migrateAppIdColumn`)
+checks `PRAGMA table_info` and ALTERs on existing databases — existing rows keep `NULL`, which is
+honest: the data was never captured for those attempts.
+
+**Built this tick:**
+
+- **`src/attempts/delivery-attempt.ts`** — `MAX_CAPTURED_BODY_BYTES = 4096` (exported); `requestBody:
+  string | null` and `responseBody: string | null` added to `DeliveryAttempt`, `NormalizedNewAttempt`;
+  `requestBody?: string | null` and `responseBody?: string | null` added to `NewDeliveryAttempt`;
+  `normalizeNewAttempt` validates and defaults both to null; `NormalizedNewAttempt` includes both.
+- **`src/attempts/sqlite-attempt-store.ts`** — `request_body TEXT` and `response_body TEXT` in SCHEMA;
+  `AttemptRow` updated; `rowToAttempt` maps both; `#insert` now 13 columns; `record()` passes both;
+  `#migrateBodyColumns()` method added; called in constructor after `#migrateAppIdColumn`.
+- **`src/worker/delivery-worker.ts`** — `HttpDeliveryResponse.responseBody?: string` added; `fetchTransport`
+  captures `response.text()` (was already draining, now stores), truncates, spreads into return value;
+  import changed from `type` to value import for `MAX_CAPTURED_BODY_BYTES`; `#deliver` captures
+  `requestBody` from `buildSignedRequest` result and `responseBody` from the response, both truncated;
+  `#recordDeliveryAttempt` detail param and `record` call extended with both fields.
+- **`src/http/openapi.ts`** — `MAX_CAPTURED_BODY_BYTES` imported; `DeliveryAttempt` schema: `requestBody`
+  and `responseBody` added to `required` and `properties` with `maxLength` and descriptions.
+- **`src/http/api.ts`** — `attemptView` includes `requestBody` and `responseBody`.
+- **`src/sdk/client.ts`** — `DeliveryAttemptView` includes `requestBody: string | null` and
+  `responseBody: string | null`.
+- **`src/index.ts`** — exports `MAX_CAPTURED_BODY_BYTES`.
+- **`src/attempts/conformance.ts`** — `MAX_CAPTURED_BODY_BYTES` imported; 3 new `describe("record")`
+  test cases: bodies stored and echoed; defaults to null; stores up to limit without truncation (the
+  store stores whatever it's given; the worker truncates before calling store).
+- **`src/attempts/delivery-attempt.test.ts`** — updated `normalizeNewAttempt` snapshot to include
+  `requestBody: null, responseBody: null`.
+- **`src/attempts/sqlite-attempt-store.test.ts`** — updated durability `toEqual` snapshot likewise.
+- **`src/worker/delivery-worker.test.ts`** — `MAX_CAPTURED_BODY_BYTES` imported; new `describe`
+  "body capture" block (6 tests): requestBody = message payload on success; responseBody captured
+  from transport; null requestBody + responseBody on pre-flight failure; null responseBody + non-null
+  requestBody on transport error (request was built before throw); requestBody truncated at
+  MAX_CAPTURED_BODY_BYTES; responseBody truncated at MAX_CAPTURED_BODY_BYTES.
+- **`src/sdk/client.test.ts`** — new transport-level test: `listMessageAttempts` deserializes
+  `requestBody` and `responseBody` from the server payload.
+
+**Tests (+13 over baseline):**
+- `src/attempts/conformance.ts` (+3 × 2 backends = 6): bodies stored/echoed; both null when omitted;
+  limit-sized body stored intact.
+- `src/worker/delivery-worker.test.ts` (+6): request body captured; response body captured; pre-flight
+  null; transport-error null responseBody; requestBody truncation; responseBody truncation.
+- `src/sdk/client.test.ts` (+1): SDK view round-trips both body fields.
+
+**Validation:** `tsc --noEmit` clean. vitest **1146/1146** (44 files, +13). `npm run build` clean.
+Two pre-existing `toEqual` snapshot tests updated to include the new fields.
+
+**State:** GREEN → committed to main @ `4401a3d` (iter-53). Next tick: assess next highest-leverage gap.
+
+---
+
 ## 2026-05-24 — Iteration 52: Endpoint Delivery Statistics (`GET /v1/endpoints/:id/stats`)
 
 **Repo truth at start:** clean main @ `43bd2ab` (iter-51, Retry-After header support). Baseline verified:
