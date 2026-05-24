@@ -725,6 +725,17 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     scoped to the same event type so pagination is stable across a filtered result. HTTP layer
     parses `?eventType=`; SDK `ListMessagesParams` gains `eventType?: string | null`;
     `listMessages` appends it to the query string when set.
+  - **`GET /v1/deliveries?status=` ✅ (iter 40):** app-wide delivery listing — the cross-cutting
+    operational view ("show me all my `dead_letter` deliveries across all endpoints"). `DeliveryTask`
+    and `EnqueueInput` gain `appId: string | null` (denormalized at write time, same pattern as
+    `DeliveryAttempt.appId`); `DeliveryQueue` gains `listByApp(appId, options?)` with an optional
+    `status` filter; SQLite adds `app_id` column + `#migrateAppIdColumn()` idempotent migration + two
+    partial indexes (`(app_id, created_at, id)` and `(app_id, status, created_at, id)`). HTTP route
+    `GET /v1/deliveries` parses `?limit=&cursor=&status=` (validates status enum → 400); response
+    view reuses `endpointDeliveryView` (carries both `messageId` and `endpointId`). OpenAPI gains
+    `AppDelivery`/`AppDeliveryList` schemas (drift test forced both). SDK gains `client.listDeliveries
+    ({limit?,cursor?,status?})` → `AppDeliveryListPage`. One shared conformance suite (8 cases × 2
+    backends = 16 new tests).
   - **`GET /v1/endpoints/:id/deliveries` ✅ (iter 39):** endpoint-centric delivery history — the
     complement to `GET /v1/messages/:id` (which shows per-message delivery status per endpoint).
     `DeliveryQueue` gains `listByEndpoint(endpointId, options?)` returning a keyset-paginated

@@ -4,6 +4,110 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 40: `GET /v1/deliveries?status=`
+
+**Repo truth at start:** clean main @ `cbdabef` (iter-39, `GET /v1/endpoints/:id/deliveries`).
+Baseline verified: `tsc --noEmit` clean, vitest **891/891** (38 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Add `GET /v1/deliveries?status=` — the app-wide
+delivery listing view. Reasoning: iter-39 added the endpoint-centric history ("everything this
+endpoint received") and `GET /v1/messages/:id` gives the per-message status per endpoint. But the
+cross-cutting operational view was still missing: "show me *all* my failed/dead-lettered webhooks
+across all endpoints" — the #1 support-ticket-deflecting dashboard panel for incumbents (Svix
+"portal deliveries", Convoy dashboard, Hookdeck event log). It also closes the monitoring gap:
+producers whose endpoints churn through `dead_letter` have no single query to surface that state.
+Self-contained in the established queue → HTTP → SDK chain, follows the iter-39 pattern exactly
+(partial index, keyset cursor, dual-backend + one-shared-conformance-suite), and adds an optional
+`?status=` filter so an operator can query specifically for `dead_letter` — the "what do I need to
+fix?" view.
+
+**Built this tick:**
+
+- **`src/queue/delivery-queue.ts`** — `DeliveryTask` and `EnqueueInput` gain `appId: string | null`
+  (denormalized at write time, same pattern as `DeliveryAttempt.appId` from iter-29); new
+  `ListByAppOptions` (extends `ListDeliveriesOptions`, adds optional `status?: DeliveryStatus | null`
+  filter); `DeliveryQueue` interface gains `listByApp(appId, options?)`; `NormalizedEnqueue` gains
+  `appId`; `normalizeEnqueueInput` threads it through. `ListByAppOptions` is re-exported from
+  `src/index.ts`.
+
+- **`src/queue/in-memory-queue.ts`** — `enqueue` stores `appId` on the task; `listByApp` filters by
+  `appId === appId`, optionally by `status`, sorts newest-first `(createdAt DESC, id DESC)`, applies
+  cursor, returns `DeliveryPage` with `hasMore`-based `nextCursor`. Cross-app isolation is natural
+  (the filter ensures it).
+
+- **`src/queue/sqlite-queue.ts`** — `app_id TEXT` column added to SCHEMA for fresh DBs; idempotent
+  `#migrateAppIdColumn()` called post-SCHEMA (checks `PRAGMA table_info`, runs `ALTER TABLE` if
+  missing, always creates indexes afterwards — same pattern as `sqlite-attempt-store.ts`). Two partial
+  indexes: `idx_delivery_tasks_app ON delivery_tasks (app_id, created_at, id) WHERE app_id IS NOT NULL`
+  (unfiltered listing) and `idx_delivery_tasks_app_status ON delivery_tasks (app_id, status, created_at,
+  id) WHERE app_id IS NOT NULL` (status-filtered listing). Four prepared statements: `selectByApp`,
+  `selectByAppAfter`, `selectByAppFiltered`, `selectByAppFilteredAfter` — each fetches `limit+1` to
+  detect `hasMore`. INSERT updated to include `app_id`.
+
+- **`src/fanout/fanout.ts`** — `queue.enqueue` call now passes `appId: message.appId` so every
+  fan-out task carries the tenant.
+
+- **`src/queue/conformance.ts`** — 8 new shared conformance cases (× 2 backends = 16 new tests):
+  empty page for unknown app; newest-first ordering + cross-app isolation; status filter (only
+  `dead_letter` visible, pending empty); state-after-transition; cursor pagination (first + second
+  page); status-filtered cursor pagination; invalid-limit `RangeError`; malformed-cursor `TypeError`;
+  exact-multiple page boundary (`nextCursor: null` + empty continuation).
+
+- **`src/http/api.ts`** — `"GET /v1/deliveries"` added to the compile-checked `API_ROUTE_KEYS`
+  (compile error if no handler). `parseListByAppParams` parses `?limit=`, `?cursor=`, and `?status=`
+  (validates against the four valid `DeliveryStatus` values → 400 for unknown). `getAppDeliveries`
+  handler calls `deps.queue.listByApp(ctx.app.id, ...)` and maps through `endpointDeliveryView`
+  (reused from iter-39 — already carries both `messageId` and `endpointId`, which are both needed in
+  the app-wide context).
+
+- **`src/http/openapi.ts`** — `"/v1/deliveries"` path + `listAppDeliveries` GET operation with
+  `limit`/`cursor`/`status` query params; `AppDelivery` schema (`allOf: [ref("Delivery"),
+  {required:["messageId","endpointId"], properties:{messageId:string,endpointId:string}}]`);
+  `AppDeliveryList` schema (`data: AppDelivery[], nextCursor: string | null`). The bidirectional
+  drift test *forced* all three.
+
+- **`src/sdk/client.ts`** — `ListDeliveriesParams` (`limit?`, `cursor?`, `status?: DeliveryStatus |
+  null`), `AppDeliveryView` (adds both `messageId` and `endpointId` to the base view), and
+  `AppDeliveryListPage`; `client.listDeliveries(params?)` builds the query string and returns
+  `AppDeliveryListPage`.
+
+- **`src/index.ts`** — `ListByAppOptions` added to public exports.
+
+- **`src/worker/delivery-worker.test.ts`** — added `appId: null` to the `claimedTask` literal; added
+  `listByApp: async () => ({ deliveries: [], nextCursor: null })` to both stub queue objects.
+
+- **`src/endpoints/endpoint-resolver.test.ts`** — added `appId: null` to `taskWithEndpoint` stub.
+
+- **`src/http/api.test.ts`** — 7-test describe block for `GET /v1/deliveries`: 401 unauthenticated;
+  empty page; lists all deliveries across endpoints (`messageId` + `endpointId` present); status filter
+  (`dead_letter` only, pending empty); cursor pagination; invalid status → 400; invalid limit → 400.
+
+- **`src/sdk/client.test.ts`** — 2 injected-fetch unit tests: `limit`+`cursor`+`status` appear in
+  query string; no query string when no params given.
+
+**Fixes applied mid-tick:**
+
+- `delivery-worker.test.ts` / `endpoint-resolver.test.ts` — stub `DeliveryTask` literals were missing
+  `appId` (now required by the updated interface): added `appId: null`.
+
+- `api.test.ts` "filters by status — dead_letter only, pending empty" — used the shared `setup()` queue
+  which has the default 8-attempt exponential retry policy; exhausting it required advancing time past
+  ~28h, but `Date.now() + i * 5_000` increments weren't enough to make each re-claimed attempt actually
+  claimable. Fixed by replacing the shared setup with an inline `new InMemoryDeliveryQueue({ retryPolicy:
+  fixedSchedule([]) })` — 0 retries means 1 fail → `dead_letter` immediately, no time advancement needed.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**919/919, 38 files** (+28 over baseline: +16 conformance × 2 backends, +7 handler, +2 SDK, +3 stub
+fixes across worker/resolver tests). `npm run build` clean. **compiled-`dist` smoke** (11/11 checks
+through production ESM on `:memory:`): no deliveries → empty; two endpoints → both tasks visible with
+`messageId`+`endpointId`; status=pending only pending; status=dead_letter empty then non-empty after
+exhaustion; cursor paginates; unknown status → 400; unknown app id → empty page.
+
+**State:** GREEN → committed to main @ iter-40 (`0aa6540`).
+
+---
+
 ## 2026-05-24 — Iteration 39: `GET /v1/endpoints/:id/deliveries`
 
 **Repo truth at start:** clean main @ `d8e8db9` (iter-38, `?eventType=` filter on `GET /v1/messages`).
