@@ -29,6 +29,10 @@ import {
   MAX_STATS_DAYS,
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
+import {
+  MAX_RETRY_POLICY_DELAY_MS,
+  MAX_RETRY_POLICY_RETRIES,
+} from "../endpoints/endpoint.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** A JSON Schema / OpenAPI schema object (or a `$ref`). Loosely typed on purpose. */
@@ -1197,12 +1201,29 @@ export function buildOpenApiDocument(): OpenApiDocument {
             attemptedAt: epochMs("When the attempt started, epoch ms."),
           },
         },
+        RetryPolicyConfig: {
+          type: "object",
+          description:
+            "A custom retry schedule: an ordered list of delays (ms) between consecutive delivery " +
+            "attempts. `delaysMs.length` is the number of retries; total attempts = retries + 1. " +
+            `Maximum ${MAX_RETRY_POLICY_RETRIES} retries; each delay must be 0–${MAX_RETRY_POLICY_DELAY_MS} ms.`,
+          required: ["delaysMs"],
+          properties: {
+            delaysMs: {
+              type: "array",
+              items: { type: "integer", minimum: 0 },
+              maxItems: MAX_RETRY_POLICY_RETRIES,
+              description: "Ordered inter-attempt delays in milliseconds.",
+              examples: [[5000, 300000, 1800000, 7200000]],
+            },
+          },
+        },
         Endpoint: {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
           required: [
-            "id", "appId", "url", "description", "eventTypes", "headers", "disabled",
-            "consecutiveFailures", "firstFailureAt", "lastFailureAt",
+            "id", "appId", "url", "description", "eventTypes", "headers", "retryPolicy",
+            "disabled", "consecutiveFailures", "firstFailureAt", "lastFailureAt",
             "createdAt", "updatedAt",
           ],
           properties: {
@@ -1222,6 +1243,12 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Custom HTTP headers added to every delivery (e.g. `X-API-Key`). " +
                 "`null` means no custom headers. Standard Webhooks signing headers and " +
                 "`content-type` are always controlled by Posthorn and cannot be set here.",
+            },
+            retryPolicy: {
+              oneOf: [ref("RetryPolicyConfig"), { type: "null" }],
+              description:
+                "Per-endpoint retry schedule. `null` means the system-wide default policy applies. " +
+                "When set, `delaysMs` replaces the global schedule for deliveries to this endpoint.",
             },
             disabled: {
               type: "boolean",
@@ -1305,6 +1332,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Custom HTTP headers to add to every delivery. Omit or pass `null` for none. " +
                 "Standard Webhooks signing headers and `content-type` may not be set here.",
             },
+            retryPolicy: {
+              oneOf: [ref("RetryPolicyConfig"), { type: "null" }],
+              description:
+                "Custom retry schedule. Omit or pass `null` to use the system-wide default policy.",
+            },
           },
         },
         EndpointUpdate: {
@@ -1322,6 +1354,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["object", "null"],
               additionalProperties: { type: "string" },
               description: "Replace custom delivery headers. Pass `null` to clear all.",
+            },
+            retryPolicy: {
+              oneOf: [ref("RetryPolicyConfig"), { type: "null" }],
+              description:
+                "Replace the retry schedule. Pass `null` to revert to the system-wide default.",
             },
           },
         },

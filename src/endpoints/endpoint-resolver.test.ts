@@ -51,6 +51,7 @@ describe("endpointToDeliveryTarget", () => {
     description: "",
     eventTypes: null,
     headers: null,
+    retryPolicy: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

@@ -389,6 +389,15 @@ export interface MessageWithDeliveries {
 }
 
 /** The non-secret view of an endpoint (list / get / update / create). */
+/**
+ * A custom retry schedule, as stored on an endpoint. `delaysMs[i]` is the wait
+ * after the `(i+1)`-th attempt; the total attempts = `delaysMs.length + 1`.
+ */
+export interface RetryPolicyView {
+  /** Ordered inter-attempt delays in milliseconds. */
+  readonly delaysMs: readonly number[];
+}
+
 export interface EndpointView {
   readonly id: string;
   readonly appId: string;
@@ -401,6 +410,11 @@ export interface EndpointView {
    * `null` means no custom headers.
    */
   readonly headers: Record<string, string> | null;
+  /**
+   * Per-endpoint retry schedule. `null` means the system-wide default applies.
+   * When set, `delaysMs` replaces the global schedule for deliveries to this endpoint.
+   */
+  readonly retryPolicy: RetryPolicyView | null;
   /**
    * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
    * automatically once it has been failing continuously (see
@@ -446,6 +460,10 @@ export interface CreateEndpointInput {
    * controlled by Posthorn and cannot be set here.
    */
   readonly headers?: Record<string, string> | null;
+  /**
+   * Custom retry schedule. Omit or pass `null` to use the system-wide default policy.
+   */
+  readonly retryPolicy?: RetryPolicyView | null;
 }
 
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
@@ -458,6 +476,10 @@ export interface UpdateEndpointInput {
   readonly disabled?: boolean;
   /** Replace custom delivery headers. Pass `null` to clear all custom headers. */
   readonly headers?: Record<string, string> | null;
+  /**
+   * Replace the retry schedule. Pass `null` to revert to the system-wide default policy.
+   */
+  readonly retryPolicy?: RetryPolicyView | null;
 }
 
 /** Optional body of {@link PosthornClient.testEndpoint}. */
@@ -793,6 +815,7 @@ export class PosthornClient {
     if (input.eventTypes !== undefined) body["eventTypes"] = input.eventTypes;
     if (input.disabled !== undefined) body["disabled"] = input.disabled;
     if (input.headers !== undefined) body["headers"] = input.headers;
+    if (input.retryPolicy !== undefined) body["retryPolicy"] = input.retryPolicy;
     return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
@@ -813,6 +836,7 @@ export class PosthornClient {
     if (patch.eventTypes !== undefined) body["eventTypes"] = patch.eventTypes;
     if (patch.disabled !== undefined) body["disabled"] = patch.disabled;
     if (patch.headers !== undefined) body["headers"] = patch.headers;
+    if (patch.retryPolicy !== undefined) body["retryPolicy"] = patch.retryPolicy;
     return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,

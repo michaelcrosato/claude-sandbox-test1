@@ -16,7 +16,11 @@ import type {
   DeliveryTarget,
   EndpointResolver,
 } from "../worker/delivery-worker.js";
-import { activeSigningSecrets, type Endpoint, type EndpointStore } from "./endpoint.js";
+import {
+  activeSigningSecrets,
+  type Endpoint,
+  type EndpointStore,
+} from "./endpoint.js";
 
 /**
  * Adapt a stored {@link Endpoint} into the worker's {@link DeliveryTarget} as of
@@ -41,6 +45,7 @@ export function endpointToDeliveryTarget(
     secret: endpoint.secret,
     ...(additionalSecrets.length > 0 ? { additionalSecrets } : {}),
     ...(endpoint.headers ? { headers: endpoint.headers } : {}),
+    ...(endpoint.retryPolicy !== null ? { retryPolicy: endpoint.retryPolicy } : {}),
   };
 }
 

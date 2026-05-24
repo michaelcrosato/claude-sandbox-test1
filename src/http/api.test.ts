@@ -781,6 +781,54 @@ describe("createApi — endpoints CRUD", () => {
     );
     expect(body(created).headers).toBeNull();
   });
+
+  it("creates an endpoint with a custom retryPolicy and returns it in the view", async () => {
+    const { api, secret } = await setup();
+    const policy = { delaysMs: [1000, 5000, 30000] };
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://a.example/hook", retryPolicy: policy },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).retryPolicy).toEqual(policy);
+  });
+
+  it("updates retryPolicy on an existing endpoint (set, clear)", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/1" }, secret),
+    );
+    const id = body(created).id;
+    expect(body(created).retryPolicy).toBeNull();
+    // Set a custom policy.
+    const set = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { retryPolicy: { delaysMs: [500, 2000] } }, secret),
+    );
+    expect(body(set).retryPolicy).toEqual({ delaysMs: [500, 2000] });
+    // Revert to system default (null).
+    const cleared = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { retryPolicy: null }, secret),
+    );
+    expect(body(cleared).retryPolicy).toBeNull();
+  });
+
+  it("rejects an invalid retryPolicy (too many delays) with 400", async () => {
+    const { api, secret } = await setup();
+    const tooMany = Array(25).fill(1000);
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://a.example/hook", retryPolicy: { delaysMs: tooMany } },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("createApi — POST /v1/endpoints/:id/rotate-secret", () => {

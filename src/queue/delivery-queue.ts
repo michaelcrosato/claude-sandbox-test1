@@ -136,6 +136,12 @@ export interface FailInput {
    * Has no effect when the task dead-letters (budget exhausted — terminal).
    */
   readonly minDelayMs?: number;
+  /**
+   * Per-endpoint retry policy to use for this task, overriding the queue's
+   * global policy. When absent, the queue's own policy applies. Supplied by
+   * the delivery worker from the endpoint's stored {@link RetryPolicy}.
+   */
+  readonly retryPolicy?: RetryPolicy;
 }
 
 /**
@@ -494,6 +500,7 @@ export function normalizeFailInput(input: FailInput): {
   error: string;
   nowMs: number;
   minDelayMs: number | undefined;
+  retryPolicy: RetryPolicy | undefined;
 } {
   if (typeof input.error !== "string") {
     throw new TypeError("fail error must be a string");
@@ -510,7 +517,7 @@ export function normalizeFailInput(input: FailInput): {
       "fail minDelayMs must be a non-negative finite number when provided",
     );
   }
-  return { error: input.error, nowMs: input.nowMs, minDelayMs };
+  return { error: input.error, nowMs: input.nowMs, minDelayMs, retryPolicy: input.retryPolicy };
 }
 
 /** Project the FSM-relevant fields of a task into a {@link DeliveryState}. */

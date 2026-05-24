@@ -23,6 +23,10 @@
  */
 
 import { randomBytes } from "node:crypto";
+import {
+  fixedSchedule,
+  type RetryPolicy,
+} from "../delivery/retry-policy.js";
 
 /**
  * A signing secret that was retired by a rotation but is still used to sign
@@ -80,6 +84,14 @@ export interface Endpoint {
    */
   readonly headers: Readonly<Record<string, string>> | null;
   /**
+   * Custom retry schedule for this endpoint. When `null` the system-wide default
+   * policy applies. When set, `delaysMs` overrides that policy for deliveries to
+   * this endpoint only — useful when some endpoints warrant faster retries (e.g.
+   * high-priority payments) or fewer (e.g. analytics sinks where staleness is
+   * acceptable).
+   */
+  readonly retryPolicy: RetryPolicy | null;
+  /**
    * When `true`, the endpoint is administratively paused. Fan-out skips it, and a
    * resolver declines to resolve it (so an in-flight task fails rather than
    * delivers — see `endpoint-resolver.ts`).
@@ -133,6 +145,13 @@ export interface NewEndpoint {
    * Cannot contain reserved headers (see {@link FORBIDDEN_DELIVERY_HEADERS}).
    */
   readonly headers?: Readonly<Record<string, string>> | null;
+  /**
+   * Custom retry schedule. Omit (or pass `null`) to use the system-wide default.
+   * An array of inter-attempt delays in milliseconds; length is the number of
+   * retries (max {@link MAX_RETRY_POLICY_RETRIES}). Each delay must be a finite,
+   * non-negative number.
+   */
+  readonly retryPolicy?: RetryPolicy | null;
 }
 
 /**
@@ -156,6 +175,11 @@ export interface EndpointUpdate {
    * Cannot contain reserved headers (see {@link FORBIDDEN_DELIVERY_HEADERS}).
    */
   readonly headers?: Readonly<Record<string, string>> | null;
+  /**
+   * Replace the retry schedule. Pass `null` to revert to the system-wide default.
+   * Same shape and constraints as {@link NewEndpoint.retryPolicy}.
+   */
+  readonly retryPolicy?: RetryPolicy | null;
 }
 
 /**
@@ -256,6 +280,18 @@ export class UnknownEndpointError extends Error {
  * size stored and the extra signing work done per delivery.
  */
 export const MAX_CUSTOM_HEADERS = 20;
+
+/**
+ * Maximum number of retries in a custom per-endpoint retry policy. The total
+ * delivery attempts is this + 1. Bounds the array size stored per endpoint.
+ */
+export const MAX_RETRY_POLICY_RETRIES = 20;
+
+/**
+ * Maximum delay (ms) allowed in a custom retry policy: 30 days. Prevents a
+ * misconfigured endpoint from parking tasks indefinitely.
+ */
+export const MAX_RETRY_POLICY_DELAY_MS = 30 * 24 * 60 * 60 * 1_000;
 
 /**
  * Header names that Posthorn controls and a caller cannot override via custom
@@ -396,6 +432,7 @@ export interface NormalizedNewEndpoint {
   readonly eventTypes: readonly string[] | null;
   readonly disabled: boolean;
   readonly headers: Readonly<Record<string, string>> | null;
+  readonly retryPolicy: RetryPolicy | null;
 }
 
 /**
@@ -441,6 +478,43 @@ export function normalizeHeaders(
 }
 
 /**
+ * Validate and normalize a custom retry policy. Returns `null` for
+ * "use system default" (`undefined` / `null` input). Otherwise validates that
+ * the payload is `{ delaysMs: number[] }` with at most
+ * {@link MAX_RETRY_POLICY_RETRIES} entries, each finite, non-negative, and at
+ * most {@link MAX_RETRY_POLICY_DELAY_MS}. Re-uses {@link fixedSchedule} for the
+ * per-delay checks.
+ */
+export function normalizeRetryPolicy(policy: unknown): RetryPolicy | null {
+  if (policy === undefined || policy === null) return null;
+  if (typeof policy !== "object" || Array.isArray(policy)) {
+    throw new TypeError("retryPolicy must be an object { delaysMs: number[] } or null");
+  }
+  const raw = policy as Record<string, unknown>;
+  if (!Array.isArray(raw["delaysMs"])) {
+    throw new TypeError("retryPolicy.delaysMs must be an array");
+  }
+  const delaysMs = raw["delaysMs"] as unknown[];
+  if (delaysMs.length > MAX_RETRY_POLICY_RETRIES) {
+    throw new TypeError(
+      `retryPolicy.delaysMs may not contain more than ${MAX_RETRY_POLICY_RETRIES} entries`,
+    );
+  }
+  for (const d of delaysMs) {
+    if (typeof d !== "number") {
+      throw new TypeError("each delay in retryPolicy.delaysMs must be a number");
+    }
+    if (d > MAX_RETRY_POLICY_DELAY_MS) {
+      throw new TypeError(
+        `each delay in retryPolicy.delaysMs must not exceed ${MAX_RETRY_POLICY_DELAY_MS} ms (30 days)`,
+      );
+    }
+  }
+  // fixedSchedule validates finite + non-negative per-delay; reuse it.
+  return fixedSchedule(delaysMs as number[]);
+}
+
+/**
  * Validate and normalize a create call, throwing {@link TypeError} on malformed
  * input. Shared by every backend so they enforce an identical intake contract. A
  * `secret` of `null` means none was supplied and the backend should mint one with
@@ -455,6 +529,7 @@ export function normalizeNewEndpoint(input: NewEndpoint): NormalizedNewEndpoint 
     eventTypes: normalizeEventTypes(input.eventTypes),
     disabled: normalizeDisabled(input.disabled),
     headers: normalizeHeaders(input.headers),
+    retryPolicy: normalizeRetryPolicy(input.retryPolicy),
   };
 }
 
@@ -493,6 +568,10 @@ export function applyEndpointUpdate(
         ? normalizeEventTypes(patch.eventTypes)
         : current.eventTypes,
     headers: "headers" in patch ? normalizeHeaders(patch.headers) : current.headers,
+    retryPolicy:
+      "retryPolicy" in patch
+        ? normalizeRetryPolicy(patch.retryPolicy)
+        : current.retryPolicy,
     disabled: nextDisabled,
     consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
     firstFailureAt: reEnabled ? null : current.firstFailureAt,

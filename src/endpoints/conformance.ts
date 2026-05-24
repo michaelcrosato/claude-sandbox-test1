@@ -367,6 +367,53 @@ export function describeEndpointStoreContract(
       });
     });
 
+    describe("retryPolicy", () => {
+      it("defaults retryPolicy to null when not provided on create", async () => {
+        const e = await store.create(NEW);
+        expect(e.retryPolicy).toBeNull();
+        expect((await store.get(e.id))!.retryPolicy).toBeNull();
+      });
+
+      it("stores a custom retryPolicy on create and returns it on get", async () => {
+        const policy = { delaysMs: [1000, 5000, 30000] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        expect(e.retryPolicy).toEqual(policy);
+        expect((await store.get(e.id))!.retryPolicy).toEqual(policy);
+      });
+
+      it("update can set, replace, and clear retryPolicy", async () => {
+        const policy = { delaysMs: [500, 2000] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        // Replace with a different schedule.
+        const replaced = await store.update(e.id, { retryPolicy: { delaysMs: [100] } });
+        expect(replaced.retryPolicy).toEqual({ delaysMs: [100] });
+        // Clear retryPolicy (null = use system default).
+        const cleared = await store.update(e.id, { retryPolicy: null });
+        expect(cleared.retryPolicy).toBeNull();
+        expect((await store.get(e.id))!.retryPolicy).toBeNull();
+      });
+
+      it("update preserves retryPolicy when retryPolicy is not in the patch", async () => {
+        const policy = { delaysMs: [5000] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        const updated = await store.update(e.id, { description: "changed" });
+        expect(updated.retryPolicy).toEqual(policy);
+      });
+
+      it("retryPolicy is forwarded to the DeliveryTarget via endpointToDeliveryTarget", async () => {
+        const policy = { delaysMs: [1000, 5000] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        const target = endpointToDeliveryTarget(e, clock.now());
+        expect(target.retryPolicy).toEqual(policy);
+      });
+
+      it("endpointToDeliveryTarget omits retryPolicy field when endpoint has none", async () => {
+        const e = await store.create(NEW);
+        const target = endpointToDeliveryTarget(e, clock.now());
+        expect(target.retryPolicy).toBeUndefined();
+      });
+    });
+
     describe("delete", () => {
       it("removes an endpoint and reports whether it existed", async () => {
         const e = await store.create(NEW);

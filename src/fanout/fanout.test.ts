@@ -28,6 +28,7 @@ function endpoint(overrides: Partial<Endpoint>): Endpoint {
     description: "",
     eventTypes: null,
     headers: null,
+    retryPolicy: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

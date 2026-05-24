@@ -92,6 +92,7 @@ import {
   type NewEndpoint,
   type RotateSecretOptions,
 } from "../endpoints/endpoint.js";
+import type { RetryPolicy } from "../delivery/retry-policy.js";
 import {
   DuplicateEventTypeError,
   UnknownEventTypeError,
@@ -548,6 +549,7 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     description: endpoint.description,
     eventTypes: endpoint.eventTypes,
     headers: endpoint.headers,
+    retryPolicy: endpoint.retryPolicy,
     disabled: endpoint.disabled,
     // Endpoint health (observability): a tenant can see how/why an endpoint became
     // unhealthy, and whether it was auto-disabled after sustained failure.
@@ -1220,6 +1222,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("headers" in body
         ? { headers: body["headers"] as Record<string, string> | null }
         : {}),
+      ...("retryPolicy" in body
+        ? { retryPolicy: body["retryPolicy"] as RetryPolicy | null }
+        : {}),
     };
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
@@ -1248,6 +1253,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("disabled" in body ? { disabled: body["disabled"] as boolean } : {}),
       ...("headers" in body
         ? { headers: body["headers"] as Record<string, string> | null }
+        : {}),
+      ...("retryPolicy" in body
+        ? { retryPolicy: body["retryPolicy"] as RetryPolicy | null }
         : {}),
     };
     const updated = await deps.endpoints.update(id, patch);

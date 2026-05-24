@@ -52,8 +52,10 @@ import {
   UnknownDeliveryTaskError,
   type DeliveryQueue,
   type DeliveryTask,
+  type FailInput,
 } from "../queue/delivery-queue.js";
 import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
+import type { RetryPolicy } from "../delivery/retry-policy.js";
 
 /**
  * Where a task's message should be delivered, and the secret to sign it with.
@@ -82,6 +84,11 @@ export interface DeliveryTarget {
    * are always applied last.
    */
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Per-endpoint retry schedule overriding the worker's global policy. When
+   * absent, the global policy applies. See {@link import("../delivery/retry-policy.js").RetryPolicy}.
+   */
+  readonly retryPolicy?: RetryPolicy;
 }
 
 /**
@@ -636,6 +643,7 @@ export class DeliveryWorker {
     // Both stay null on pre-flight failures and transport errors.
     let requestBody: string | null = null;
     let responseBody: string | null = null;
+    let resolvedTarget: DeliveryTarget | null = null;
     try {
       const message = await this.#store.get(task.messageId);
       if (message === null) {
@@ -643,6 +651,7 @@ export class DeliveryWorker {
       } else {
         appId = message.appId;
         const target = await this.#resolveEndpoint(task, message);
+        resolvedTarget = target;
         if (target === null) {
           failure = `no endpoint resolved for task "${task.id}"`;
         } else {
@@ -701,6 +710,7 @@ export class DeliveryWorker {
           error ?? "unknown delivery error",
           nowMs,
           retryAfterMs ?? undefined,
+          resolvedTarget?.retryPolicy,
         );
     // Report the terminal verdict to endpoint-health tracking (best-effort).
     await this.#reportEndpointOutcome(task, outcome, nowMs);
@@ -838,13 +848,16 @@ export class DeliveryWorker {
     error: string,
     nowMs: number,
     minDelayMs?: number,
+    retryPolicy?: RetryPolicy,
   ): Promise<TaskOutcome> {
     try {
-      const settled = await this.#queue.fail(task.id, leaseToken, {
+      const input: FailInput = {
         error,
         nowMs,
         ...(minDelayMs !== undefined ? { minDelayMs } : {}),
-      });
+        ...(retryPolicy !== undefined ? { retryPolicy } : {}),
+      };
+      const settled = await this.#queue.fail(task.id, leaseToken, input);
       return settled.status === "dead_letter" ? "deadLettered" : "failed";
     } catch (settleError) {
       return this.#absorbSettleError(settleError, task);

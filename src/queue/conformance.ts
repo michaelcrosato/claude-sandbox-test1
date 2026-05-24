@@ -388,6 +388,61 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("per-task retryPolicy override in fail()", () => {
+      it("uses the per-task policy when provided (overrides global)", async () => {
+        const queue = make();
+        await queue.enqueue({ messageId: "m" });
+        const [task] = await queue.claimDue({ nowMs: clock.now() });
+        // Override with a 3-delay schedule (4 total attempts); global is 2-delay.
+        const custom = fixedSchedule([500, 1_500, 3_000]);
+        const failed = await queue.fail(task!.id, task!.leaseToken!, {
+          error: "err",
+          nowMs: clock.now(),
+          retryPolicy: custom,
+        });
+        expect(failed.status).toBe("pending");
+        // Custom first delay is 500ms; global is 1_000ms — confirms custom won.
+        expect(failed.nextAttemptAt).toBe(clock.now() + 500);
+      });
+
+      it("falls back to global policy when retryPolicy is absent in fail()", async () => {
+        const queue = make();
+        await queue.enqueue({ messageId: "m" });
+        const [task] = await queue.claimDue({ nowMs: clock.now() });
+        const failed = await queue.fail(task!.id, task!.leaseToken!, {
+          error: "err",
+          nowMs: clock.now(),
+          // no retryPolicy — global CONFORMANCE_POLICY applies
+        });
+        expect(failed.status).toBe("pending");
+        // CONFORMANCE_POLICY first delay is 1_000ms.
+        expect(failed.nextAttemptAt).toBe(clock.now() + 1_000);
+      });
+
+      it("per-task policy controls dead-lettering (exhausts its own budget)", async () => {
+        const queue = make();
+        await queue.enqueue({ messageId: "m" });
+        // Single-delay custom policy = 2 total attempts (1 retry).
+        const singleRetry = fixedSchedule([1_000]);
+        let [t] = await queue.claimDue({ nowMs: clock.now() });
+        await queue.fail(t!.id, t!.leaseToken!, {
+          error: "e",
+          nowMs: clock.now(),
+          retryPolicy: singleRetry,
+        });
+        clock.advance(1_000);
+        [t] = await queue.claimDue({ nowMs: clock.now() });
+        // Second (final) attempt under the custom policy → dead_letter.
+        const dead = await queue.fail(t!.id, t!.leaseToken!, {
+          error: "e",
+          nowMs: clock.now(),
+          retryPolicy: singleRetry,
+        });
+        expect(dead.status).toBe("dead_letter");
+        // Global policy would allow one more retry; confirms custom budget was used.
+      });
+    });
+
     describe("retry (manual recovery)", () => {
       /** Enqueue a task and drive it to dead_letter (3 failed attempts). */
       async function deadLetter(messageId = "m"): Promise<string> {

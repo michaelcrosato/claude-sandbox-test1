@@ -1424,6 +1424,101 @@ describe("DeliveryWorker — Retry-After support", () => {
   });
 });
 
+describe("DeliveryWorker — per-endpoint retryPolicy", () => {
+  it("uses the endpoint's retryPolicy when present, overriding the global policy", async () => {
+    // Global: 60s delay. Endpoint: 500ms delay. After failure, nextAttemptAt should
+    // reflect the endpoint's 500ms, proving the per-endpoint policy won.
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "test",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    // Resolver returns a target with a custom per-endpoint policy.
+    const endpointPolicy = fixedSchedule([500]);
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: () => ({ url: TARGET_URL, secret: SECRET, retryPolicy: endpointPolicy }),
+      now: env.now,
+      transport: recordingTransport(503).transport,
+    });
+    await worker.processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // Custom delay is 500ms; global would be 60_000ms.
+    expect(task?.nextAttemptAt).toBe(500);
+  });
+
+  it("falls back to the global policy when the endpoint has no retryPolicy", async () => {
+    // Global: 1_000ms delay. Endpoint: no retryPolicy. Should use global.
+    const env = setup({ retryPolicy: fixedSchedule([1_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "test",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    // Resolver has no retryPolicy.
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: () => ({ url: TARGET_URL, secret: SECRET }),
+      now: env.now,
+      transport: recordingTransport(503).transport,
+    });
+    await worker.processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // Global delay is 1_000ms.
+    expect(task?.nextAttemptAt).toBe(1_000);
+  });
+
+  it("per-endpoint policy dead-letters when its own budget is exhausted", async () => {
+    // Endpoint policy: 1 retry (2 total attempts). Global: 60s (many retries).
+    const env = setup({ retryPolicy: fixedSchedule([60_000, 60_000, 60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "test",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    const singleRetryPolicy = fixedSchedule([200]);
+    const resolver: EndpointResolver = () => ({
+      url: TARGET_URL,
+      secret: SECRET,
+      retryPolicy: singleRetryPolicy,
+    });
+    const failTransport = recordingTransport(500).transport;
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: resolver,
+      now: env.now,
+      transport: failTransport,
+    });
+
+    // First attempt → fails → pending (1 retry left per custom policy).
+    await worker.processOnce();
+    let task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+
+    // Advance clock past the 200ms delay so the retry is claimable.
+    env.setClock(200);
+
+    // Second attempt → fails → dead_letter (budget exhausted per custom policy).
+    await worker.processOnce();
+    task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("dead_letter");
+  });
+});
+
 describe("DeliveryWorker.run", () => {
   it("drains pending work back-to-back, then stops on the first idle poll", async () => {
     const env = setup();
