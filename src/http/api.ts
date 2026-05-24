@@ -90,6 +90,12 @@ import {
   type RotateSecretOptions,
 } from "../endpoints/endpoint.js";
 import {
+  DuplicateEventTypeError,
+  UnknownEventTypeError,
+  type EventType,
+  type EventTypeStore,
+} from "../event-types/event-type.js";
+import {
   MAX_LIST_DELIVERIES_LIMIT,
   type DeliveryPage,
   type DeliveryQueue,
@@ -173,6 +179,8 @@ export interface ApiDeps {
    * in the gateway alongside the portal handler so they share the same store.
    */
   readonly portalSessions?: import("../portal/portal-session.js").PortalSessionStore;
+  /** Backs the event-type catalog CRUD routes. */
+  readonly eventTypes: EventTypeStore;
 }
 
 /**
@@ -254,8 +262,15 @@ function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof IdempotencyConflictError) {
     return json(409, { error: { code: "idempotency_conflict", message: err.message } });
   }
-  if (err instanceof UnknownEndpointError || err instanceof UnknownAppError) {
+  if (
+    err instanceof UnknownEndpointError ||
+    err instanceof UnknownAppError ||
+    err instanceof UnknownEventTypeError
+  ) {
     return json(404, { error: { code: "not_found", message: err.message } });
+  }
+  if (err instanceof DuplicateEventTypeError) {
+    return json(409, { error: { code: "conflict", message: err.message } });
   }
   // Every intake validator in the codebase (`normalizeNew*`/`apply*Update`) throws
   // TypeError on malformed input, so a TypeError on a request path is a client
@@ -753,6 +768,11 @@ export const API_ROUTE_KEYS = [
   "GET /v1/deliveries",
   "GET /v1/usage",
   "POST /v1/portal/sessions",
+  "GET /v1/event-types",
+  "POST /v1/event-types",
+  "GET /v1/event-types/:id",
+  "PATCH /v1/event-types/:id",
+  "DELETE /v1/event-types/:id",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
   "POST /v1/admin/apps",
@@ -1254,6 +1274,85 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, usageView(summary, deliveries));
   };
 
+  function eventTypeView(et: EventType): Record<string, unknown> {
+    return {
+      id: et.id,
+      appId: et.appId,
+      name: et.name,
+      description: et.description,
+      schemaExample: et.schemaExample,
+      archived: et.archived,
+      createdAt: et.createdAt,
+      updatedAt: et.updatedAt,
+    };
+  }
+
+  const listEventTypes: AuthedHandler = async (ctx) => {
+    const includeArchived = ctx.req.query["includeArchived"] === "true";
+    const list = await deps.eventTypes.list(ctx.app.id, { includeArchived });
+    return json(200, { data: list.map(eventTypeView) });
+  };
+
+  const createEventType: AuthedHandler = async (ctx) => {
+    const body = parseJsonObject(ctx.req);
+    if (!("id" in body)) {
+      throw new HttpError(400, "invalid_request", "id is required");
+    }
+    if (!("name" in body)) {
+      throw new HttpError(400, "invalid_request", "name is required");
+    }
+    const input = {
+      appId: ctx.app.id,
+      id: body["id"] as string,
+      name: body["name"] as string,
+      ...("description" in body ? { description: body["description"] as string | null } : {}),
+      ...("schemaExample" in body ? { schemaExample: body["schemaExample"] as string | null } : {}),
+    };
+    try {
+      const et = await deps.eventTypes.create(input);
+      return json(201, eventTypeView(et));
+    } catch (err) {
+      if (err instanceof DuplicateEventTypeError) {
+        return json(409, { error: { code: "conflict", message: err.message } });
+      }
+      throw err;
+    }
+  };
+
+  const getEventType: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const et = await deps.eventTypes.get(ctx.app.id, id);
+    if (et === null) {
+      throw new HttpError(404, "not_found", `no event type with id "${id}"`);
+    }
+    return json(200, eventTypeView(et));
+  };
+
+  const updateEventType: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const body = parseJsonObject(ctx.req);
+    const patch = {
+      ...("name" in body ? { name: body["name"] as string } : {}),
+      ...("description" in body ? { description: body["description"] as string | null } : {}),
+      ...("schemaExample" in body ? { schemaExample: body["schemaExample"] as string | null } : {}),
+    };
+    try {
+      const et = await deps.eventTypes.update(ctx.app.id, id, patch);
+      return json(200, eventTypeView(et));
+    } catch (err) {
+      if (err instanceof UnknownEventTypeError) {
+        return json(404, { error: { code: "not_found", message: err.message } });
+      }
+      throw err;
+    }
+  };
+
+  const archiveEventType: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    await deps.eventTypes.archive(ctx.app.id, id);
+    return { status: 204, body: undefined };
+  };
+
   // Maximum portal session TTL the caller can request (7 days in seconds).
   const MAX_PORTAL_EXPIRES_IN_S = 7 * 24 * 60 * 60;
   // Default portal session TTL (24 h in seconds).
@@ -1325,6 +1424,11 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /v1/deliveries": authed(getAppDeliveries),
     "GET /v1/usage": authed(getUsage),
     "POST /v1/portal/sessions": authed(createPortalSession),
+    "GET /v1/event-types": authed(listEventTypes),
+    "POST /v1/event-types": authed(createEventType),
+    "GET /v1/event-types/:id": authed(getEventType),
+    "PATCH /v1/event-types/:id": authed(updateEventType),
+    "DELETE /v1/event-types/:id": authed(archiveEventType),
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),
     "GET /v1/admin/apps/:id": adminAuthed(getApp),

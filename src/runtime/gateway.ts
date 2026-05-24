@@ -25,6 +25,7 @@ import { SqliteEndpointStore } from "../endpoints/sqlite-endpoint-store.js";
 import { SqliteMessageStore } from "../storage/sqlite-store.js";
 import { SqliteDeliveryQueue } from "../queue/sqlite-queue.js";
 import { SqliteDeliveryAttemptStore } from "../attempts/sqlite-attempt-store.js";
+import { SqliteEventTypeStore } from "../event-types/sqlite-event-type-store.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
@@ -42,6 +43,7 @@ import type { EndpointStore } from "../endpoints/endpoint.js";
 import type { MessageStore } from "../storage/message-store.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { DeliveryAttemptStore } from "../attempts/delivery-attempt.js";
+import type { EventTypeStore } from "../event-types/event-type.js";
 import { MEMORY_DATA_DIR, type GatewayConfig } from "./config.js";
 import { emitEndpointDisabledEvent, type SystemEventTransport } from "../system-events/index.js";
 
@@ -70,6 +72,8 @@ export interface Gateway {
   readonly queue: DeliveryQueue;
   /** Per-attempt delivery audit log (written by the worker, read at `GET /v1/messages/:id/attempts`). */
   readonly attempts: DeliveryAttemptStore;
+  /** Event type catalog store. */
+  readonly eventTypes: EventTypeStore;
   /** The delivery loop (started by {@link Gateway.start}, halted by {@link Gateway.stop}). */
   readonly worker: DeliveryWorker;
   /**
@@ -105,6 +109,7 @@ export interface StoreLocations {
   readonly messages: string;
   readonly queue: string;
   readonly attempts: string;
+  readonly eventTypes: string;
 }
 
 /**
@@ -126,6 +131,7 @@ export function resolveLocations(dataDir: string): StoreLocations {
       messages: MEMORY_DATA_DIR,
       queue: MEMORY_DATA_DIR,
       attempts: MEMORY_DATA_DIR,
+      eventTypes: MEMORY_DATA_DIR,
     };
   }
   mkdirSync(dataDir, { recursive: true });
@@ -135,6 +141,7 @@ export function resolveLocations(dataDir: string): StoreLocations {
     messages: join(dataDir, "messages.db"),
     queue: join(dataDir, "queue.db"),
     attempts: join(dataDir, "attempts.db"),
+    eventTypes: join(dataDir, "event-types.db"),
   };
 }
 
@@ -155,6 +162,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     visibilityTimeoutMs: config.worker.visibilityTimeoutMs,
   });
   const attempts = new SqliteDeliveryAttemptStore({ location: locations.attempts });
+  const eventTypes = new SqliteEventTypeStore({ location: locations.eventTypes });
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
@@ -249,7 +257,7 @@ export function createGateway(config: GatewayConfig): Gateway {
   // The consumer portal is always enabled — it adds no new credential surface beyond
   // the existing JSON API: a portal session can only be minted with a valid tenant API
   // key, and the portal itself only manages endpoints for the session's tenant.
-  const portalHandler = createPortalHandler({ endpoints, queue, sessions: portalSessions });
+  const portalHandler = createPortalHandler({ endpoints, queue, sessions: portalSessions, eventTypes });
 
   const httpServer = createHttpServer(
     {
@@ -259,6 +267,7 @@ export function createGateway(config: GatewayConfig): Gateway {
       queue,
       attempts,
       metrics,
+      eventTypes,
       // Enable the admin/control-plane routes only when a token is configured; when
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
@@ -332,6 +341,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     messages.close();
     queue.close();
     attempts.close();
+    eventTypes.close();
   };
 
   return {
@@ -340,6 +350,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     messages,
     queue,
     attempts,
+    eventTypes,
     worker,
     dispatcher,
     metrics,

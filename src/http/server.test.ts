@@ -7,6 +7,7 @@ import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
+import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
 
 // Track started servers so each test tears its listener down (no leaked ports).
 let started: Server[] = [];
@@ -35,6 +36,7 @@ async function startServer(
       queue: new InMemoryDeliveryQueue(),
       attempts: new InMemoryDeliveryAttemptStore(),
       metrics: new MetricsRegistry({ version: "test" }),
+      eventTypes: new InMemoryEventTypeStore(),
     },
     options,
   );

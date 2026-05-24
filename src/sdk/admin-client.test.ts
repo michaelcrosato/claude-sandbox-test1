@@ -12,6 +12,7 @@ import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import { PosthornAdminClient } from "./admin-client.js";
 import { PosthornClient } from "./client.js";
+import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
 import {
   PosthornApiError,
   PosthornTimeoutError,
@@ -74,6 +75,7 @@ async function startAdminServer(
     messages: new InMemoryMessageStore(),
     queue: new InMemoryDeliveryQueue(),
     attempts: new InMemoryDeliveryAttemptStore(),
+    eventTypes: new InMemoryEventTypeStore(),
     ...(adminToken !== null ? { adminToken } : {}),
   });
   servers.push(server);

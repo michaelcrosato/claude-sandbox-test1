@@ -32,6 +32,7 @@ import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { PortalSessionStore } from "./portal-session.js";
+import type { EventTypeStore } from "../event-types/event-type.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
   portalExpiredPage,
@@ -46,6 +47,7 @@ export interface PortalDeps {
   readonly endpoints: EndpointStore;
   readonly queue: DeliveryQueue;
   readonly sessions: PortalSessionStore;
+  readonly eventTypes?: EventTypeStore;
   /** Clock (epoch ms). Defaults to `Date.now`; inject in tests for determinism. */
   readonly now?: () => number;
 }
@@ -79,6 +81,17 @@ function parseForm(body: string): Record<string, string> {
   return out;
 }
 
+/** Parse an `application/x-www-form-urlencoded` body collecting all values per key. */
+function parseFormAll(body: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [k, v] of new URLSearchParams(body)) {
+    const arr = out.get(k);
+    if (arr !== undefined) arr.push(v);
+    else out.set(k, [v]);
+  }
+  return out;
+}
+
 function html(status: number, bodyStr: string, headers?: Record<string, string>): ApiResponse {
   return {
     status,
@@ -107,6 +120,7 @@ function parseEventTypes(raw: string): string[] | null {
 export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const { endpoints, queue, sessions } = deps;
   const clock = deps.now ?? (() => Date.now());
+  const eventTypesStore = deps.eventTypes;
 
   function sessionCookie(token: string): string {
     return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal`;
@@ -165,7 +179,10 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       const auth = requireAuth(req);
       if ("status" in auth) return auth;
       const eps = await endpoints.listByApp(auth.appId);
-      return html(200, portalEndpointsPage(eps));
+      const catalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      return html(200, portalEndpointsPage(eps, undefined, catalogTypes));
     }
 
     // ── POST /portal/endpoints ─────────────────────────────────────────────────
@@ -174,13 +191,29 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       const auth = requireAuth(req);
       if ("status" in auth) return auth;
       const { appId } = auth;
+      const catalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      const hasCatalog = catalogTypes !== undefined && catalogTypes.length > 0;
+      let resolvedEventTypes: string[] | null;
+      if (hasCatalog) {
+        const formAll = parseFormAll(req.rawBody);
+        if (formAll.get("subscribeAll")?.[0] === "1") {
+          resolvedEventTypes = null;
+        } else {
+          resolvedEventTypes = (formAll.get("eventType") ?? []).filter(Boolean);
+        }
+      } else {
+        const form = parseForm(req.rawBody);
+        resolvedEventTypes = parseEventTypes(form["eventTypes"] ?? "");
+      }
       const form = parseForm(req.rawBody);
       const rawDesc = form["description"] ?? "";
       const input: NewEndpoint = {
         appId,
         url: (form["url"] ?? "").trim(),
         description: rawDesc,
-        eventTypes: parseEventTypes(form["eventTypes"] ?? ""),
+        eventTypes: resolvedEventTypes,
       };
       let secret: string;
       try {
@@ -192,11 +225,11 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         const errMsg = err instanceof Error ? err.message : "Invalid input.";
         // Inject a JS alert as the simplest way to surface the error without
         // refactoring the view to carry a separate error slot for the create form.
-        return html(200, portalEndpointsPage(eps) + `<script>alert(${JSON.stringify(errMsg)})</script>`);
+        return html(200, portalEndpointsPage(eps, undefined, catalogTypes) + `<script>alert(${JSON.stringify(errMsg)})</script>`);
       }
       // Reload the list and show the secret banner.
       const eps = await endpoints.listByApp(appId);
-      return html(200, portalEndpointsPage(eps, secret));
+      return html(200, portalEndpointsPage(eps, secret, catalogTypes));
     }
 
     // ── GET /portal/endpoints/:id ──────────────────────────────────────────────
@@ -210,7 +243,10 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         task,
         messageId: task.messageId ?? "",
       }));
-      return html(200, portalEndpointDetailPage(ep, rows));
+      const catalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      return html(200, portalEndpointDetailPage(ep, rows, undefined, catalogTypes));
     }
 
     // ── POST /portal/endpoints/:id/update ─────────────────────────────────────
@@ -219,12 +255,28 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       if ("status" in auth) return auth;
       const ep = await endpoints.get(s1);
       if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+      const catalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      const hasCatalog = catalogTypes !== undefined && catalogTypes.length > 0;
+      let resolvedEventTypes: string[] | null;
+      if (hasCatalog) {
+        const formAll = parseFormAll(req.rawBody);
+        if (formAll.get("subscribeAll")?.[0] === "1") {
+          resolvedEventTypes = null;
+        } else {
+          resolvedEventTypes = (formAll.get("eventType") ?? []).filter(Boolean);
+        }
+      } else {
+        const form = parseForm(req.rawBody);
+        resolvedEventTypes = parseEventTypes(form["eventTypes"] ?? "");
+      }
       const form = parseForm(req.rawBody);
       const rawUrl2 = (form["url"] ?? "").trim();
       const patch: EndpointUpdate = {
         ...(rawUrl2.length > 0 ? { url: rawUrl2 } : {}),
         description: form["description"] ?? "",
-        eventTypes: parseEventTypes(form["eventTypes"] ?? ""),
+        eventTypes: resolvedEventTypes,
         disabled: form["disabled"] === "1",
       };
       let updated: typeof ep;
@@ -237,14 +289,14 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
           task,
           messageId: task.messageId ?? "",
         }));
-        return html(200, portalEndpointDetailPage(ep, rows, errMsg));
+        return html(200, portalEndpointDetailPage(ep, rows, errMsg, catalogTypes));
       }
       const page = await queue.listByEndpoint(updated.id, { limit: RECENT_DELIVERIES_LIMIT });
       const rows: DeliveryRow[] = page.deliveries.map((task) => ({
         task,
         messageId: task.messageId ?? "",
       }));
-      return html(200, portalEndpointDetailPage(updated, rows));
+      return html(200, portalEndpointDetailPage(updated, rows, undefined, catalogTypes));
     }
 
     // ── POST /portal/endpoints/:id/rotate-secret ───────────────────────────────

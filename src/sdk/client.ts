@@ -452,6 +452,43 @@ export interface GetUsageParams {
   readonly to?: string;
 }
 
+/** The view of an event type returned by the catalog routes. */
+export interface EventTypeView {
+  readonly id: string;
+  readonly appId: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly schemaExample: string | null;
+  readonly archived: boolean;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+/** Input to {@link PosthornClient.createEventType}. */
+export interface CreateEventTypeInput {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | null;
+  readonly schemaExample?: string | null;
+}
+
+/** A patch for {@link PosthornClient.updateEventType}; only provided fields change. */
+export interface UpdateEventTypeInput {
+  readonly name?: string;
+  readonly description?: string | null;
+  readonly schemaExample?: string | null;
+}
+
+/** A page of event types returned by {@link PosthornClient.listEventTypes}. */
+export interface EventTypeListPage {
+  readonly data: readonly EventTypeView[];
+}
+
+/** Options for {@link PosthornClient.listEventTypes}. */
+export interface ListEventTypesParams {
+  readonly includeArchived?: boolean;
+}
+
 /** Input to {@link PosthornClient.createPortalSession}. */
 export interface CreatePortalSessionInput {
   /**
@@ -728,6 +765,56 @@ export class PosthornClient {
     return this.#transport.request<TenantUsage>(
       "GET",
       `/v1/usage${qs.length > 0 ? `?${qs}` : ""}`,
+    );
+  }
+
+  /** List the tenant's event type catalog — `GET /v1/event-types`. */
+  async listEventTypes(params: ListEventTypesParams = {}): Promise<EventTypeListPage> {
+    const query = new URLSearchParams();
+    if (params.includeArchived === true) {
+      query.set("includeArchived", "true");
+    }
+    const qs = query.toString();
+    return this.#transport.request<EventTypeListPage>(
+      "GET",
+      `/v1/event-types${qs.length > 0 ? `?${qs}` : ""}`,
+    );
+  }
+
+  /** Create an event type — `POST /v1/event-types`. */
+  async createEventType(input: CreateEventTypeInput): Promise<EventTypeView> {
+    const body: Record<string, unknown> = { id: input.id, name: input.name };
+    if (input.description !== undefined) body["description"] = input.description;
+    if (input.schemaExample !== undefined) body["schemaExample"] = input.schemaExample;
+    return this.#transport.request<EventTypeView>("POST", "/v1/event-types", body);
+  }
+
+  /** Fetch one event type — `GET /v1/event-types/:id`. */
+  async getEventType(id: string): Promise<EventTypeView> {
+    return this.#transport.request<EventTypeView>(
+      "GET",
+      `/v1/event-types/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /** Update an event type — `PATCH /v1/event-types/:id`. Only provided fields change. */
+  async updateEventType(id: string, patch: UpdateEventTypeInput): Promise<EventTypeView> {
+    const body: Record<string, unknown> = {};
+    if (patch.name !== undefined) body["name"] = patch.name;
+    if (patch.description !== undefined) body["description"] = patch.description;
+    if (patch.schemaExample !== undefined) body["schemaExample"] = patch.schemaExample;
+    return this.#transport.request<EventTypeView>(
+      "PATCH",
+      `/v1/event-types/${encodeURIComponent(id)}`,
+      body,
+    );
+  }
+
+  /** Archive an event type — `DELETE /v1/event-types/:id`. */
+  async archiveEventType(id: string): Promise<void> {
+    await this.#transport.request<void>(
+      "DELETE",
+      `/v1/event-types/${encodeURIComponent(id)}`,
     );
   }
 

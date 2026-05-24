@@ -246,6 +246,16 @@ export {
 } from "./apps/sqlite-app-store.js";
 
 export {
+  DuplicateEventTypeError,
+  UnknownEventTypeError,
+  type EventType,
+  type NewEventType,
+  type EventTypeUpdate,
+  type ListEventTypesOptions,
+  type EventTypeStore,
+} from "./event-types/event-type.js";
+
+export {
   createApi,
   API_ROUTE_KEYS,
   patternToOpenApiPath,
@@ -335,6 +345,11 @@ export {
   type DeliveryUsageDay,
   type QuotaStatus,
   type GetUsageParams,
+  type EventTypeView,
+  type CreateEventTypeInput,
+  type UpdateEventTypeInput,
+  type EventTypeListPage,
+  type ListEventTypesParams,
 } from "./sdk/client.js";
 
 export {

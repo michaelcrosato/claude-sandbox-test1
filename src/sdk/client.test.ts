@@ -11,6 +11,7 @@ import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
+import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
 import {
   PosthornApiError,
   PosthornClient,
@@ -61,6 +62,7 @@ async function startServer(): Promise<Harness> {
     messages: new InMemoryMessageStore(),
     queue: new InMemoryDeliveryQueue(),
     attempts: new InMemoryDeliveryAttemptStore(),
+    eventTypes: new InMemoryEventTypeStore(),
   });
   servers.push(server);
   const port = await listen(server);
@@ -685,6 +687,7 @@ describe("PosthornClient — createPortalSession", () => {
       queue: new InMemoryDeliveryQueue(),
       attempts: new InMemoryDeliveryAttemptStore(),
       portalSessions,
+      eventTypes: new InMemoryEventTypeStore(),
     });
     servers.push(server);
     const port = await listen(server);
@@ -731,5 +734,30 @@ describe("PosthornClient — createPortalSession", () => {
     await client.createPortalSession({ externalUserId: "u" });
     const parsed = JSON.parse(capturedBody!);
     expect(parsed).not.toHaveProperty("expiresIn");
+  });
+});
+
+describe("PosthornClient — event types", () => {
+  it("listEventTypes sends no query string when no params provided", async () => {
+    let capturedUrl: string | null = null;
+    const client = fakeClient(async (url) => {
+      capturedUrl = url;
+      return fakeResponse(200, JSON.stringify({ data: [] }));
+    });
+    const result = await client.listEventTypes();
+    expect(result.data).toEqual([]);
+    expect(capturedUrl).not.toBeNull();
+    expect(capturedUrl!).not.toContain("includeArchived");
+  });
+
+  it("listEventTypes adds includeArchived=true to query string when requested", async () => {
+    let capturedUrl: string | null = null;
+    const client = fakeClient(async (url) => {
+      capturedUrl = url;
+      return fakeResponse(200, JSON.stringify({ data: [] }));
+    });
+    await client.listEventTypes({ includeArchived: true });
+    expect(capturedUrl).not.toBeNull();
+    expect(capturedUrl!).toContain("includeArchived=true");
   });
 });

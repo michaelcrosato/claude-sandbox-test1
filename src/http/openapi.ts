@@ -138,6 +138,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
       },
       { name: "Operational", description: "Liveness, metrics, and this document." },
       {
+        name: "EventTypes",
+        description:
+          "The event type catalog: named, human-readable event type definitions that document " +
+          "what events your application emits. Operators define event types (e.g. `user.created`, " +
+          "`payment.failed`) with names and descriptions; the portal can then present checkboxes " +
+          "instead of free-text subscription inputs.",
+      },
+      {
         name: "Portal",
         description:
           "Consumer App Portal: the customer-facing webhook management UI. A tenant mints " +
@@ -589,6 +597,86 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/event-types": {
+        get: {
+          operationId: "listEventTypes",
+          tags: ["EventTypes"],
+          summary: "List event types",
+          description:
+            "List the tenant's event type catalog, sorted by id. By default excludes archived " +
+            "event types; pass `?includeArchived=true` to include them.",
+          parameters: [
+            {
+              name: "includeArchived",
+              in: "query",
+              required: false,
+              schema: { type: "boolean" },
+              description: "When `true`, archived event types are included in the results.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse("The tenant's event types.", ref("EventTypeList")),
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+        post: {
+          operationId: "createEventType",
+          tags: ["EventTypes"],
+          summary: "Create an event type",
+          description:
+            "Define a new event type in the catalog. The `id` (slug) must be unique within " +
+            "the tenant and may contain letters, digits, dots, underscores, and hyphens.",
+          requestBody: jsonBody(ref("NewEventType")),
+          responses: {
+            "201": jsonResponse("The created event type.", ref("EventType")),
+            "400": errorResponse("Malformed request body or invalid id/name."),
+            "401": errorResponse("Missing or invalid API key."),
+            "409": errorResponse("An event type with that id already exists."),
+          },
+        },
+      },
+      "/v1/event-types/{id}": {
+        get: {
+          operationId: "getEventType",
+          tags: ["EventTypes"],
+          summary: "Get an event type",
+          description: "Fetch one event type by id. Returns `404` if not found.",
+          parameters: [idParam("The event type id (slug).")],
+          responses: {
+            "200": jsonResponse("The event type.", ref("EventType")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such event type for this tenant."),
+          },
+        },
+        patch: {
+          operationId: "updateEventType",
+          tags: ["EventTypes"],
+          summary: "Update an event type",
+          description: "Patch an event type; only the provided fields change.",
+          parameters: [idParam("The event type id (slug).")],
+          requestBody: jsonBody(ref("UpdateEventType")),
+          responses: {
+            "200": jsonResponse("The updated event type.", ref("EventType")),
+            "400": errorResponse("Malformed request body."),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such event type for this tenant."),
+          },
+        },
+        delete: {
+          operationId: "archiveEventType",
+          tags: ["EventTypes"],
+          summary: "Archive an event type",
+          description:
+            "Archive an event type (soft delete). Archived types are excluded from the default " +
+            "list but can be retrieved with `?includeArchived=true`. Returns `204` regardless " +
+            "of whether the event type exists.",
+          parameters: [idParam("The event type id (slug).")],
+          responses: {
+            "204": { description: "Archived (or already not found); no content." },
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+      },
       "/v1/admin/apps": {
         post: {
           operationId: "createApp",
@@ -806,6 +894,52 @@ export function buildOpenApiDocument(): OpenApiDocument {
         },
       },
       schemas: {
+        EventType: {
+          type: "object",
+          description: "A named event type in the catalog.",
+          required: ["id", "appId", "name", "description", "schemaExample", "archived", "createdAt", "updatedAt"],
+          properties: {
+            id: { type: "string", description: "The event type slug, e.g. `user.created`.", examples: ["user.created"] },
+            appId: { type: "string" },
+            name: { type: "string", description: "Human-readable label.", examples: ["User Created"] },
+            description: { type: ["string", "null"], description: "Optional longer description." },
+            schemaExample: { type: ["string", "null"], description: "Optional JSON example of the event payload." },
+            archived: { type: "boolean", description: "Whether this event type is archived (soft-deleted)." },
+            createdAt: epochMs("Creation time, epoch ms."),
+            updatedAt: epochMs("Last mutation time, epoch ms."),
+          },
+        },
+        NewEventType: {
+          type: "object",
+          description: "Input to `POST /v1/event-types`.",
+          required: ["id", "name"],
+          properties: {
+            id: {
+              type: "string",
+              description:
+                "The event type slug. Must start with a letter or digit and contain only " +
+                "letters, digits, dots, underscores, or hyphens. Max 100 characters.",
+              examples: ["user.created"],
+            },
+            name: { type: "string", description: "Human-readable label. Max 200 characters.", examples: ["User Created"] },
+            description: { type: ["string", "null"], description: "Optional longer description. Max 1000 characters." },
+            schemaExample: { type: ["string", "null"], description: "Optional JSON string example of the event payload." },
+          },
+        },
+        UpdateEventType: {
+          type: "object",
+          description: "Input to `PATCH /v1/event-types/{id}`. Only provided fields change.",
+          properties: {
+            name: { type: "string", description: "Replace the human-readable label." },
+            description: { type: ["string", "null"], description: "Replace the description (null to clear)." },
+            schemaExample: { type: ["string", "null"], description: "Replace the schema example (null to clear)." },
+          },
+        },
+        EventTypeList: {
+          type: "object",
+          required: ["data"],
+          properties: { data: { type: "array", items: ref("EventType") } },
+        },
         Health: {
           type: "object",
           required: ["status"],

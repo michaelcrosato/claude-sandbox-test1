@@ -142,6 +142,7 @@ export function portalExpiredPage(): string {
 export function portalEndpointsPage(
   endpoints: readonly Endpoint[],
   createdSecret?: string,
+  catalogTypes?: readonly { id: string; name: string }[],
 ): string {
   const secretBanner = createdSecret
     ? `<div class="banner">
@@ -175,6 +176,21 @@ export function portalEndpointsPage(
           })
           .join("");
 
+  const hasCatalog = catalogTypes !== undefined && catalogTypes.length > 0;
+  const eventTypesField = hasCatalog
+    ? `<div class="form-row">
+      <label>Event types</label>
+      <label><input type="checkbox" name="subscribeAll" value="1"> Subscribe to all events</label>
+      <div style="margin-top:8px">
+        ${catalogTypes!.map((ct) => `<label><input type="checkbox" name="eventType" value="${esc(ct.id)}"> ${esc(ct.id)} — ${esc(ct.name)}</label>`).join("\n        ")}
+      </div>
+    </div>`
+    : `<div class="form-row">
+      <label for="eventTypes">Event types (leave blank to receive all)</label>
+      <input id="eventTypes" type="text" name="eventTypes" placeholder="user.created, order.shipped">
+      <div class="meta" style="margin-top:4px">Comma-separated list. Leave blank to receive every event type.</div>
+    </div>`;
+
   const createForm = `<div class="card">
   <h2 style="margin-bottom:16px">Add endpoint</h2>
   <form method="POST" action="/portal/endpoints">
@@ -186,11 +202,7 @@ export function portalEndpointsPage(
       <label for="description">Description</label>
       <input id="description" type="text" name="description" placeholder="Optional label">
     </div>
-    <div class="form-row">
-      <label for="eventTypes">Event types (leave blank to receive all)</label>
-      <input id="eventTypes" type="text" name="eventTypes" placeholder="user.created, order.shipped">
-      <div class="meta" style="margin-top:4px">Comma-separated list. Leave blank to receive every event type.</div>
-    </div>
+    ${eventTypesField}
     <button type="submit" class="btn btn-blue">Create endpoint</button>
   </form>
 </div>`;
@@ -221,6 +233,7 @@ export function portalEndpointDetailPage(
   endpoint: Endpoint,
   deliveries: readonly DeliveryRow[],
   error?: string,
+  catalogTypes?: readonly { id: string; name: string }[],
 ): string {
   const errorBanner = error
     ? `<div class="alert alert-err">${esc(error)}</div>`
@@ -247,6 +260,22 @@ export function portalEndpointDetailPage(
           )
           .join("");
 
+  const hasCatalog = catalogTypes !== undefined && catalogTypes.length > 0;
+  const subscribeAll = endpoint.eventTypes === null;
+  const subscribedSet = new Set(endpoint.eventTypes ?? []);
+  const editEventTypesField = hasCatalog
+    ? `<div class="form-row">
+      <label>Event types</label>
+      <label><input type="checkbox" name="subscribeAll" value="1"${subscribeAll ? " checked" : ""}> Subscribe to all events</label>
+      <div style="margin-top:8px">
+        ${catalogTypes!.map((ct) => `<label><input type="checkbox" name="eventType" value="${esc(ct.id)}"${subscribedSet.has(ct.id) ? " checked" : ""}> ${esc(ct.id)} — ${esc(ct.name)}</label>`).join("\n        ")}
+      </div>
+    </div>`
+    : `<div class="form-row">
+      <label for="eventTypes">Event types (leave blank for all)</label>
+      <input id="eventTypes" type="text" name="eventTypes" value="${esc(endpoint.eventTypes !== null ? endpoint.eventTypes.join(", ") : "")}">
+    </div>`;
+
   const editForm = `<div class="card">
   <h2 style="margin-bottom:16px">Edit endpoint</h2>
   ${errorBanner}
@@ -259,10 +288,7 @@ export function portalEndpointDetailPage(
       <label for="description">Description</label>
       <input id="description" type="text" name="description" value="${esc(endpoint.description)}">
     </div>
-    <div class="form-row">
-      <label for="eventTypes">Event types (leave blank for all)</label>
-      <input id="eventTypes" type="text" name="eventTypes" value="${esc(endpoint.eventTypes !== null ? endpoint.eventTypes.join(", ") : "")}">
-    </div>
+    ${editEventTypesField}
     <div class="form-row" style="display:flex;gap:8px;align-items:center">
       <input type="checkbox" id="disabled" name="disabled" value="1"${endpoint.disabled ? " checked" : ""} style="width:auto">
       <label for="disabled" style="text-transform:none;letter-spacing:0;margin:0">Disabled (pauses delivery to this endpoint)</label>

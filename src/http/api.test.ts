@@ -11,6 +11,7 @@ import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { verify } from "../signing/webhook-signature.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
 import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
+import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
 
 interface Fixture {
   readonly apps: InMemoryAppStore;
@@ -29,7 +30,8 @@ async function setup(): Promise<Fixture> {
   const messages = new InMemoryMessageStore();
   const queue = new InMemoryDeliveryQueue();
   const attempts = new InMemoryDeliveryAttemptStore();
-  const api = createApi({ apps, endpoints, messages, queue, attempts });
+  const eventTypes = new InMemoryEventTypeStore();
+  const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes });
   const app = await apps.create({ name: "Acme" });
   const { secret } = await apps.createApiKey(app.id);
   return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
@@ -319,7 +321,7 @@ describe("createApi — POST /v1/messages monthly quota enforcement", () => {
     const messages = new InMemoryMessageStore({ now: () => nowMs });
     const queue = new InMemoryDeliveryQueue();
     const attempts = new InMemoryDeliveryAttemptStore();
-    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Acme", monthlyMessageQuota: quota });
     const { secret } = await apps.createApiKey(app.id);
     return { api, secret, setNow: (ms) => { nowMs = ms; } };
@@ -405,7 +407,7 @@ describe("createApi — GET /v1/usage (tenant self-service)", () => {
     const messages = new InMemoryMessageStore({ now: () => nowMs });
     const queue = new InMemoryDeliveryQueue();
     const attempts = new InMemoryDeliveryAttemptStore();
-    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Acme", monthlyMessageQuota: quota });
     const { secret } = await apps.createApiKey(app.id);
     return { api, secret, appId: app.id, messages, attempts, setNow: (ms) => { nowMs = ms; } };
@@ -1122,7 +1124,7 @@ describe("createApi — POST /v1/messages/:id/retry (replay)", () => {
     const messages = new InMemoryMessageStore();
     const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
     const attempts = new InMemoryDeliveryAttemptStore();
-    const api = createApi({ apps, endpoints, messages, queue, attempts });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
     return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
@@ -1474,7 +1476,7 @@ describe("createApi — GET /metrics", () => {
     const queue = new InMemoryDeliveryQueue();
     const attempts = new InMemoryDeliveryAttemptStore();
     const metrics = new MetricsRegistry({ version: "9.9.9", now: () => 0 });
-    const api = createApi({ apps, endpoints, messages, queue, attempts, metrics });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, metrics, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
     await endpoints.create({
@@ -1551,6 +1553,7 @@ describe("createApi — admin / control-plane API", () => {
       messages,
       queue,
       attempts,
+      eventTypes: new InMemoryEventTypeStore(),
       ...(adminToken !== null ? { adminToken } : {}),
     });
     return { apps, api };
@@ -1900,6 +1903,7 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
       messages,
       queue,
       attempts,
+      eventTypes: new InMemoryEventTypeStore(),
       ...(adminEnabled ? { adminToken: ADMIN_TOKEN } : {}),
     });
     const app = await apps.create({ name: "Acme" });
@@ -2249,7 +2253,7 @@ describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
     const messages = new InMemoryMessageStore();
     const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
     const attempts = new InMemoryDeliveryAttemptStore();
-    const api = createApi({ apps, endpoints, messages, queue, attempts });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Test" });
     const { secret } = await apps.createApiKey(app.id);
 
@@ -2379,7 +2383,7 @@ describe("createApi — POST /v1/portal/sessions (portal session minting)", () =
     const attempts = new InMemoryDeliveryAttemptStore();
     const portalSessions = new InMemoryPortalSessionStore();
     const now = () => 1_700_000_000_000;
-    const api = createApi({ apps, endpoints, messages, queue, attempts, portalSessions, now });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, portalSessions, now, eventTypes: new InMemoryEventTypeStore() });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
     return { api, secret, portalSessions };
@@ -2477,5 +2481,94 @@ describe("createApi — POST /v1/portal/sessions (portal session minting)", () =
     );
     expect(res.status).toBe(201);
     expect(body(res).portalUrl).toMatch(/^https:\/\/hooks\.example\.com\/portal\/login\?token=/);
+  });
+});
+
+describe("createApi — event types", () => {
+  it("creates an event type and returns 201", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/event-types",
+        { id: "user.created", name: "User Created", description: "A user was created" },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).id).toBe("user.created");
+    expect(body(res).name).toBe("User Created");
+    expect(body(res).description).toBe("A user was created");
+    expect(body(res).archived).toBe(false);
+  });
+
+  it("returns 409 for duplicate event type id", async () => {
+    const { api, secret } = await setup();
+    await api(
+      jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret),
+    );
+    const res = await api(
+      jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created v2" }, secret),
+    );
+    expect(res.status).toBe(409);
+    expect(body(res).error.code).toBe("conflict");
+  });
+
+  it("lists event types, excludes archived by default", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret));
+    await api(jsonRequest("POST", "/v1/event-types", { id: "payment.failed", name: "Payment Failed" }, secret));
+    await api(request({ method: "DELETE", path: "/v1/event-types/payment.failed", headers: { authorization: `Bearer ${secret}` } }));
+
+    const res = await api(request({ method: "GET", path: "/v1/event-types", headers: { authorization: `Bearer ${secret}` } }));
+    expect(res.status).toBe(200);
+    expect(body(res).data).toHaveLength(1);
+    expect(body(res).data[0].id).toBe("user.created");
+  });
+
+  it("lists event types with includeArchived=true", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret));
+    await api(jsonRequest("POST", "/v1/event-types", { id: "payment.failed", name: "Payment Failed" }, secret));
+    await api(request({ method: "DELETE", path: "/v1/event-types/payment.failed", headers: { authorization: `Bearer ${secret}` } }));
+
+    const res = await api(request({ method: "GET", path: "/v1/event-types", headers: { authorization: `Bearer ${secret}` }, query: { includeArchived: "true" } }));
+    expect(res.status).toBe(200);
+    expect(body(res).data).toHaveLength(2);
+  });
+
+  it("gets a single event type", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret));
+    const res = await api(request({ method: "GET", path: "/v1/event-types/user.created", headers: { authorization: `Bearer ${secret}` } }));
+    expect(res.status).toBe(200);
+    expect(body(res).id).toBe("user.created");
+  });
+
+  it("returns 404 for unknown event type", async () => {
+    const { api, secret } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/event-types/nope", headers: { authorization: `Bearer ${secret}` } }));
+    expect(res.status).toBe(404);
+  });
+
+  it("updates an event type", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret));
+    const res = await api(jsonRequest("PATCH", "/v1/event-types/user.created", { name: "User Created (v2)" }, secret));
+    expect(res.status).toBe(200);
+    expect(body(res).name).toBe("User Created (v2)");
+  });
+
+  it("archives an event type (DELETE returns 204)", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/event-types", { id: "user.created", name: "User Created" }, secret));
+    const res = await api(request({ method: "DELETE", path: "/v1/event-types/user.created", headers: { authorization: `Bearer ${secret}` } }));
+    expect(res.status).toBe(204);
+  });
+
+  it("archive returns 204 even for unknown id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(request({ method: "DELETE", path: "/v1/event-types/nope", headers: { authorization: `Bearer ${secret}` } }));
+    expect(res.status).toBe(204);
   });
 });
