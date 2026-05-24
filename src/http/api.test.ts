@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApi, type ApiHandler, type ApiRequest, type ApiResponse } from "./api.js";
 import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
@@ -2570,5 +2570,186 @@ describe("createApi — event types", () => {
     const { api, secret } = await setup();
     const res = await api(request({ method: "DELETE", path: "/v1/event-types/nope", headers: { authorization: `Bearer ${secret}` } }));
     expect(res.status).toBe(204);
+  });
+});
+
+describe("createApi — POST /v1/endpoints/:id/test", () => {
+  /** Create an endpoint and return its id + api key. */
+  async function makeEndpoint(
+    api: ApiHandler,
+    key: string,
+    url = "https://receiver.example",
+  ): Promise<{ id: string }> {
+    const res = await api(jsonRequest("POST", "/v1/endpoints", { url }, key));
+    return body(res) as { id: string };
+  }
+
+  it("returns 200 success when the transport responds 200", async () => {
+    const { api, secret } = await setup();
+    const ep = await makeEndpoint(api, secret);
+    // Inject a transport that always returns 200.
+    const transport = vi.fn().mockResolvedValue({ status: 200 });
+    const testApi = createApi({
+      apps: new InMemoryAppStore(),
+      endpoints: new InMemoryEndpointStore(),
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      transport,
+    });
+    // Re-create the endpoint under the new api instance.
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key2 } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      transport,
+    });
+    const res = await api2(
+      jsonRequest("POST", `/v1/endpoints/${ep2.id}/test`, {}, key2),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).success).toBe(true);
+    expect(body(res).httpStatus).toBe(200);
+    expect(typeof body(res).durationMs).toBe("number");
+    expect(transport).toHaveBeenCalledOnce();
+  });
+
+  it("returns 200 with success:false when the transport responds 500", async () => {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key2 } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    const transport = vi.fn().mockResolvedValue({ status: 500 });
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      transport,
+    });
+    const res = await api2(
+      jsonRequest("POST", `/v1/endpoints/${ep2.id}/test`, {}, key2),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).success).toBe(false);
+    expect(body(res).httpStatus).toBe(500);
+  });
+
+  it("returns 200 with success:false and error when the transport throws", async () => {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key2 } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    const transport = vi.fn().mockRejectedValue(new Error("connection refused"));
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      transport,
+    });
+    const res = await api2(
+      jsonRequest("POST", `/v1/endpoints/${ep2.id}/test`, {}, key2),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).success).toBe(false);
+    expect(body(res).error).toContain("connection refused");
+    expect(body(res).httpStatus).toBeUndefined();
+  });
+
+  it("uses default test event when body is empty", async () => {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key2 } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example", secret: "whsec_testsecret" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    let capturedHeaders: Record<string, string> = {};
+    const transport = vi.fn().mockImplementation(async (req: HttpDeliveryRequest) => {
+      capturedHeaders = req.headers as Record<string, string>;
+      return { status: 200 };
+    });
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      transport,
+    });
+    await api2(request({ method: "POST", path: `/v1/endpoints/${ep2.id}/test`, headers: { authorization: `Bearer ${key2}` } }));
+    expect(capturedHeaders["webhook-id"]).toMatch(/^test_/);
+    expect(capturedHeaders["webhook-signature"]).toBeDefined();
+  });
+
+  it("returns 400 for a disabled endpoint", async () => {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key2 } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    await endpoints2.update(ep2.id, { disabled: true });
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+    });
+    const res = await api2(
+      jsonRequest("POST", `/v1/endpoints/${ep2.id}/test`, {}, key2),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("endpoint_disabled");
+  });
+
+  it("returns 404 for an unknown or cross-tenant endpoint", async () => {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const appA = await apps2.create({ name: "A" });
+    const appB = await apps2.create({ name: "B" });
+    const { secret: keyA } = await apps2.createApiKey(appA.id);
+    const { secret: keyB } = await apps2.createApiKey(appB.id);
+    await endpoints2.create({ appId: appA.id, url: "https://a.example" });
+    const epA = (await endpoints2.listByApp(appA.id))[0]!;
+    const api2 = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+    });
+    const missing = await api2(jsonRequest("POST", "/v1/endpoints/nope/test", {}, keyA));
+    const crossTenant = await api2(jsonRequest("POST", `/v1/endpoints/${epA.id}/test`, {}, keyB));
+    expect(missing.status).toBe(404);
+    expect(crossTenant.status).toBe(404);
+  });
+
+  it("requires authentication", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "POST", path: "/v1/endpoints/ep_x/test" }));
+    expect(res.status).toBe(401);
   });
 });

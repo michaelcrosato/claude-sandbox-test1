@@ -28,6 +28,7 @@
  * | PATCH  | /v1/endpoints/:id    | Bearer | Update an endpoint (tenant-scoped).      |
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
  * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
+ * | POST   | /v1/endpoints/:id/test | Bearer | Send a one-shot test delivery; returns result synchronously. |
  * | GET    | /v1/usage            | Bearer | The tenant's own message + delivery usage and quota status. |
  * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
  * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
@@ -123,8 +124,16 @@ import {
   type CreatedApp,
   type NewApp,
 } from "../apps/app.js";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { ingest } from "../fanout/fanout.js";
+import {
+  buildSignedRequest,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  fetchTransport,
+  isSuccessStatus,
+  type Transport,
+} from "../worker/delivery-worker.js";
+import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
 import {
   PROMETHEUS_CONTENT_TYPE,
   renderPrometheus,
@@ -181,6 +190,16 @@ export interface ApiDeps {
   readonly portalSessions?: import("../portal/portal-session.js").PortalSessionStore;
   /** Backs the event-type catalog CRUD routes. */
   readonly eventTypes: EventTypeStore;
+  /**
+   * HTTP transport used by `POST /v1/endpoints/:id/test` to send the one-shot
+   * test delivery. Defaults to {@link fetchTransport}; inject a fake in tests.
+   */
+  readonly transport?: Transport;
+  /**
+   * Per-request timeout for test deliveries (ms). Defaults to
+   * {@link DEFAULT_REQUEST_TIMEOUT_MS}. `0` disables the timeout.
+   */
+  readonly testRequestTimeoutMs?: number;
 }
 
 /**
@@ -764,6 +783,7 @@ export const API_ROUTE_KEYS = [
   "PATCH /v1/endpoints/:id",
   "DELETE /v1/endpoints/:id",
   "POST /v1/endpoints/:id/rotate-secret",
+  "POST /v1/endpoints/:id/test",
   "GET /v1/endpoints/:id/deliveries",
   "GET /v1/deliveries",
   "GET /v1/usage",
@@ -1103,6 +1123,63 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, { ...endpointView(rotated), secret: rotated.secret });
   };
 
+  const testEndpoint: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const endpoint = await loadOwnedEndpoint(ctx.app.id, id);
+    if (endpoint.disabled) {
+      throw new HttpError(400, "endpoint_disabled", "cannot test a disabled endpoint");
+    }
+    // Body is entirely optional. Default: a generic test event.
+    let eventType = "test";
+    let payload = JSON.stringify({ test: true });
+    if (ctx.req.rawBody.length > 0) {
+      const parsed = parseJsonObject(ctx.req);
+      if ("eventType" in parsed && typeof parsed["eventType"] === "string") {
+        eventType = parsed["eventType"];
+      }
+      if ("payload" in parsed && parsed["payload"] !== undefined) {
+        payload = JSON.stringify(parsed["payload"]);
+      }
+    }
+    // Synthetic message — not stored, not queued, not counted against quota.
+    const now = (deps.now ?? Date.now)();
+    const syntheticMessage = {
+      id: `test_${randomUUID()}`,
+      appId: ctx.app.id,
+      eventType,
+      payload,
+      idempotencyKey: null,
+      createdAt: now,
+      fanoutPending: false,
+    };
+    const target = endpointToDeliveryTarget(endpoint, now);
+    const signedReq = buildSignedRequest(syntheticMessage, target, now);
+    const send = deps.transport ?? fetchTransport;
+    const timeoutMs = deps.testRequestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const timer =
+      controller !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    const sentAt = Date.now();
+    let httpStatus: number | undefined;
+    let error: string | undefined;
+    try {
+      const response = await send(signedReq, controller?.signal ?? new AbortController().signal);
+      httpStatus = response.status;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+    const durationMs = Date.now() - sentAt;
+    const success = httpStatus !== undefined && isSuccessStatus(httpStatus);
+    return json(200, {
+      success,
+      ...(httpStatus !== undefined ? { httpStatus } : {}),
+      ...(error !== undefined ? { error } : {}),
+      durationMs,
+    });
+  };
+
   const getEndpointDeliveries: AuthedHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     // Ownership check: another tenant's (or an absent) endpoint is 404 — existence
@@ -1420,6 +1497,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "PATCH /v1/endpoints/:id": authed(updateEndpoint),
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
+    "POST /v1/endpoints/:id/test": authed(testEndpoint),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
     "GET /v1/deliveries": authed(getAppDeliveries),
     "GET /v1/usage": authed(getUsage),

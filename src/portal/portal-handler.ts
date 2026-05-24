@@ -28,6 +28,7 @@
  *    it is never echoed by the detail page. This matches the JSON API behaviour.
  */
 
+import { randomUUID } from "node:crypto";
 import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
@@ -35,12 +36,21 @@ import type { PortalSessionStore } from "./portal-session.js";
 import type { EventTypeStore } from "../event-types/event-type.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
+  buildSignedRequest,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  fetchTransport,
+  isSuccessStatus,
+  type Transport,
+} from "../worker/delivery-worker.js";
+import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
+import {
   portalExpiredPage,
   portalEndpointsPage,
   portalEndpointDetailPage,
   portalDeliveryDetailPage,
   portalRotatedSecretPage,
   type DeliveryRow,
+  type PortalTestResult,
 } from "./portal-views.js";
 
 export interface PortalDeps {
@@ -50,6 +60,11 @@ export interface PortalDeps {
   readonly eventTypes?: EventTypeStore;
   /** Clock (epoch ms). Defaults to `Date.now`; inject in tests for determinism. */
   readonly now?: () => number;
+  /**
+   * HTTP transport for portal test deliveries. Defaults to {@link fetchTransport};
+   * inject a fake in tests.
+   */
+  readonly transport?: Transport;
 }
 
 /** Cookie name for the portal session. Distinct from the admin and tenant dashboard cookies. */
@@ -121,6 +136,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const { endpoints, queue, sessions } = deps;
   const clock = deps.now ?? (() => Date.now());
   const eventTypesStore = deps.eventTypes;
+  const send = deps.transport ?? fetchTransport;
 
   function sessionCookie(token: string): string {
     return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal`;
@@ -317,6 +333,55 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
       await endpoints.delete(s1);
       return redirect("/portal/endpoints");
+    }
+
+    // ── POST /portal/endpoints/:id/test ───────────────────────────────────────
+    if (method === "POST" && s0 === "endpoints" && s1 !== undefined && s2 === "test" && segs.length === 3) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      const ep = await endpoints.get(s1);
+      if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+      const now = clock();
+      const syntheticMessage = {
+        id: `test_${randomUUID()}`,
+        appId: auth.appId,
+        eventType: "test",
+        payload: JSON.stringify({ test: true }),
+        idempotencyKey: null,
+        createdAt: now,
+        fanoutPending: false,
+      };
+      const target = endpointToDeliveryTarget(ep, now);
+      const signedReq = buildSignedRequest(syntheticMessage, target, now);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), DEFAULT_REQUEST_TIMEOUT_MS);
+      const sentAt = Date.now();
+      let httpStatus: number | undefined;
+      let error: string | undefined;
+      try {
+        const response = await send(signedReq, controller.signal);
+        httpStatus = response.status;
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      } finally {
+        clearTimeout(timer);
+      }
+      const durationMs = Date.now() - sentAt;
+      const testResult: PortalTestResult = {
+        success: httpStatus !== undefined && isSuccessStatus(httpStatus),
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
+        ...(error !== undefined ? { error } : {}),
+        durationMs,
+      };
+      const page = await queue.listByEndpoint(s1, { limit: RECENT_DELIVERIES_LIMIT });
+      const rows: DeliveryRow[] = page.deliveries.map((task) => ({
+        task,
+        messageId: task.messageId ?? "",
+      }));
+      const catalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      return html(200, portalEndpointDetailPage(ep, rows, undefined, catalogTypes, testResult));
     }
 
     // ── GET /portal/endpoints/:id/deliveries/:deliveryId ──────────────────────

@@ -228,12 +228,21 @@ export interface DeliveryRow {
   readonly messageId: string;
 }
 
+/** Result of a portal test delivery, shown inline on the detail page. */
+export interface PortalTestResult {
+  readonly success: boolean;
+  readonly httpStatus?: number;
+  readonly error?: string;
+  readonly durationMs: number;
+}
+
 /** Endpoint detail page — config + edit form + recent deliveries. */
 export function portalEndpointDetailPage(
   endpoint: Endpoint,
   deliveries: readonly DeliveryRow[],
   error?: string,
   catalogTypes?: readonly { id: string; name: string }[],
+  testResult?: PortalTestResult,
 ): string {
   const errorBanner = error
     ? `<div class="alert alert-err">${esc(error)}</div>`
@@ -299,6 +308,28 @@ export function portalEndpointDetailPage(
   </form>
 </div>`;
 
+  const testResultHtml = testResult
+    ? testResult.success
+      ? `<div class="alert alert-ok" style="margin-top:8px">
+          Test succeeded — endpoint responded <strong>${esc(String(testResult.httpStatus ?? ""))}</strong>
+          in ${esc(String(testResult.durationMs))} ms.
+        </div>`
+      : `<div class="alert alert-err" style="margin-top:8px">
+          Test failed${testResult.httpStatus !== undefined ? ` — endpoint responded <strong>${esc(String(testResult.httpStatus))}</strong>` : ""}${testResult.error ? `: <span class="mono">${esc(testResult.error)}</span>` : ""}
+          (${esc(String(testResult.durationMs))} ms).
+        </div>`
+    : "";
+  const testForm = endpoint.disabled
+    ? ""
+    : `<div class="card">
+  <h2 style="margin-bottom:8px">Test delivery</h2>
+  <p class="meta" style="margin-bottom:12px">Send a one-shot signed test webhook to this endpoint URL and see the result immediately — no message is stored and quota is not consumed.</p>
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/test">
+    <button type="submit" class="btn btn-gray">Send test</button>
+  </form>
+  ${testResultHtml}
+</div>`;
+
   const rotateForm = `<div class="card">
   <h2 style="margin-bottom:8px">Signing secret</h2>
   <p class="meta" style="margin-bottom:12px">Rotate the signing secret when you need to reconfigure your webhook receiver. The old secret remains active for 24 h so you can update your server without downtime.</p>
@@ -339,6 +370,7 @@ export function portalEndpointDetailPage(
 </div>
 
 ${editForm}
+${testForm}
 ${rotateForm}
 ${deleteForm}`;
 

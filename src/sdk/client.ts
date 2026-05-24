@@ -362,6 +362,26 @@ export interface UpdateEndpointInput {
   readonly disabled?: boolean;
 }
 
+/** Optional body of {@link PosthornClient.testEndpoint}. */
+export interface TestEndpointInput {
+  /** The event type to send (e.g. `"user.created"`). Defaults to `"test"`. */
+  readonly eventType?: string;
+  /** The event body — any JSON-serializable value. Defaults to `{"test":true}`. */
+  readonly payload?: unknown;
+}
+
+/** Result of {@link PosthornClient.testEndpoint}. */
+export interface TestEndpointResult {
+  /** Whether the endpoint responded with a 2xx status. */
+  readonly success: boolean;
+  /** The HTTP status the endpoint returned, if a response was received. */
+  readonly httpStatus?: number;
+  /** Transport-level error message when no response was received. */
+  readonly error?: string;
+  /** Round-trip latency in milliseconds. */
+  readonly durationMs: number;
+}
+
 /** Options for {@link PosthornClient.rotateEndpointSecret}; all fields optional. */
 export interface RotateEndpointSecretInput {
   /** The new primary secret. Omit to have the gateway generate a secure one (the common case). */
@@ -702,6 +722,25 @@ export class PosthornClient {
     return this.#transport.request<CreatedEndpoint>(
       "POST",
       `/v1/endpoints/${encodeURIComponent(id)}/rotate-secret`,
+      body,
+    );
+  }
+
+  /**
+   * Send a one-shot test webhook to the endpoint and return the result
+   * synchronously — `POST /v1/endpoints/:id/test`. The delivery is not stored,
+   * not queued, and does not count against the tenant's monthly quota.
+   * Useful to verify that an endpoint is reachable and configured correctly
+   * after creation or a configuration change. Omit `input` for a generic test
+   * event (`eventType: "test"`, `payload: {"test":true}`).
+   */
+  async testEndpoint(id: string, input: TestEndpointInput = {}): Promise<TestEndpointResult> {
+    const body: Record<string, unknown> = {};
+    if (input.eventType !== undefined) body["eventType"] = input.eventType;
+    if (input.payload !== undefined) body["payload"] = input.payload;
+    return this.#transport.request<TestEndpointResult>(
+      "POST",
+      `/v1/endpoints/${encodeURIComponent(id)}/test`,
       body,
     );
   }

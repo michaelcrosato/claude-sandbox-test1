@@ -482,6 +482,35 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/endpoints/{id}/test": {
+        post: {
+          operationId: "testEndpoint",
+          tags: ["Endpoints"],
+          summary: "Send a test delivery to an endpoint",
+          description:
+            "Send a one-shot signed webhook to the endpoint URL and return the result " +
+            "synchronously — the canonical way to verify an endpoint is wired correctly after " +
+            "creation or configuration changes. The delivery is **not** stored, **not** queued, " +
+            "and does **not** count against the tenant's monthly quota. The response always has " +
+            "status `200`; `success` inside the body reports whether the endpoint responded " +
+            "with a 2xx. Another tenant's (or an unknown) endpoint is `404`; a `disabled` " +
+            "endpoint is `400`.",
+          parameters: [idParam("The endpoint id.")],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: ref("TestEndpointInput") } },
+          },
+          responses: {
+            "200": jsonResponse(
+              "The synchronous delivery result (always 200, check `success` in the body).",
+              ref("TestEndpointResult"),
+            ),
+            "400": errorResponse("Malformed request body, or the endpoint is disabled."),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
       "/v1/deliveries": {
         get: {
           operationId: "listDeliveries",
@@ -1184,6 +1213,46 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "How long (ms) the old secret keeps signing after the rotation, so receivers " +
                 "mid-migration still verify. Defaults to 24h. `0` is an instant hard swap (no overlap).",
+            },
+          },
+        },
+        TestEndpointInput: {
+          type: "object",
+          description:
+            "The (optional) body of `POST /v1/endpoints/{id}/test`. Omit it entirely to send a " +
+            "generic test event (`eventType: \"test\"`, `payload: {\"test\":true}`).",
+          properties: {
+            eventType: {
+              type: "string",
+              description: "The event type to send (e.g. `\"user.created\"`). Defaults to `\"test\"`.",
+            },
+            payload: {
+              description: "The event body — any JSON value. Defaults to `{\"test\":true}`.",
+            },
+          },
+        },
+        TestEndpointResult: {
+          type: "object",
+          description: "Synchronous result of a one-shot test delivery.",
+          required: ["success", "durationMs"],
+          properties: {
+            success: {
+              type: "boolean",
+              description: "Whether the endpoint responded with a 2xx status.",
+            },
+            httpStatus: {
+              type: "integer",
+              description: "The HTTP status the endpoint returned, if a response was received.",
+            },
+            error: {
+              type: "string",
+              description:
+                "Transport-level error message when no response was received (DNS failure, " +
+                "connection refused, timeout, etc.).",
+            },
+            durationMs: {
+              type: "integer",
+              description: "Round-trip latency in milliseconds.",
             },
           },
         },

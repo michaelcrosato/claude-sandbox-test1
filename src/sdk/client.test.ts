@@ -761,3 +761,40 @@ describe("PosthornClient — event types", () => {
     expect(capturedUrl!).toContain("includeArchived=true");
   });
 });
+
+describe("PosthornClient — testEndpoint", () => {
+  it("sends POST to /v1/endpoints/:id/test with the provided body", async () => {
+    let capturedUrl: string | null = null;
+    let capturedBody: string | null = null;
+    const result = { success: true, httpStatus: 200, durationMs: 42 };
+    const client = fakeClient(async (url, init) => {
+      capturedUrl = url;
+      capturedBody = init?.body as string ?? null;
+      return fakeResponse(200, JSON.stringify(result));
+    });
+    const res = await client.testEndpoint("ep_1", { eventType: "user.created", payload: { id: 1 } });
+    expect(res.success).toBe(true);
+    expect(res.httpStatus).toBe(200);
+    expect(res.durationMs).toBe(42);
+    expect(capturedUrl).not.toBeNull();
+    expect(capturedUrl!).toContain("/v1/endpoints/ep_1/test");
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.eventType).toBe("user.created");
+    expect(parsed.payload).toEqual({ id: 1 });
+  });
+
+  it("sends POST with empty body when no input is provided", async () => {
+    let capturedBody: string | null = null;
+    const result = { success: false, httpStatus: 500, durationMs: 10 };
+    const client = fakeClient(async (_url, init) => {
+      capturedBody = init?.body as string ?? null;
+      return fakeResponse(200, JSON.stringify(result));
+    });
+    const res = await client.testEndpoint("ep_2");
+    expect(res.success).toBe(false);
+    // An empty input object serializes to "{}" — no eventType or payload keys.
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed).not.toHaveProperty("eventType");
+    expect(parsed).not.toHaveProperty("payload");
+  });
+});
