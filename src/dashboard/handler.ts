@@ -19,6 +19,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { AppStore } from "../apps/app.js";
+import type { MessageStore } from "../storage/message-store.js";
+import { utcMonthRange } from "../storage/message-store.js";
 import type { SessionStore } from "./sessions.js";
 import { loginPage, appsPage, appDetailPage } from "./views.js";
 
@@ -32,6 +34,11 @@ export interface DashboardDeps {
    * accepts this value as the password.
    */
   readonly adminToken: string;
+  /**
+   * Message store — when provided, the apps list page shows the current-month
+   * message count for each tenant alongside the quota. Omit to hide the column.
+   */
+  readonly messages?: MessageStore;
   /** Clock (epoch ms). Defaults to `Date.now`; inject in tests for determinism. */
   readonly now?: () => number;
 }
@@ -106,7 +113,7 @@ const NOT_FOUND: ApiResponse = { status: 404, body: undefined };
  * responsible for only wiring this handler when a token is configured.
  */
 export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
-  const { apps, sessions, adminToken } = deps;
+  const { apps, sessions, adminToken, messages } = deps;
   const clock = deps.now ?? (() => Date.now());
 
   // Set-Cookie header value for a new session token.
@@ -169,7 +176,15 @@ export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
       const unauth = requireAuth(req);
       if (unauth) return unauth;
       const all = await apps.list();
-      return html(200, appsPage(all));
+      let usage: Map<string, number> | undefined;
+      if (messages !== undefined) {
+        const range = utcMonthRange(clock());
+        const summaries = await Promise.all(
+          all.map((app) => messages.summarizeUsageByApp(app.id, range)),
+        );
+        usage = new Map(all.map((app, i) => [app.id, summaries[i]!.total]));
+      }
+      return html(200, appsPage(all, usage));
     }
 
     // ── POST /dashboard/apps (create app) ─────────────────────────────────────

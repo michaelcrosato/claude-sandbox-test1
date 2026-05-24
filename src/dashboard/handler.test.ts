@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDashboardHandler } from "./handler.js";
 import { InMemorySessionStore } from "./sessions.js";
 import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
+import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import type { ApiRequest } from "../http/api.js";
 
 const TOKEN = "test-dashboard-token-long-enough";
@@ -16,6 +17,22 @@ function setup() {
     now: () => 1_000,
   });
   return { apps, sessions, handler };
+}
+
+function setupWithMessages() {
+  const apps = new InMemoryAppStore();
+  const sessions = new InMemorySessionStore();
+  // Use a fixed clock in the middle of 2025-01 so utcMonthRange covers Jan 2025.
+  const now = () => new Date("2025-01-15T12:00:00Z").getTime();
+  const messages = new InMemoryMessageStore({ now });
+  const handler = createDashboardHandler({
+    apps,
+    sessions,
+    adminToken: TOKEN,
+    messages,
+    now,
+  });
+  return { apps, sessions, messages, handler, now };
 }
 
 function req(
@@ -211,5 +228,43 @@ describe("createDashboardHandler — unknown routes", () => {
     const { handler } = setup();
     const res = await handler(req("GET", "/dashboard/nonexistent"));
     expect(res.status).toBe(404);
+  });
+});
+
+describe("createDashboardHandler — per-app usage column", () => {
+  it("apps list without messages store shows '—' in usage column", async () => {
+    const { handler, apps } = setup();
+    await apps.create({ name: "Alpha" });
+    const res = await authed(handler, "GET", "/dashboard/apps");
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("This-month usage");
+    expect(html).toContain("—");
+  });
+
+  it("apps list with messages store and no traffic shows 0 for each app", async () => {
+    const { handler, apps } = setupWithMessages();
+    await apps.create({ name: "Beta" });
+    const res = await authed(handler, "GET", "/dashboard/apps");
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toContain("This-month usage");
+    expect(String(res.body)).toContain(">0<");
+  });
+
+  it("apps list with messages store shows correct per-app message count", async () => {
+    const { handler, apps, messages } = setupWithMessages();
+    const app = await apps.create({ name: "Gamma" });
+    const other = await apps.create({ name: "Delta" });
+    // Seed 3 messages for Gamma, 1 for Delta — all within January 2025.
+    for (let i = 0; i < 3; i++) {
+      await messages.create({ appId: app.id, eventType: "test", payload: "{}" });
+    }
+    await messages.create({ appId: other.id, eventType: "test", payload: "{}" });
+    const res = await authed(handler, "GET", "/dashboard/apps");
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    // Gamma row has 3, Delta row has 1
+    expect(body).toContain(">3<");
+    expect(body).toContain(">1<");
   });
 });

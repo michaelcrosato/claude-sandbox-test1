@@ -118,14 +118,14 @@ export function loginPage(error?: string): string {
 }
 
 /** Apps list page showing all tenants with a create form. */
-export function appsPage(apps: readonly App[]): string {
+export function appsPage(apps: readonly App[], usage?: ReadonlyMap<string, number>): string {
   const nav = `<form method="POST" action="/dashboard/logout" style="display:inline">
     <button type="submit" class="btn btn-gray btn-sm">Sign out</button>
   </form>`;
 
   const tableRows =
     apps.length === 0
-      ? `<tr><td colspan="4" class="empty">No apps yet.</td></tr>`
+      ? `<tr><td colspan="5" class="empty">No apps yet.</td></tr>`
       : apps
           .map(
             (app) => `<tr>
@@ -133,6 +133,7 @@ export function appsPage(apps: readonly App[]): string {
     <td class="mono meta">${esc(app.id)}</td>
     <td class="meta">${new Date(app.createdAt).toISOString().slice(0, 10)}</td>
     <td class="meta">${app.monthlyMessageQuota !== null ? app.monthlyMessageQuota.toLocaleString() : "Unlimited"}</td>
+    <td class="meta">${usage !== undefined ? (usage.get(app.id) ?? 0).toLocaleString() : "—"}</td>
   </tr>`,
           )
           .join("");
@@ -141,7 +142,7 @@ export function appsPage(apps: readonly App[]): string {
 <div class="card">
   <table>
     <thead>
-      <tr><th>Name</th><th>ID</th><th>Created</th><th>Monthly quota</th></tr>
+      <tr><th>Name</th><th>ID</th><th>Created</th><th>Monthly quota</th><th>This-month usage</th></tr>
     </thead>
     <tbody>${tableRows}</tbody>
   </table>
