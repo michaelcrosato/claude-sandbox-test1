@@ -4,6 +4,85 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 68: Per-endpoint delivery rate limiting
+
+**Repo truth at start:** clean main @ `8b6c610` (iter-67, priority wired through HTTP
+API and SDK). Baseline verified: `tsc --noEmit` clean, vitest **1329/1329** (1395 total,
+66 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** Posthorn had no way to cap delivery throughput to a slow or fragile
+receiver. Bursts could overwhelm a subscriber, and there was no mechanism to throttle
+per endpoint. Rate limiting is also a differentiator missing from most open-core
+incumbents. The iter-67 LOOP_LOG entry explicitly listed it as the next high-value move.
+
+**Architecture (20 files, +573 / −9):**
+
+1. **`src/queue/delivery-queue.ts`** — Added `applyPostpone` pure function
+   (`delivering → pending(availableAt)` without incrementing `attempts`) and
+   `postpone(taskId, leaseToken, availableAt, nowMs)` to the `DeliveryQueue` interface.
+   Also imported `DeliveryStateError` (was used but not imported).
+
+2. **`src/queue/in-memory-queue.ts` / `sqlite-queue.ts` / `postgres-queue.ts`** —
+   Added `postpone` method to all three backends using the `#requireLeaseHolder` +
+   `applyPostpone` + persist pattern, matching the existing `cancel`/`complete` shape.
+
+3. **`src/endpoints/endpoint.ts`** — Added `rateLimit: number | null` to `Endpoint`,
+   `NewEndpoint`, `EndpointUpdate`, and `NormalizedNewEndpoint`. Added `MAX_RATE_LIMIT`
+   (10 000) constant and `normalizeRateLimit` validator (must be 1–10 000 integer or
+   null). Wired into `normalizeNewEndpoint` and `applyEndpointUpdate`.
+
+4. **`src/endpoints/in-memory-endpoint-store.ts`** — Added `rateLimit` to the endpoint
+   literal in `create`.
+
+5. **`src/endpoints/sqlite-endpoint-store.ts`** — Added `rate_limit INTEGER` to SCHEMA,
+   `#migrateRateLimitColumn()` migration (PRAGMA table_info + ALTER TABLE ADD COLUMN),
+   `rate_limit` to INSERT/UPDATE SQL, and `rateLimit: row.rate_limit ?? null` in
+   `rowToEndpoint`.
+
+6. **`src/endpoints/postgres-endpoint-store.ts`** — Same changes as SQLite: `rate_limit`
+   in `EndpointRow`, `rowToEndpoint`, INSERT SQL ($18), UPDATE SQL ($9 in SET), and SCHEMA.
+
+7. **`src/endpoints/endpoint-resolver.ts`** — `endpointToDeliveryTarget` now forwards
+   `rateLimit` when non-null via the spread pattern.
+
+8. **`src/worker/delivery-worker.ts`** — Added `rateLimit?: number | null` to
+   `DeliveryTarget`. Added `RATE_LIMIT_WINDOW_MS`, `RateLimiter` interface, and
+   `SlidingWindowRateLimiter` class (in-process, per-process, per-endpoint sliding window).
+   Added `rateLimiter?: RateLimiter` to `DeliveryWorkerOptions` (defaults to
+   `new SlidingWindowRateLimiter()`). Added `"rateLimited"` to `TaskOutcome` and
+   `rateLimited: number` to `TickResult`. In `#deliver`, after target resolution and
+   before the HTTP send, calls `rateLimiter.tryConsume` when `endpointId != null &&
+   rateLimit != null`; on denial, calls `queue.postpone` and returns `"rateLimited"`.
+
+9. **`src/http/api.ts`** — Added `rateLimit` to `endpointView`, and `"rateLimit" in body`
+   spread parsing to both create and update handlers.
+
+10. **`src/http/openapi.ts`** — Added `rateLimit` (integer 1–10 000 or null) to
+    `Endpoint.required` and properties, `NewEndpoint` properties, and `EndpointUpdate`
+    properties.
+
+11. **`src/sdk/client.ts`** — Added `rateLimit: number | null` to `EndpointView`,
+    `rateLimit?: number | null` to `CreateEndpointInput` and `UpdateEndpointInput`, and
+    the corresponding `body["rateLimit"]` serialization in both methods.
+
+**Conformance extended:**
+- `src/queue/conformance.ts`: `postpone` describe block (7 cases: reschedule, StaleLeaseError, UnknownDeliveryTaskError, StaleLeaseError on pending).
+- `src/endpoints/conformance.ts`: `rateLimit` describe block (5 cases: default null, create/round-trip, set/replace/clear, preserve-on-unrelated-update, rejection).
+- `src/worker/delivery-worker.test.ts`: `SlidingWindowRateLimiter` unit (5 cases), postpone-without-retry-budget, TickResult count.
+
+**Test fixes:** Added `rateLimit: null` to 4 inline `Endpoint` literals in test files,
+`rateLimited: 0` to TickResult literal in metrics test, `postpone` to two stub
+`DeliveryQueue` objects, fixed conformance test to expect `StaleLeaseError` (not
+`DeliveryStateError`) when calling `postpone` on a pending task (lease check fires first).
+
+**Validation:** `tsc --noEmit` clean, `vitest run` 1329/1329 (0 failures), `npm run build`
+clean.
+
+**Next moves:** API-level `rateLimit` validation 400 test, global rate-limit config for
+all endpoints, webhook verification UI widget, CLI helper for test deliveries.
+
+---
+
 ## 2026-05-24 — Iteration 67: Wire `priority` through HTTP API and SDK
 
 **Repo truth at start:** clean main @ `afb0bf2` (iter-66, message priority in storage
