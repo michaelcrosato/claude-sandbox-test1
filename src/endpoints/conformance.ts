@@ -20,6 +20,7 @@ import {
   type EndpointStore,
   type NewEndpoint,
 } from "./endpoint.js";
+import { endpointToDeliveryTarget } from "./endpoint-resolver.js";
 
 /** Controllable clock + deterministic id/secret generators. */
 export interface EndpointConformanceClock {
@@ -314,6 +315,55 @@ export function describeEndpointStoreContract(
         await expect(store.rotateSecret("ep_nope")).rejects.toBeInstanceOf(
           UnknownEndpointError,
         );
+      });
+    });
+
+    describe("custom headers", () => {
+      it("defaults headers to null when not provided on create", async () => {
+        const e = await store.create(NEW);
+        expect(e.headers).toBeNull();
+        expect((await store.get(e.id))!.headers).toBeNull();
+      });
+
+      it("stores custom headers on create and returns them on get", async () => {
+        const e = await store.create({
+          ...NEW,
+          headers: { "X-API-Key": "secret123", "X-Tenant-ID": "t_1" },
+        });
+        expect(e.headers).toEqual({ "X-API-Key": "secret123", "X-Tenant-ID": "t_1" });
+        expect((await store.get(e.id))!.headers).toEqual({
+          "X-API-Key": "secret123",
+          "X-Tenant-ID": "t_1",
+        });
+      });
+
+      it("update can set, replace, and clear headers", async () => {
+        const e = await store.create({ ...NEW, headers: { "X-Foo": "bar" } });
+        // Replace with a different map.
+        const replaced = await store.update(e.id, { headers: { "X-Baz": "qux" } });
+        expect(replaced.headers).toEqual({ "X-Baz": "qux" });
+        // Clear headers (null).
+        const cleared = await store.update(e.id, { headers: null });
+        expect(cleared.headers).toBeNull();
+        expect((await store.get(e.id))!.headers).toBeNull();
+      });
+
+      it("update preserves headers when headers is not in the patch", async () => {
+        const e = await store.create({ ...NEW, headers: { "X-Keep": "me" } });
+        const updated = await store.update(e.id, { description: "changed" });
+        expect(updated.headers).toEqual({ "X-Keep": "me" });
+      });
+
+      it("custom headers are forwarded to the DeliveryTarget via endpointToDeliveryTarget", async () => {
+        const e = await store.create({ ...NEW, headers: { "X-Auth": "tok" } });
+        const target = endpointToDeliveryTarget(e, clock.now());
+        expect(target.headers).toEqual({ "X-Auth": "tok" });
+      });
+
+      it("endpointToDeliveryTarget omits headers field when endpoint has none", async () => {
+        const e = await store.create(NEW);
+        const target = endpointToDeliveryTarget(e, clock.now());
+        expect(target.headers).toBeUndefined();
       });
     });
 

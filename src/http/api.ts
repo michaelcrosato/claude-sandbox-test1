@@ -528,6 +528,7 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     url: endpoint.url,
     description: endpoint.description,
     eventTypes: endpoint.eventTypes,
+    headers: endpoint.headers,
     disabled: endpoint.disabled,
     // Endpoint health (observability): a tenant can see how/why an endpoint became
     // unhealthy, and whether it was auto-disabled after sustained failure.
@@ -1188,6 +1189,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { eventTypes: body["eventTypes"] as readonly string[] | null }
         : {}),
       ...("disabled" in body ? { disabled: body["disabled"] as boolean } : {}),
+      ...("headers" in body
+        ? { headers: body["headers"] as Record<string, string> | null }
+        : {}),
     };
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
@@ -1214,6 +1218,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { eventTypes: body["eventTypes"] as readonly string[] | null }
         : {}),
       ...("disabled" in body ? { disabled: body["disabled"] as boolean } : {}),
+      ...("headers" in body
+        ? { headers: body["headers"] as Record<string, string> | null }
+        : {}),
     };
     const updated = await deps.endpoints.update(id, patch);
     return json(200, endpointView(updated));

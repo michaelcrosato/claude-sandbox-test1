@@ -203,6 +203,10 @@ export function portalEndpointsPage(
       <input id="description" type="text" name="description" placeholder="Optional label">
     </div>
     ${eventTypesField}
+    <div class="form-row">
+      <label for="headers">Custom headers <span class="meta">(optional — one per line: Header-Name: value)</span></label>
+      <textarea id="headers" name="headers" rows="3" placeholder="X-API-Key: my-key&#10;X-Tenant-ID: 123"></textarea>
+    </div>
     <button type="submit" class="btn btn-blue">Create endpoint</button>
   </form>
 </div>`;
@@ -285,6 +289,11 @@ export function portalEndpointDetailPage(
       <input id="eventTypes" type="text" name="eventTypes" value="${esc(endpoint.eventTypes !== null ? endpoint.eventTypes.join(", ") : "")}">
     </div>`;
 
+  const headersText = endpoint.headers
+    ? Object.entries(endpoint.headers)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n")
+    : "";
   const editForm = `<div class="card">
   <h2 style="margin-bottom:16px">Edit endpoint</h2>
   ${errorBanner}
@@ -298,6 +307,10 @@ export function portalEndpointDetailPage(
       <input id="description" type="text" name="description" value="${esc(endpoint.description)}">
     </div>
     ${editEventTypesField}
+    <div class="form-row">
+      <label for="headers">Custom headers <span class="meta">(one per line: Header-Name: value — clear all to remove)</span></label>
+      <textarea id="headers" name="headers" rows="4" placeholder="X-API-Key: my-key&#10;X-Tenant-ID: 123">${esc(headersText)}</textarea>
+    </div>
     <div class="form-row" style="display:flex;gap:8px;align-items:center">
       <input type="checkbox" id="disabled" name="disabled" value="1"${endpoint.disabled ? " checked" : ""} style="width:auto">
       <label for="disabled" style="text-transform:none;letter-spacing:0;margin:0">Disabled (pauses delivery to this endpoint)</label>
@@ -354,6 +367,7 @@ export function portalEndpointDetailPage(
     <tr><td style="color:#64748b;padding-right:24px;white-space:nowrap">URL</td><td class="mono">${esc(endpoint.url)}</td></tr>
     <tr><td style="color:#64748b">Description</td><td>${esc(endpoint.description) || '<span class="meta">—</span>'}</td></tr>
     <tr><td style="color:#64748b">Event types</td><td>${esc(types)}</td></tr>
+    <tr><td style="color:#64748b;vertical-align:top">Custom headers</td><td class="mono">${endpoint.headers ? Object.entries(endpoint.headers).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>") : '<span class="meta" style="font-style:normal">—</span>'}</td></tr>
     <tr><td style="color:#64748b">Status</td><td>${endpoint.disabled ? '<span class="pill pill-gray">disabled</span>' : '<span class="pill pill-green">active</span>'}</td></tr>
     <tr><td style="color:#64748b">Created</td><td class="meta">${fmtTime(endpoint.createdAt)}</td></tr>
   </table>

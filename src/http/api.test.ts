@@ -658,6 +658,72 @@ describe("createApi — endpoints CRUD", () => {
     );
     expect(after.status).toBe(404);
   });
+
+  it("creates an endpoint with custom headers and returns them in the view", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://a.example/hook", headers: { "X-API-Key": "tok", "X-Tenant": "t1" } },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).headers).toEqual({ "X-API-Key": "tok", "X-Tenant": "t1" });
+  });
+
+  it("updates custom headers on an existing endpoint (set, replace, clear)", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/1" }, secret),
+    );
+    const id = body(created).id;
+    // Set.
+    const set = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { headers: { "X-Foo": "bar" } }, secret),
+    );
+    expect(body(set).headers).toEqual({ "X-Foo": "bar" });
+    // Replace.
+    const replaced = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { headers: { "X-Baz": "qux" } }, secret),
+    );
+    expect(body(replaced).headers).toEqual({ "X-Baz": "qux" });
+    // Clear.
+    const cleared = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { headers: null }, secret),
+    );
+    expect(body(cleared).headers).toBeNull();
+  });
+
+  it("rejects reserved header names (400) on create and update", async () => {
+    const { api, secret } = await setup();
+    const bad = await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://a.example/hook", headers: { "webhook-id": "x" } },
+        secret,
+      ),
+    );
+    expect(bad.status).toBe(400);
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/1" }, secret),
+    );
+    const id = body(created).id;
+    const badPatch = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { headers: { "content-type": "text/plain" } }, secret),
+    );
+    expect(badPatch.status).toBe(400);
+  });
+
+  it("endpoint view includes headers: null when no custom headers are set", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/1" }, secret),
+    );
+    expect(body(created).headers).toBeNull();
+  });
 });
 
 describe("createApi — POST /v1/endpoints/:id/rotate-secret", () => {

@@ -71,6 +71,15 @@ export interface Endpoint {
    */
   readonly eventTypes: readonly string[] | null;
   /**
+   * Custom HTTP headers added to every delivery to this endpoint — useful for
+   * receiver-side authentication (`X-API-Key`, `Authorization: Bearer …`) or
+   * tenant routing. `null` means no custom headers. The Standard Webhooks signing
+   * headers (`webhook-id`, `webhook-timestamp`, `webhook-signature`) and
+   * `content-type` are always set by Posthorn and cannot be overridden here; see
+   * {@link FORBIDDEN_DELIVERY_HEADERS}.
+   */
+  readonly headers: Readonly<Record<string, string>> | null;
+  /**
    * When `true`, the endpoint is administratively paused. Fan-out skips it, and a
    * resolver declines to resolve it (so an in-flight task fails rather than
    * delivers — see `endpoint-resolver.ts`).
@@ -119,6 +128,11 @@ export interface NewEndpoint {
   readonly eventTypes?: readonly string[] | null;
   /** Whether the endpoint starts paused. Defaults to `false`. */
   readonly disabled?: boolean;
+  /**
+   * Custom HTTP headers to add to every delivery. Omit (or pass `null`) for none.
+   * Cannot contain reserved headers (see {@link FORBIDDEN_DELIVERY_HEADERS}).
+   */
+  readonly headers?: Readonly<Record<string, string>> | null;
 }
 
 /**
@@ -137,6 +151,11 @@ export interface EndpointUpdate {
   readonly eventTypes?: readonly string[] | null;
   /** Pause or resume the endpoint. */
   readonly disabled?: boolean;
+  /**
+   * Replace custom delivery headers. Pass `null` to clear all custom headers.
+   * Cannot contain reserved headers (see {@link FORBIDDEN_DELIVERY_HEADERS}).
+   */
+  readonly headers?: Readonly<Record<string, string>> | null;
 }
 
 /**
@@ -231,6 +250,25 @@ export class UnknownEndpointError extends Error {
     this.endpointId = endpointId;
   }
 }
+
+/**
+ * Maximum number of custom delivery headers per endpoint. Bounds the header-map
+ * size stored and the extra signing work done per delivery.
+ */
+export const MAX_CUSTOM_HEADERS = 20;
+
+/**
+ * Header names that Posthorn controls and a caller cannot override via custom
+ * headers. They are applied after the custom headers in {@link buildSignedRequest},
+ * so they always win regardless — this set makes the rejection explicit at
+ * intake so callers see a clear error rather than a silent override.
+ */
+export const FORBIDDEN_DELIVERY_HEADERS = new Set([
+  "webhook-id",
+  "webhook-timestamp",
+  "webhook-signature",
+  "content-type",
+]);
 
 /** Prefix on generated endpoint ids. */
 const ENDPOINT_ID_PREFIX = "ep_";
@@ -357,6 +395,49 @@ export interface NormalizedNewEndpoint {
   readonly description: string;
   readonly eventTypes: readonly string[] | null;
   readonly disabled: boolean;
+  readonly headers: Readonly<Record<string, string>> | null;
+}
+
+/**
+ * Validate and normalize a custom headers map: rejects reserved headers, non-string
+ * values, newlines in keys/values (header-injection prevention), and maps that exceed
+ * {@link MAX_CUSTOM_HEADERS}. An empty map normalizes to `null` (canonical "none").
+ */
+export function normalizeHeaders(
+  headers: unknown,
+): Readonly<Record<string, string>> | null {
+  if (headers === undefined || headers === null) return null;
+  if (typeof headers !== "object" || Array.isArray(headers)) {
+    throw new TypeError("headers must be a plain object or null");
+  }
+  const entries = Object.entries(headers as Record<string, unknown>);
+  if (entries.length > MAX_CUSTOM_HEADERS) {
+    throw new TypeError(
+      `headers may not contain more than ${MAX_CUSTOM_HEADERS} entries`,
+    );
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (typeof key !== "string" || key.length === 0) {
+      throw new TypeError("each header name must be a non-empty string");
+    }
+    if (/[\r\n]/.test(key)) {
+      throw new TypeError(`header name "${key}" must not contain CR or LF`);
+    }
+    if (FORBIDDEN_DELIVERY_HEADERS.has(key.toLowerCase())) {
+      throw new TypeError(
+        `header "${key}" is reserved by Posthorn and cannot be set as a custom header`,
+      );
+    }
+    if (typeof value !== "string") {
+      throw new TypeError(`header value for "${key}" must be a string`);
+    }
+    if (/[\r\n]/.test(value)) {
+      throw new TypeError(`header value for "${key}" must not contain CR or LF`);
+    }
+    out[key] = value;
+  }
+  return Object.keys(out).length === 0 ? null : out;
 }
 
 /**
@@ -373,6 +454,7 @@ export function normalizeNewEndpoint(input: NewEndpoint): NormalizedNewEndpoint 
     description: normalizeDescription(input.description),
     eventTypes: normalizeEventTypes(input.eventTypes),
     disabled: normalizeDisabled(input.disabled),
+    headers: normalizeHeaders(input.headers),
   };
 }
 
@@ -410,6 +492,7 @@ export function applyEndpointUpdate(
       "eventTypes" in patch
         ? normalizeEventTypes(patch.eventTypes)
         : current.eventTypes,
+    headers: "headers" in patch ? normalizeHeaders(patch.headers) : current.headers,
     disabled: nextDisabled,
     consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
     firstFailureAt: reEnabled ? null : current.firstFailureAt,

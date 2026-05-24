@@ -334,6 +334,11 @@ export interface EndpointView {
   /** Subscribed event types; `null` means *all* events. */
   readonly eventTypes: readonly string[] | null;
   /**
+   * Custom HTTP headers added to every delivery (e.g. `X-API-Key`, `Authorization`).
+   * `null` means no custom headers.
+   */
+  readonly headers: Record<string, string> | null;
+  /**
    * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
    * automatically once it has been failing continuously (see
    * {@link EndpointView.consecutiveFailures}). Re-enable with
@@ -372,6 +377,12 @@ export interface CreateEndpointInput {
   readonly disabled?: boolean;
   /** Provide your own signing secret; omit to have a secure one generated. */
   readonly secret?: string;
+  /**
+   * Custom HTTP headers to add to every delivery (e.g. `{ "X-API-Key": "..." }`).
+   * Omit or pass `null` for none. Standard Webhooks headers and `content-type` are
+   * controlled by Posthorn and cannot be set here.
+   */
+  readonly headers?: Record<string, string> | null;
 }
 
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
@@ -382,6 +393,8 @@ export interface UpdateEndpointInput {
   readonly description?: string;
   readonly eventTypes?: readonly string[] | null;
   readonly disabled?: boolean;
+  /** Replace custom delivery headers. Pass `null` to clear all custom headers. */
+  readonly headers?: Record<string, string> | null;
 }
 
 /** Optional body of {@link PosthornClient.testEndpoint}. */
@@ -705,6 +718,7 @@ export class PosthornClient {
     if (input.description !== undefined) body["description"] = input.description;
     if (input.eventTypes !== undefined) body["eventTypes"] = input.eventTypes;
     if (input.disabled !== undefined) body["disabled"] = input.disabled;
+    if (input.headers !== undefined) body["headers"] = input.headers;
     return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
@@ -724,6 +738,7 @@ export class PosthornClient {
     if (patch.description !== undefined) body["description"] = patch.description;
     if (patch.eventTypes !== undefined) body["eventTypes"] = patch.eventTypes;
     if (patch.disabled !== undefined) body["disabled"] = patch.disabled;
+    if (patch.headers !== undefined) body["headers"] = patch.headers;
     return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,

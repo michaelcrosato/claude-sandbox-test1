@@ -27,6 +27,7 @@ function endpoint(overrides: Partial<Endpoint>): Endpoint {
     previousSecrets: [],
     description: "",
     eventTypes: null,
+    headers: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

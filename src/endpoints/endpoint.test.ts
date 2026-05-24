@@ -7,7 +7,9 @@ import {
   DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   endpointSubscribesTo,
   evaluateEndpointHealth,
+  MAX_CUSTOM_HEADERS,
   MAX_PREVIOUS_SECRETS,
+  normalizeHeaders,
   normalizeNewEndpoint,
   rotateEndpointSecret,
   UnknownEndpointError,
@@ -55,6 +57,7 @@ describe("normalizeNewEndpoint", () => {
     expect(n.description).toBe("");
     expect(n.eventTypes).toBeNull();
     expect(n.disabled).toBe(false);
+    expect(n.headers).toBeNull();
   });
 
   it("rejects a disabled flag that is not a boolean", () => {
@@ -62,6 +65,48 @@ describe("normalizeNewEndpoint", () => {
       // @ts-expect-error — disabled must be a boolean
       normalizeNewEndpoint({ appId: "a", url: "https://x.test/h", disabled: "yes" }),
     ).toThrow(TypeError);
+  });
+});
+
+describe("normalizeHeaders", () => {
+  it("returns null for undefined, null, and empty object", () => {
+    expect(normalizeHeaders(undefined)).toBeNull();
+    expect(normalizeHeaders(null)).toBeNull();
+    expect(normalizeHeaders({})).toBeNull();
+  });
+
+  it("round-trips a valid header map", () => {
+    const out = normalizeHeaders({ "X-API-Key": "secret", "X-Tenant-ID": "t1" });
+    expect(out).toEqual({ "X-API-Key": "secret", "X-Tenant-ID": "t1" });
+  });
+
+  it("rejects non-object input", () => {
+    expect(() => normalizeHeaders("X-Foo: bar")).toThrow(TypeError);
+    expect(() => normalizeHeaders(["X-Foo", "bar"])).toThrow(TypeError);
+    expect(() => normalizeHeaders(42)).toThrow(TypeError);
+  });
+
+  it("rejects reserved (Standard Webhooks + content-type) header names (case-insensitive)", () => {
+    expect(() => normalizeHeaders({ "webhook-id": "x" })).toThrow(TypeError);
+    expect(() => normalizeHeaders({ "Webhook-Timestamp": "x" })).toThrow(TypeError);
+    expect(() => normalizeHeaders({ "WEBHOOK-SIGNATURE": "x" })).toThrow(TypeError);
+    expect(() => normalizeHeaders({ "content-type": "application/json" })).toThrow(TypeError);
+    expect(() => normalizeHeaders({ "Content-Type": "text/plain" })).toThrow(TypeError);
+  });
+
+  it("rejects headers that contain CR or LF (injection prevention)", () => {
+    expect(() => normalizeHeaders({ "X-Foo\r": "bar" })).toThrow(TypeError);
+    expect(() => normalizeHeaders({ "X-Foo": "bar\nbaz" })).toThrow(TypeError);
+  });
+
+  it("rejects non-string values", () => {
+    expect(() => normalizeHeaders({ "X-Num": 42 })).toThrow(TypeError);
+  });
+
+  it(`rejects maps with more than MAX_CUSTOM_HEADERS (${MAX_CUSTOM_HEADERS}) entries`, () => {
+    const big: Record<string, string> = {};
+    for (let i = 0; i <= MAX_CUSTOM_HEADERS; i++) big[`X-H-${i}`] = `v${i}`;
+    expect(() => normalizeHeaders(big)).toThrow(TypeError);
   });
 });
 
@@ -74,6 +119,7 @@ describe("applyEndpointUpdate", () => {
     previousSecrets: [],
     description: "d",
     eventTypes: ["a"],
+    headers: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -142,6 +188,21 @@ describe("applyEndpointUpdate", () => {
     expect(patched.firstFailureAt).toBe(100);
     expect(patched.lastFailureAt).toBe(800);
   });
+
+  it("sets, replaces, and clears custom headers", () => {
+    const withHeaders = applyEndpointUpdate(base, { headers: { "X-Foo": "bar" } }, 2_000);
+    expect(withHeaders.headers).toEqual({ "X-Foo": "bar" });
+    const replaced = applyEndpointUpdate(withHeaders, { headers: { "X-Baz": "qux" } }, 3_000);
+    expect(replaced.headers).toEqual({ "X-Baz": "qux" });
+    const cleared = applyEndpointUpdate(replaced, { headers: null }, 4_000);
+    expect(cleared.headers).toBeNull();
+  });
+
+  it("preserves headers when headers is not in the patch", () => {
+    const withHeaders: Endpoint = { ...base, headers: { "X-Keep": "me" } };
+    const patched = applyEndpointUpdate(withHeaders, { description: "x" }, 2_000);
+    expect(patched.headers).toEqual({ "X-Keep": "me" });
+  });
 });
 
 describe("evaluateEndpointHealth", () => {
@@ -153,6 +214,7 @@ describe("evaluateEndpointHealth", () => {
     previousSecrets: [],
     description: "",
     eventTypes: null,
+    headers: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -280,6 +342,7 @@ describe("rotateEndpointSecret", () => {
     previousSecrets: [],
     description: "",
     eventTypes: null,
+    headers: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

@@ -25,7 +25,9 @@ import { activeSigningSecrets, type Endpoint, type EndpointStore } from "./endpo
  * `additionalSecrets`, so during a rotation the payload carries one signature token
  * per active secret and a receiver that has not yet switched still verifies. The
  * `additionalSecrets` field is omitted entirely when there is no active overlap.
- * (Per-endpoint custom headers are a later add-on; the target field already exists.)
+ * Custom headers (see {@link Endpoint.headers}) are forwarded as-is; the worker
+ * merges them before the Standard Webhooks signing headers, so the signatures
+ * always win and cannot be overridden.
  */
 export function endpointToDeliveryTarget(
   endpoint: Endpoint,
@@ -34,9 +36,12 @@ export function endpointToDeliveryTarget(
   // activeSigningSecrets returns [primary, ...still-active retirees]; the primary
   // is `secret`, the rest (if any) are the rotation-overlap extras.
   const additionalSecrets = activeSigningSecrets(endpoint, nowMs).slice(1);
-  return additionalSecrets.length > 0
-    ? { url: endpoint.url, secret: endpoint.secret, additionalSecrets }
-    : { url: endpoint.url, secret: endpoint.secret };
+  return {
+    url: endpoint.url,
+    secret: endpoint.secret,
+    ...(additionalSecrets.length > 0 ? { additionalSecrets } : {}),
+    ...(endpoint.headers ? { headers: endpoint.headers } : {}),
+  };
 }
 
 /** Options for {@link storeBackedResolver}. */

@@ -42,47 +42,37 @@ const FAKE_MESSAGE = {
 } as const;
 
 describe("endpointToDeliveryTarget", () => {
+  const BASE_EP = {
+    id: "ep_1",
+    appId: "app_1",
+    url: "https://x.test/hook",
+    secret: "whsec_abc",
+    previousSecrets: [] as const,
+    description: "",
+    eventTypes: null,
+    headers: null,
+    disabled: false,
+    consecutiveFailures: 0,
+    firstFailureAt: null,
+    lastFailureAt: null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
   it("forwards the url and secret (no overlap → no additionalSecrets)", () => {
-    const target = endpointToDeliveryTarget(
-      {
-        id: "ep_1",
-        appId: "app_1",
-        url: "https://x.test/hook",
-        secret: "whsec_abc",
-        previousSecrets: [],
-        description: "",
-        eventTypes: null,
-        disabled: false,
-        consecutiveFailures: 0,
-        firstFailureAt: null,
-        lastFailureAt: null,
-        createdAt: 0,
-        updatedAt: 0,
-      },
-      1_000,
-    );
+    const target = endpointToDeliveryTarget(BASE_EP, 1_000);
     expect(target).toEqual({ url: "https://x.test/hook", secret: "whsec_abc" });
   });
 
   it("forwards still-active rotation secrets, dropping expired ones", () => {
     const target = endpointToDeliveryTarget(
       {
-        id: "ep_1",
-        appId: "app_1",
-        url: "https://x.test/hook",
+        ...BASE_EP,
         secret: "whsec_new",
         previousSecrets: [
           { secret: "whsec_active", expiresAt: 2_000 },
           { secret: "whsec_expired", expiresAt: 500 },
         ],
-        description: "",
-        eventTypes: null,
-        disabled: false,
-        consecutiveFailures: 0,
-        firstFailureAt: null,
-        lastFailureAt: null,
-        createdAt: 0,
-        updatedAt: 0,
       },
       1_000,
     );
@@ -91,6 +81,19 @@ describe("endpointToDeliveryTarget", () => {
       secret: "whsec_new",
       additionalSecrets: ["whsec_active"],
     });
+  });
+
+  it("forwards custom headers when the endpoint has them", () => {
+    const target = endpointToDeliveryTarget(
+      { ...BASE_EP, headers: { "X-API-Key": "tok", "X-Tenant": "t1" } },
+      1_000,
+    );
+    expect(target.headers).toEqual({ "X-API-Key": "tok", "X-Tenant": "t1" });
+  });
+
+  it("omits the headers field when the endpoint has no custom headers", () => {
+    const target = endpointToDeliveryTarget(BASE_EP, 1_000);
+    expect(target.headers).toBeUndefined();
   });
 });
 

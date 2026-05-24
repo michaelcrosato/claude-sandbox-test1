@@ -67,6 +67,7 @@ interface EndpointRow {
   readonly previous_secrets: string;
   readonly description: string;
   readonly event_types: string | null;
+  readonly headers: string | null;
   readonly disabled: number;
   readonly consecutive_failures: number;
   readonly first_failure_at: number | null;
@@ -89,6 +90,10 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
       row.event_types === null
         ? null
         : (JSON.parse(row.event_types) as string[]),
+    headers:
+      row.headers === null
+        ? null
+        : (JSON.parse(row.headers) as Record<string, string>),
     disabled: row.disabled !== 0,
     consecutiveFailures: Number(row.consecutive_failures),
     firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
@@ -96,6 +101,11 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
+}
+
+/** Serialize an endpoint's custom headers for the `headers` column. */
+function headersToColumn(headers: Readonly<Record<string, string>> | null): string | null {
+  return headers === null ? null : JSON.stringify(headers);
 }
 
 /** Serialize an endpoint's subscription filter for the `event_types` column. */
@@ -142,6 +152,9 @@ export class SqliteEndpointStore implements EndpointStore {
     // Likewise for the endpoint-health columns added with auto-disable. Existing rows
     // default to healthy (0 failures, no streak). No-op on a fresh database.
     this.#migrateHealthColumns();
+    // Likewise for the custom-headers column. Existing rows default to NULL (no custom
+    // headers), which is the correct semantic for an endpoint without custom headers.
+    this.#migrateHeadersColumn();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -152,14 +165,14 @@ export class SqliteEndpointStore implements EndpointStore {
     );
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
-         (id, app_id, url, secret, previous_secrets, description, event_types,
+         (id, app_id, url, secret, previous_secrets, description, event_types, headers,
           disabled, consecutive_failures, first_failure_at, last_failure_at,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
-         SET url = ?, secret = ?, description = ?, event_types = ?,
+         SET url = ?, secret = ?, description = ?, event_types = ?, headers = ?,
              disabled = ?, consecutive_failures = ?, first_failure_at = ?,
              last_failure_at = ?, updated_at = ?
        WHERE id = ?`,
@@ -224,6 +237,22 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#db.exec("ALTER TABLE endpoints ADD COLUMN last_failure_at INTEGER");
   }
 
+  /**
+   * Add the `headers` column to a database created before custom delivery headers
+   * existed. Existing rows default to `NULL` (no custom headers), which is the
+   * correct semantic. For a fresh database the column is in {@link SCHEMA} and this
+   * is a no-op.
+   */
+  #migrateHeadersColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "headers")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN headers TEXT");
+  }
+
   /** Number of endpoints currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countEndpoints.get() as { n: number }).n);
@@ -241,6 +270,7 @@ export class SqliteEndpointStore implements EndpointStore {
       previousSecrets: [],
       description: normalized.description,
       eventTypes: normalized.eventTypes,
+      headers: normalized.headers,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,
@@ -257,6 +287,7 @@ export class SqliteEndpointStore implements EndpointStore {
       JSON.stringify(endpoint.previousSecrets),
       endpoint.description,
       eventTypesToColumn(endpoint.eventTypes),
+      headersToColumn(endpoint.headers),
       endpoint.disabled ? 1 : 0,
       endpoint.consecutiveFailures,
       endpoint.firstFailureAt,
@@ -289,6 +320,7 @@ export class SqliteEndpointStore implements EndpointStore {
         next.secret,
         next.description,
         eventTypesToColumn(next.eventTypes),
+        headersToColumn(next.headers),
         next.disabled ? 1 : 0,
         next.consecutiveFailures,
         next.firstFailureAt,
@@ -426,6 +458,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   previous_secrets TEXT    NOT NULL DEFAULT '[]',
   description      TEXT    NOT NULL,
   event_types      TEXT,
+  headers          TEXT,
   disabled         INTEGER NOT NULL,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   first_failure_at     INTEGER,

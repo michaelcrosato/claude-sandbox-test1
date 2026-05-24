@@ -1129,7 +1129,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
           required: [
-            "id", "appId", "url", "description", "eventTypes", "disabled",
+            "id", "appId", "url", "description", "eventTypes", "headers", "disabled",
             "consecutiveFailures", "firstFailureAt", "lastFailureAt",
             "createdAt", "updatedAt",
           ],
@@ -1142,6 +1142,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["array", "null"],
               items: { type: "string" },
               description: "Subscription filter. `null` means all events; an array means exactly those types.",
+            },
+            headers: {
+              type: ["object", "null"],
+              additionalProperties: { type: "string" },
+              description:
+                "Custom HTTP headers added to every delivery (e.g. `X-API-Key`). " +
+                "`null` means no custom headers. Standard Webhooks signing headers and " +
+                "`content-type` are always controlled by Posthorn and cannot be set here.",
             },
             disabled: {
               type: "boolean",
@@ -1210,6 +1218,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description: "Subscription filter. Omit or pass `null` for all events.",
             },
             disabled: { type: "boolean", description: "Whether the endpoint starts paused. Defaults to false." },
+            headers: {
+              type: ["object", "null"],
+              additionalProperties: { type: "string" },
+              description:
+                "Custom HTTP headers to add to every delivery. Omit or pass `null` for none. " +
+                "Standard Webhooks signing headers and `content-type` may not be set here.",
+            },
           },
         },
         EndpointUpdate: {
@@ -1223,6 +1238,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
             description: { type: "string" },
             eventTypes: { type: ["array", "null"], items: { type: "string" } },
             disabled: { type: "boolean" },
+            headers: {
+              type: ["object", "null"],
+              additionalProperties: { type: "string" },
+              description: "Replace custom delivery headers. Pass `null` to clear all.",
+            },
           },
         },
         RotateSecretRequest: {

@@ -80,6 +80,7 @@ export class InMemoryEndpointStore implements EndpointStore {
       previousSecrets: [],
       description: normalized.description,
       eventTypes: normalized.eventTypes,
+      headers: normalized.headers,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,

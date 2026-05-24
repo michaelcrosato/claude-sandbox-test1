@@ -183,6 +183,25 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(updated.updatedAt).toBeGreaterThanOrEqual(created.updatedAt);
   });
 
+  it("creates and updates custom delivery headers on an endpoint", async () => {
+    const { client } = await startServer();
+    // Create with headers.
+    const created = await client.createEndpoint({
+      url: "https://acme.example/hook",
+      headers: { "X-API-Key": "tok123", "X-Tenant": "t1" },
+    });
+    expect(created.headers).toEqual({ "X-API-Key": "tok123", "X-Tenant": "t1" });
+    // Update (replace).
+    const replaced = await client.updateEndpoint(created.id, { headers: { "X-New": "val" } });
+    expect(replaced.headers).toEqual({ "X-New": "val" });
+    // Clear.
+    const cleared = await client.updateEndpoint(created.id, { headers: null });
+    expect(cleared.headers).toBeNull();
+    // Verify via get.
+    const fetched = await client.getEndpoint(created.id);
+    expect(fetched.headers).toBeNull();
+  });
+
   it("rotates an endpoint's secret, returning the new one once", async () => {
     const { client } = await startServer();
     const created = await client.createEndpoint({ url: "https://acme.example/hook" });

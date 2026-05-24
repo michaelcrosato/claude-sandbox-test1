@@ -132,6 +132,26 @@ function parseEventTypes(raw: string): string[] | null {
     .filter(Boolean);
 }
 
+/**
+ * Parse a headers textarea value into a plain object or null.
+ * Accepts one `Header-Name: value` pair per line; empty lines and lines without
+ * a `:` are skipped. Returns `null` when no valid pairs are found (semantically
+ * equivalent to "no custom headers").
+ */
+function parseHeadersTextarea(raw: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) continue;
+    const key = trimmed.slice(0, colon).trim();
+    const value = trimmed.slice(colon + 1).trim();
+    if (key.length > 0) out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const { endpoints, queue, sessions } = deps;
   const clock = deps.now ?? (() => Date.now());
@@ -230,6 +250,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         url: (form["url"] ?? "").trim(),
         description: rawDesc,
         eventTypes: resolvedEventTypes,
+        headers: parseHeadersTextarea(form["headers"] ?? ""),
       };
       let secret: string;
       try {
@@ -294,6 +315,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         description: form["description"] ?? "",
         eventTypes: resolvedEventTypes,
         disabled: form["disabled"] === "1",
+        headers: parseHeadersTextarea(form["headers"] ?? ""),
       };
       let updated: typeof ep;
       try {

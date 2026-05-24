@@ -116,6 +116,7 @@ const client = new PosthornClient({
 const endpoint = await client.createEndpoint({
   url: "https://acme.example/hook",
   eventTypes: ["user.created"], // omit / null = all events
+  headers: { "X-API-Key": "my-receiver-api-key" }, // custom delivery headers (optional)
 });
 
 // Send an event:
