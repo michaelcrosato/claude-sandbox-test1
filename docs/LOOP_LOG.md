@@ -4,6 +4,31 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 74: Admin Dashboard App-Detail Page — This-Month Usage
+
+**Repo truth at start:** clean main @ `866af3a` (iter-73, portal event-type detail subscribed endpoints). Baseline verified: `tsc --noEmit` clean, vitest **1420/1420** (46 files, 6 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** The admin dashboard's app-detail page (`GET /dashboard/apps/:id`) showed the tenant's ID, creation date, and monthly quota in a summary card, but had no visibility into how much of that quota was actually used this month — an operator reviewing a specific tenant still had to mentally correlate against the apps-list table added in iter-72, or hit the API directly. The apps-list page already had a "This-month usage" column; the detail page was the obvious next surface to carry the same number.
+
+**Move chosen:** Add a "This-month usage" row to the app-detail summary card, using the same `MessageStore.summarizeUsageByApp` / `utcMonthRange` call pattern as iter-72. When no `MessageStore` is injected the row is simply omitted (opt-in, no regressions). The keys fetch and the usage fetch are done in parallel (`Promise.all`) so there is no serial round-trip on the detail page load.
+
+**Architecture (3 files, +45 / −2):**
+
+1. **`src/dashboard/views.ts`** — Added optional 4th parameter `usage?: number` to `appDetailPage`. When present, renders a `<tr>` row "This-month usage" / "{n} messages" in the summary card table. Row is absent (`""`) when `usage` is `undefined`, so the no-store case is layout-clean with no extra colspan or conditional class changes.
+
+2. **`src/dashboard/handler.ts`** — In `GET /dashboard/apps/:appId`, replaced the sequential `apps.listApiKeys(appId)` call with a `Promise.all([apps.listApiKeys(appId), messages?.summarizeUsageByApp(...)])`. When `messages` is undefined the second slot resolves to `undefined` immediately. Passes `usageSummary?.total` as the 4th arg to `appDetailPage`.
+
+3. **`src/dashboard/handler.test.ts`** — Added 3 new tests under "app-detail usage":
+   - No messages store → page does NOT contain "This-month usage" (row is absent)
+   - Messages store + no traffic → page contains "This-month usage" and "0 messages"
+   - Messages store + 5 seeded messages → page contains "5 messages"
+
+**Validation:** `tsc --noEmit` clean → vitest **1423/1423** (was 1420; +3 all new tests green). `npm run build` clean → committed `b05e1e3`.
+
+**Next moves:** Global (per-gateway) default rate limit for all endpoints via `POSTHORN_DEFAULT_RATE_LIMIT` env var — when an endpoint's `rateLimit` is `null`, fall back to the gateway-wide default so operators can protect all receivers with a single config rather than configuring each endpoint individually. Involves `config.ts`, `gateway.ts`, the delivery worker (or endpoint-resolver), and tests.
+
+---
+
 ## 2026-05-24 — Iteration 73: Portal Event-Type Detail — Subscribed Endpoints
 
 **Repo truth at start:** clean main @ `7df5489` (iter-72, admin dashboard per-app usage column). Baseline verified: `tsc --noEmit` clean, vitest **1418/1418** (46 files, 6 Postgres-skipped), `npm run build` clean.
