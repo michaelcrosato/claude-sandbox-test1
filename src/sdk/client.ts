@@ -396,6 +396,11 @@ export interface MessageWithDeliveries {
 export interface RetryPolicyView {
   /** Ordered inter-attempt delays in milliseconds. */
   readonly delaysMs: readonly number[];
+  /**
+   * HTTP status codes that bypass the retry schedule and immediately
+   * dead-letter the delivery (e.g. 400, 401, 410). Absent when none are set.
+   */
+  readonly nonRetryableStatuses?: readonly number[];
 }
 
 export interface EndpointView {

@@ -1519,6 +1519,77 @@ describe("DeliveryWorker — per-endpoint retryPolicy", () => {
   });
 });
 
+describe("DeliveryWorker — nonRetryableStatuses", () => {
+  async function enqueueOne(env: ReturnType<typeof setup>): Promise<void> {
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "test",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+  }
+
+  it("immediately dead-letters when the response status is in nonRetryableStatuses", async () => {
+    // Global policy allows many retries; endpoint overrides with nonRetryableStatuses.
+    const env = setup({ retryPolicy: fixedSchedule([60_000, 60_000]) });
+    await enqueueOne(env);
+
+    const endpointPolicy = { delaysMs: [60_000], nonRetryableStatuses: [401] };
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: () => ({ url: TARGET_URL, secret: SECRET, retryPolicy: endpointPolicy }),
+      now: env.now,
+      transport: recordingTransport(401).transport,
+    });
+    const result = await worker.processOnce();
+
+    // Should dead-letter immediately, not schedule a retry.
+    expect(result).toMatchObject({ claimed: 1, deadLettered: 1, failed: 0 });
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("dead_letter");
+  });
+
+  it("retries normally when the status is NOT in nonRetryableStatuses", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+
+    // 503 is not in the list, so it should retry.
+    const endpointPolicy = { delaysMs: [100], nonRetryableStatuses: [401, 403] };
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: () => ({ url: TARGET_URL, secret: SECRET, retryPolicy: endpointPolicy }),
+      now: env.now,
+      transport: recordingTransport(503).transport,
+    });
+    const result = await worker.processOnce();
+
+    expect(result).toMatchObject({ claimed: 1, failed: 1, deadLettered: 0 });
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+  });
+
+  it("retries normally when the endpoint has no retryPolicy (nonRetryableStatuses is undefined)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+
+    // Resolver returns no retryPolicy at all → nonRetryableStatuses check is skipped.
+    const worker = new DeliveryWorker({
+      queue: env.queue,
+      store: env.store,
+      resolveEndpoint: () => ({ url: TARGET_URL, secret: SECRET }),
+      now: env.now,
+      transport: recordingTransport(401).transport,
+    });
+    const result = await worker.processOnce();
+
+    expect(result).toMatchObject({ claimed: 1, failed: 1, deadLettered: 0 });
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+  });
+});
+
 describe("DeliveryWorker.run", () => {
   it("drains pending work back-to-back, then stops on the first idle poll", async () => {
     const env = setup();

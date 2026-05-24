@@ -55,7 +55,7 @@ import {
   type FailInput,
 } from "../queue/delivery-queue.js";
 import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
-import type { RetryPolicy } from "../delivery/retry-policy.js";
+import { isNonRetryableStatus, type RetryPolicy } from "../delivery/retry-policy.js";
 
 /**
  * Where a task's message should be delivered, and the secret to sign it with.
@@ -702,6 +702,16 @@ export class DeliveryWorker {
       responseBody,
     });
 
+    // When the endpoint's policy marks this status as non-retryable, force an
+    // immediate dead-letter by passing an empty-delay policy ({ delaysMs: [] })
+    // so planNextAttempt returns { retry: false } on the first failure.
+    const effectivePolicy = resolvedTarget?.retryPolicy;
+    const nonRetryable =
+      response !== null &&
+      !isSuccessStatus(response.status) &&
+      effectivePolicy !== undefined &&
+      isNonRetryableStatus(effectivePolicy, response.status);
+
     const outcome = succeeded
       ? await this.#settleSuccess(task, leaseToken)
       : await this.#settleFailure(
@@ -710,7 +720,7 @@ export class DeliveryWorker {
           error ?? "unknown delivery error",
           nowMs,
           retryAfterMs ?? undefined,
-          resolvedTarget?.retryPolicy,
+          nonRetryable ? { delaysMs: [] } : effectivePolicy,
         );
     // Report the terminal verdict to endpoint-health tracking (best-effort).
     await this.#reportEndpointOutcome(task, outcome, nowMs);

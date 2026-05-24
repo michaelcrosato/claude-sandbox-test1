@@ -3,6 +3,7 @@ import {
   DEFAULT_RETRY_POLICY,
   exponentialBackoff,
   fixedSchedule,
+  isNonRetryableStatus,
   maxAttempts,
   planNextAttempt,
 } from "./retry-policy.js";
@@ -85,6 +86,30 @@ describe("DEFAULT_RETRY_POLICY", () => {
     for (let i = 1; i < d.length; i++) {
       expect(d[i]!).toBeGreaterThanOrEqual(d[i - 1]!);
     }
+  });
+});
+
+describe("isNonRetryableStatus", () => {
+  it("returns false when nonRetryableStatuses is absent", () => {
+    expect(isNonRetryableStatus(fixedSchedule([1000]), 401)).toBe(false);
+  });
+
+  it("returns true for a status that is in the list", () => {
+    const policy = { delaysMs: [1000], nonRetryableStatuses: [400, 401, 410] };
+    expect(isNonRetryableStatus(policy, 400)).toBe(true);
+    expect(isNonRetryableStatus(policy, 401)).toBe(true);
+    expect(isNonRetryableStatus(policy, 410)).toBe(true);
+  });
+
+  it("returns false for a status not in the list", () => {
+    const policy = { delaysMs: [1000], nonRetryableStatuses: [400] };
+    expect(isNonRetryableStatus(policy, 500)).toBe(false);
+    expect(isNonRetryableStatus(policy, 503)).toBe(false);
+  });
+
+  it("returns false when the list is empty", () => {
+    const policy = { delaysMs: [1000], nonRetryableStatuses: [] };
+    expect(isNonRetryableStatus(policy, 400)).toBe(false);
   });
 });
 

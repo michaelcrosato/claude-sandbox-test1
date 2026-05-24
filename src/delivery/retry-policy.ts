@@ -27,6 +27,21 @@ const DEFAULT_MAX_DELAY_MS = 12 * 60 * 60 * 1_000;
 export interface RetryPolicy {
   /** Ordered delays (ms) between attempts. Length === number of retries. */
   readonly delaysMs: readonly number[];
+  /**
+   * HTTP status codes that bypass the retry schedule and immediately
+   * dead-letter the delivery. Useful for 4xx responses (e.g. 400, 401, 410)
+   * where retrying cannot change the outcome — the receiver has rejected the
+   * request on a permanent basis. Absent or empty means "retry on any failure".
+   */
+  readonly nonRetryableStatuses?: readonly number[];
+}
+
+/**
+ * Returns `true` when `status` should skip the retry schedule and immediately
+ * dead-letter, according to `policy.nonRetryableStatuses`.
+ */
+export function isNonRetryableStatus(policy: RetryPolicy, status: number): boolean {
+  return policy.nonRetryableStatuses?.includes(status) ?? false;
 }
 
 /** Options controlling jitter applied to a scheduled delay. */

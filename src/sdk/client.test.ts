@@ -203,6 +203,21 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(cleared.retryPolicy).toBeNull();
   });
 
+  it("creates and updates a retryPolicy with nonRetryableStatuses on an endpoint", async () => {
+    const { client } = await startServer();
+    const policy = { delaysMs: [1000, 5000], nonRetryableStatuses: [400, 401, 410] };
+    const created = await client.createEndpoint({
+      url: "https://acme.example/hook",
+      retryPolicy: policy,
+    });
+    expect(created.retryPolicy).toEqual(policy);
+    // Update to change the non-retryable list.
+    const patched = await client.updateEndpoint(created.id, {
+      retryPolicy: { delaysMs: [500], nonRetryableStatuses: [403] },
+    });
+    expect(patched.retryPolicy).toEqual({ delaysMs: [500], nonRetryableStatuses: [403] });
+  });
+
   it("creates and updates custom delivery headers on an endpoint", async () => {
     const { client } = await startServer();
     // Create with headers.

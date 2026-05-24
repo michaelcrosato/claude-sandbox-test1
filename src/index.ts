@@ -180,6 +180,7 @@ export {
   DEFAULT_AUTO_DISABLE_AFTER_MS,
   MAX_RETRY_POLICY_RETRIES,
   MAX_RETRY_POLICY_DELAY_MS,
+  MAX_NON_RETRYABLE_STATUSES,
   type Endpoint,
   type ExpiringSecret,
   type NewEndpoint,

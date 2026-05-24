@@ -294,6 +294,12 @@ export const MAX_RETRY_POLICY_RETRIES = 20;
 export const MAX_RETRY_POLICY_DELAY_MS = 30 * 24 * 60 * 60 * 1_000;
 
 /**
+ * Maximum number of status codes in a `nonRetryableStatuses` list. Bounds the
+ * array size stored per endpoint's retry policy.
+ */
+export const MAX_NON_RETRYABLE_STATUSES = 20;
+
+/**
  * Header names that Posthorn controls and a caller cannot override via custom
  * headers. They are applied after the custom headers in {@link buildSignedRequest},
  * so they always win regardless — this set makes the rejection explicit at
@@ -478,12 +484,44 @@ export function normalizeHeaders(
 }
 
 /**
+ * Validate and normalize the `nonRetryableStatuses` field of a retry policy.
+ * Returns `undefined` for absent/null/empty. Each entry must be a valid HTTP
+ * status code integer in [100, 599]. Deduplicates, order-preserving.
+ */
+function normalizeNonRetryableStatuses(value: unknown): readonly number[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError("retryPolicy.nonRetryableStatuses must be an array of integers or null");
+  }
+  if (value.length > MAX_NON_RETRYABLE_STATUSES) {
+    throw new TypeError(
+      `retryPolicy.nonRetryableStatuses may not contain more than ${MAX_NON_RETRYABLE_STATUSES} entries`,
+    );
+  }
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const s of value) {
+    if (typeof s !== "number" || !Number.isInteger(s) || s < 100 || s > 599) {
+      throw new TypeError(
+        "each entry in retryPolicy.nonRetryableStatuses must be a valid HTTP status code (100–599)",
+      );
+    }
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out.length === 0 ? undefined : Object.freeze(out);
+}
+
+/**
  * Validate and normalize a custom retry policy. Returns `null` for
  * "use system default" (`undefined` / `null` input). Otherwise validates that
- * the payload is `{ delaysMs: number[] }` with at most
- * {@link MAX_RETRY_POLICY_RETRIES} entries, each finite, non-negative, and at
- * most {@link MAX_RETRY_POLICY_DELAY_MS}. Re-uses {@link fixedSchedule} for the
- * per-delay checks.
+ * the payload is `{ delaysMs: number[], nonRetryableStatuses?: number[] }` with
+ * at most {@link MAX_RETRY_POLICY_RETRIES} delay entries, each finite,
+ * non-negative, and at most {@link MAX_RETRY_POLICY_DELAY_MS}, and at most
+ * {@link MAX_NON_RETRYABLE_STATUSES} non-retryable status codes in [100, 599].
+ * Re-uses {@link fixedSchedule} for the per-delay checks.
  */
 export function normalizeRetryPolicy(policy: unknown): RetryPolicy | null {
   if (policy === undefined || policy === null) return null;
@@ -511,7 +549,12 @@ export function normalizeRetryPolicy(policy: unknown): RetryPolicy | null {
     }
   }
   // fixedSchedule validates finite + non-negative per-delay; reuse it.
-  return fixedSchedule(delaysMs as number[]);
+  const base = fixedSchedule(delaysMs as number[]);
+  const nonRetryableStatuses = normalizeNonRetryableStatuses(raw["nonRetryableStatuses"]);
+  if (nonRetryableStatuses !== undefined) {
+    return { ...base, nonRetryableStatuses };
+  }
+  return base;
 }
 
 /**

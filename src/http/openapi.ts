@@ -30,6 +30,7 @@ import {
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import {
+  MAX_NON_RETRYABLE_STATUSES,
   MAX_RETRY_POLICY_DELAY_MS,
   MAX_RETRY_POLICY_RETRIES,
 } from "../endpoints/endpoint.js";
@@ -1205,8 +1206,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description:
             "A custom retry schedule: an ordered list of delays (ms) between consecutive delivery " +
-            "attempts. `delaysMs.length` is the number of retries; total attempts = retries + 1. " +
-            `Maximum ${MAX_RETRY_POLICY_RETRIES} retries; each delay must be 0–${MAX_RETRY_POLICY_DELAY_MS} ms.`,
+            "attempts, plus an optional set of HTTP status codes that bypass retries and immediately " +
+            "dead-letter the delivery. `delaysMs.length` is the number of retries; total attempts = " +
+            `retries + 1. Maximum ${MAX_RETRY_POLICY_RETRIES} retries; each delay must be 0–${MAX_RETRY_POLICY_DELAY_MS} ms.`,
           required: ["delaysMs"],
           properties: {
             delaysMs: {
@@ -1215,6 +1217,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
               maxItems: MAX_RETRY_POLICY_RETRIES,
               description: "Ordered inter-attempt delays in milliseconds.",
               examples: [[5000, 300000, 1800000, 7200000]],
+            },
+            nonRetryableStatuses: {
+              type: "array",
+              items: { type: "integer", minimum: 100, maximum: 599 },
+              maxItems: MAX_NON_RETRYABLE_STATUSES,
+              description:
+                "HTTP status codes that bypass the retry schedule and immediately dead-letter the " +
+                "delivery. Useful for 4xx codes (e.g. 400, 401, 410) where retrying cannot succeed " +
+                "— the receiver has permanently rejected the request.",
+              examples: [[400, 401, 403, 410]],
             },
           },
         },

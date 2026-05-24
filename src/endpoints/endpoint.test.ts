@@ -8,9 +8,11 @@ import {
   endpointSubscribesTo,
   evaluateEndpointHealth,
   MAX_CUSTOM_HEADERS,
+  MAX_NON_RETRYABLE_STATUSES,
   MAX_PREVIOUS_SECRETS,
   normalizeHeaders,
   normalizeNewEndpoint,
+  normalizeRetryPolicy,
   rotateEndpointSecret,
   UnknownEndpointError,
   type Endpoint,
@@ -64,6 +66,69 @@ describe("normalizeNewEndpoint", () => {
     expect(() =>
       // @ts-expect-error — disabled must be a boolean
       normalizeNewEndpoint({ appId: "a", url: "https://x.test/h", disabled: "yes" }),
+    ).toThrow(TypeError);
+  });
+});
+
+describe("normalizeRetryPolicy — nonRetryableStatuses", () => {
+  it("returns null for null/undefined input (use system default)", () => {
+    expect(normalizeRetryPolicy(null)).toBeNull();
+    expect(normalizeRetryPolicy(undefined)).toBeNull();
+  });
+
+  it("preserves nonRetryableStatuses when provided", () => {
+    const p = normalizeRetryPolicy({ delaysMs: [1000], nonRetryableStatuses: [400, 401] });
+    expect(p?.nonRetryableStatuses).toEqual([400, 401]);
+  });
+
+  it("omits nonRetryableStatuses when absent", () => {
+    const p = normalizeRetryPolicy({ delaysMs: [1000] });
+    expect(p?.nonRetryableStatuses).toBeUndefined();
+  });
+
+  it("deduplicates nonRetryableStatuses, order-preserving", () => {
+    const p = normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [410, 400, 410] });
+    expect(p?.nonRetryableStatuses).toEqual([410, 400]);
+  });
+
+  it("normalizes an empty nonRetryableStatuses array to undefined", () => {
+    const p = normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [] });
+    expect(p?.nonRetryableStatuses).toBeUndefined();
+  });
+
+  it(`rejects more than MAX_NON_RETRYABLE_STATUSES (${MAX_NON_RETRYABLE_STATUSES}) entries`, () => {
+    const tooMany = Array.from({ length: MAX_NON_RETRYABLE_STATUSES + 1 }, (_, i) => 400 + i);
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: tooMany }),
+    ).toThrow(TypeError);
+  });
+
+  it("rejects non-integer entries in nonRetryableStatuses", () => {
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [400.5] }),
+    ).toThrow(TypeError);
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: ["400"] }),
+    ).toThrow(TypeError);
+  });
+
+  it("rejects status codes outside the 100–599 range", () => {
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [99] }),
+    ).toThrow(TypeError);
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [600] }),
+    ).toThrow(TypeError);
+  });
+
+  it("accepts boundary status codes 100 and 599", () => {
+    const p = normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: [100, 599] });
+    expect(p?.nonRetryableStatuses).toEqual([100, 599]);
+  });
+
+  it("rejects a non-array nonRetryableStatuses", () => {
+    expect(() =>
+      normalizeRetryPolicy({ delaysMs: [], nonRetryableStatuses: 400 }),
     ).toThrow(TypeError);
   });
 });

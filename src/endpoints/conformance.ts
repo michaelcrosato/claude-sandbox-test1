@@ -412,6 +412,20 @@ export function describeEndpointStoreContract(
         const target = endpointToDeliveryTarget(e, clock.now());
         expect(target.retryPolicy).toBeUndefined();
       });
+
+      it("stores nonRetryableStatuses on create and round-trips via get", async () => {
+        const policy = { delaysMs: [1000], nonRetryableStatuses: [400, 401, 410] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        expect(e.retryPolicy).toEqual(policy);
+        expect((await store.get(e.id))!.retryPolicy).toEqual(policy);
+      });
+
+      it("forwards nonRetryableStatuses to the DeliveryTarget", async () => {
+        const policy = { delaysMs: [500], nonRetryableStatuses: [403] };
+        const e = await store.create({ ...NEW, retryPolicy: policy });
+        const target = endpointToDeliveryTarget(e, clock.now());
+        expect(target.retryPolicy).toEqual(policy);
+      });
     });
 
     describe("delete", () => {

@@ -829,6 +829,34 @@ describe("createApi — endpoints CRUD", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("creates an endpoint with nonRetryableStatuses and round-trips it in the view", async () => {
+    const { api, secret } = await setup();
+    const policy = { delaysMs: [1000, 5000], nonRetryableStatuses: [400, 401, 410] };
+    const res = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook", retryPolicy: policy }, secret),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).retryPolicy).toEqual(policy);
+  });
+
+  it("updates nonRetryableStatuses via PATCH and clears them by setting null policy", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/1" }, secret),
+    );
+    const id = body(created).id;
+    // Set policy with nonRetryableStatuses.
+    const set = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { retryPolicy: { delaysMs: [500], nonRetryableStatuses: [403] } }, secret),
+    );
+    expect(body(set).retryPolicy).toEqual({ delaysMs: [500], nonRetryableStatuses: [403] });
+    // Clear policy entirely.
+    const cleared = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { retryPolicy: null }, secret),
+    );
+    expect(body(cleared).retryPolicy).toBeNull();
+  });
 });
 
 describe("createApi — POST /v1/endpoints/:id/rotate-secret", () => {
