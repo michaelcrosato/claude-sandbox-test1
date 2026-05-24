@@ -4,6 +4,51 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 37: README product-page rewrite + npm publish prep
+
+**Repo truth at start:** clean main @ `a44ca24` (iter-36, `endpoint.disabled` webhook event,
+P5 complete). Baseline verified: `tsc --noEmit` clean, vitest **856/856** (38 files),
+`npm run build` clean, integrity gate exit 0. No [[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Rewrite the README as a real product page and
+prepare `package.json` for npm publishing. Reasoning: P0–P5 are now complete — the product
+is feature-ready. The README was still framed as a dev-diary ("Early foundation. Implemented
+so far:" + 150-line ✅ feature tracker + six internal-primitive Quickstart sections). That
+framing undersells the product to every evaluator, open-source contributor, and potential
+customer who lands on the repository. The product's public face is the single highest-leverage
+non-code asset; a quality README is a prerequisite for OSS adoption and the "profit potential"
+filter from GOAL.md. `package.json` had `"private": true` (blocks `npm publish`) and was
+missing `repository`/`keywords` fields — these are the last npm-publish gate items.
+
+**Built this tick:**
+
+- **`README.md`** — rewritten from 633 lines to ~260. Removed: the stale "Early foundation /
+  Implemented so far" feature tracker (dev-diary, not product page); six internal-library
+  Quickstart sections (signing module, delivery core, message store, queue, ingest,
+  apps+auth — these are advanced embedding uses, not the primary path). Kept and promoted:
+  Docker Quick Start (3 steps: build → bootstrap → send), comparison table (vs Svix/Convoy),
+  compact capability list, API routes table (now includes `/v1/usage` + `/v1/messages/:id/attempts`
+  which were missing), TypeScript SDK examples, Admin SDK examples, library-embedding section
+  (new — shows `createGateway` / `gateway.apps.create`), configuration table, monitoring
+  section with sample output, dashboard section, development instructions.
+
+- **`package.json`** — removed `"private": true` (unblocks `npm publish`); added `"repository"`
+  (git URL to the current GitHub repo) and `"keywords"` (`webhook`, `webhook-delivery`,
+  `standard-webhooks`, `sqlite`, `no-redis`, `open-core`, `reliable-delivery`).
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean (no code
+changes — README and package.json only). vitest **856/856, 38 files** (unchanged). `npm run
+build` clean. Integrity gate exit 0 (three hash-protected files untouched).
+
+**State:** GREEN → committed to main @ `7880bae` as Iteration 37. **Remaining gaps:**
+Stripe billing (permanently blocked by external-account requirement — the last unengineerable
+P5 item); a real GitHub repo rename from `claude-sandbox-test1` → `posthorn` (human action);
+actual `npm publish` once the package name is confirmed on the registry (human action).
+The autonomous build phase is now complete — all engineerable product items done, the
+deployment and discovery artifacts are in place. Awaiting human direction.
+
+---
+
 ## 2026-05-23 — Iteration 36: P5 — `endpoint.disabled` system webhook event
 
 **Repo truth at start:** clean main @ `5c42d83` (iter 35, attempt-log pagination complete).
