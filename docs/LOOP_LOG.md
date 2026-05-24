@@ -4,6 +4,92 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 46: Custom Delivery Headers
+
+**Repo truth at start:** clean main @ `b1837ab` (iter-45, batch message sending).
+Baseline verified: `tsc --noEmit` clean, vitest **1016/1016** (42 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Custom delivery headers — allow endpoints to carry a
+`headers: Record<string,string> | null` map that is merged into every HTTP delivery to that endpoint
+before the Standard Webhooks signing headers are applied. This closes the most-requested gap between
+Posthorn and its competitors: a receiver often needs authentication (`X-API-Key: …`,
+`Authorization: Bearer …`) or routing metadata (`X-Tenant-ID: …`) in the delivery, without having
+to run a proxy or implement custom middleware. The infrastructure was already in place:
+`DeliveryTarget.headers` existed in the worker and `buildSignedRequest` already merged it (custom
+headers are applied before `webhook-*` headers, so the signature always wins and cannot be
+clobbered). All that was missing was the wire-through from the endpoint model to the resolver.
+
+**Built this tick:**
+
+- **`src/endpoints/endpoint.ts`** — `MAX_CUSTOM_HEADERS = 20`, `FORBIDDEN_DELIVERY_HEADERS`
+  (webhook-id, webhook-timestamp, webhook-signature, content-type); `normalizeHeaders(unknown)`
+  exported validator (rejects non-object, arrays, empty-key, CR/LF injection, forbidden headers,
+  non-string values, >20 entries; normalizes `{}` to `null`); `Endpoint.headers` (read-only field,
+  `Readonly<Record<string,string>> | null`); `NewEndpoint.headers` + `EndpointUpdate.headers`
+  (optional); `NormalizedNewEndpoint.headers`; `normalizeNewEndpoint` + `applyEndpointUpdate` both
+  call `normalizeHeaders` (update uses `"headers" in patch` guard so absence → preserved).
+
+- **`src/endpoints/in-memory-endpoint-store.ts`** — `headers: normalized.headers` included in
+  created endpoint.
+
+- **`src/endpoints/sqlite-endpoint-store.ts`** — `headers TEXT` column in SCHEMA; `EndpointRow.headers`;
+  `rowToEndpoint` parses JSON or null; `headersToColumn` serializer; `#migrateHeadersColumn()` (adds
+  `headers TEXT` to pre-iter-46 databases — existing rows default to NULL → no custom headers →
+  seamless upgrade); `#insertEndpoint` +1 parameter; `#updateEndpoint` +1 SET clause; both
+  `create()` and `update()` pass `headersToColumn(…)`.
+
+- **`src/endpoints/endpoint-resolver.ts`** — `endpointToDeliveryTarget` now spreads
+  `{ headers: endpoint.headers }` into the `DeliveryTarget` when non-null; the stale
+  "later add-on" comment removed.
+
+- **`src/endpoints/conformance.ts`** — 6 new conformance cases (× 2 backends): headers default null
+  on create, stored/round-tripped when provided, update set/replace/clear, preserved when absent from
+  patch, forwarded into DeliveryTarget, omitted from DeliveryTarget when null. Added import for
+  `endpointToDeliveryTarget`.
+
+- **`src/http/api.ts`** — `endpointView()` includes `headers: endpoint.headers`; create handler
+  conditionally passes `headers` from body; update handler conditionally passes `headers` from body.
+
+- **`src/http/openapi.ts`** — `Endpoint` required list adds `"headers"`; `headers` property
+  (`type: ["object","null"], additionalProperties: {type:"string"}`) added to `Endpoint`,
+  `NewEndpoint`, and `EndpointUpdate` schemas.
+
+- **`src/sdk/client.ts`** — `EndpointView.headers`; `CreateEndpointInput.headers` +
+  `UpdateEndpointInput.headers`; `createEndpoint` and `updateEndpoint` serialize `headers` into the
+  request body (included iff `!== undefined`, preserving the existing opt-in discipline).
+
+- **`src/portal/portal-views.ts`** — create form adds `headers` textarea (key: value, one per line);
+  edit form adds the same textarea pre-filled; endpoint detail info table adds a "Custom headers"
+  row (shows as `Key: value` pairs or `—`).
+
+- **`src/portal/portal-handler.ts`** — `parseHeadersTextarea(raw)` helper (splits on `\n`, skips
+  empty/malformed lines, returns `null` when no valid pairs); create handler and update handler both
+  pass `headers: parseHeadersTextarea(form["headers"] ?? "")`.
+
+- **`README.md`** — SDK example updated to show `headers` field in `createEndpoint`.
+
+**Tests (+28 over baseline):**
+- **`src/endpoints/endpoint.test.ts`** (+10): `normalizeHeaders` unit tests (null/undefined/empty,
+  round-trip, non-object, reserved names case-insensitive, CR/LF injection, non-string value,
+  >MAX_CUSTOM_HEADERS); `normalizeNewEndpoint` asserts `headers: null`; `applyEndpointUpdate`
+  set/replace/clear and preserve-when-absent.
+- **`src/endpoints/conformance.ts`** (+6, × 2 backends): headers default, create, update/clear,
+  preserve, DeliveryTarget forwarding, DeliveryTarget omitted.
+- **`src/endpoints/endpoint-resolver.test.ts`** (+2, refactored to `BASE_EP` fixture): forwards
+  custom headers into target, omits `headers` field when null.
+- **`src/fanout/fanout.test.ts`** (+0 new, `headers: null` added to endpoint fixture to satisfy TS).
+- **`src/http/api.test.ts`** (+5): create with headers returns them; update set/replace/clear;
+  rejects reserved headers on create and update (400); view includes `headers: null` when none.
+- **`src/sdk/client.test.ts`** (+1): create with headers, update replace, update clear, verify via get.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**1044/1044, 42 files** (+28 over baseline). `npm run build` clean.
+
+**State:** GREEN → committed to main @ iter-46 (`f1e9d3c`).
+
+---
+
 ## 2026-05-23 — Iteration 45: Batch Message Sending
 
 **Repo truth at start:** clean main @ `f01f9e0` (iter-44, test event delivery).
