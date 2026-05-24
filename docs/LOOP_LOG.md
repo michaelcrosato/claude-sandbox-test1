@@ -4,6 +4,59 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 55: Non-Retryable HTTP Status Codes
+
+**Repo truth at start:** clean main @ `7e41ea3` (iter-54, per-endpoint retry policy). Baseline verified:
+`tsc --noEmit` clean, vitest **1171/1171** (44 files), `npm run build` clean.
+
+**High-leverage move chosen:** Non-retryable HTTP status codes — `nonRetryableStatuses?: number[]`
+field added to `RetryPolicy`. Before this iteration, every non-2xx response was treated identically:
+a 401 Unauthorized or 410 Gone triggered the full retry backoff (up to 7 more attempts) and burned
+the tenant's metered delivery quota for responses that cannot succeed on retry. Operators had no way
+to express "this status code means permanent failure — skip retries." All incumbents (Svix, Hookdeck,
+Convoy) expose this as a first-class configuration knob.
+
+**Architecture (additive, zero blast radius):**
+
+1. **`RetryPolicy` interface** (`retry-policy.ts`) — new optional `nonRetryableStatuses?:
+   readonly number[]` field. Absent/empty = retry on any failure (backward-compatible). Added
+   `isNonRetryableStatus(policy, status)` pure helper for the worker check.
+
+2. **`endpoint.ts`** — `normalizeRetryPolicy` now validates and passes through `nonRetryableStatuses`:
+   must be an array of integers in [100, 599], max `MAX_NON_RETRYABLE_STATUSES` (20) entries,
+   deduplicated order-preserving. An empty array normalizes to `undefined` (canonical "none").
+   `MAX_NON_RETRYABLE_STATUSES` exported alongside the other policy constants.
+
+3. **Worker** (`delivery-worker.ts`) — after a non-2xx response, checks the endpoint's effective
+   retry policy for `nonRetryableStatuses`. If the response status is in that set, passes
+   `{ delaysMs: [] }` as the retry policy override to `#settleFailure`, which causes
+   `planNextAttempt` to return `{ retry: false }` on the first call → immediate dead-letter.
+   Only fires when the endpoint has a custom policy (`resolvedTarget.retryPolicy` is present);
+   no policy = no non-retryable status check, preserving the global default behavior.
+
+4. **SQLite** — zero migration needed; `nonRetryableStatuses` is stored inside the
+   existing `retry_policy TEXT` column (JSON-serialized), so it round-trips automatically.
+
+5. **OpenAPI** — `RetryPolicyConfig` schema gains a `nonRetryableStatuses` property with
+   `items: { integer, 100–599 }` and `maxItems: 20`.
+
+6. **SDK** — `RetryPolicyView` interface gains `nonRetryableStatuses?: readonly number[]`.
+
+**Tests:** 24 new tests over baseline of 1171 → **1195 total** (44 files):
+- `isNonRetryableStatus` pure helper: 5 cases — absent policy, status in list, status not in list,
+  empty list, boundary check
+- `normalizeRetryPolicy` validation: 10 cases — round-trip, absent field, dedup, empty → undefined,
+  too many entries, non-integer, out-of-range, boundary values (100/599), non-array
+- Conformance: 2 cases — create with `nonRetryableStatuses`, DeliveryTarget forwarding
+- Worker: 3 cases — non-retryable status → dead-letters immediately, non-matching status → retries
+  normally, no endpoint policy → retries normally
+- API: 2 cases — create with `nonRetryableStatuses` round-trips in view, PATCH set and clear
+- SDK: 1 case — creates and updates a policy with `nonRetryableStatuses` on an endpoint
+
+**Validation:** `tsc --noEmit` clean, `npx vitest run` **1195/1195** (44 files), `npm run build` clean.
+
+---
+
 ## 2026-05-24 — Iteration 54: Per-Endpoint Retry Policy Override
 
 **Repo truth at start:** clean main @ `40e91c7` (iter-53, attempt body capture). Baseline verified:
