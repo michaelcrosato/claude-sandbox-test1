@@ -65,6 +65,8 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
         outcome: "failed",
         responseStatus: 500,
         error: "boom",
+        requestBody: null,
+        responseBody: null,
         durationMs: 9,
         attemptedAt: 1_700_000_000_000,
       });

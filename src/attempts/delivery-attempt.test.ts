@@ -38,6 +38,8 @@ describe("normalizeNewAttempt", () => {
       outcome: "succeeded",
       responseStatus: null,
       error: null,
+      requestBody: null,
+      responseBody: null,
       durationMs: 5,
       attemptedAt: 1_700_000_000_000,
     });

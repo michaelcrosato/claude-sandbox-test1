@@ -24,6 +24,7 @@ import {
 } from "../storage/message-store.js";
 import {
   DEFAULT_STATS_DAYS,
+  MAX_CAPTURED_BODY_BYTES,
   MAX_LIST_ATTEMPTS_LIMIT,
   MAX_STATS_DAYS,
 } from "../attempts/delivery-attempt.js";
@@ -1147,6 +1148,8 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "outcome",
             "responseStatus",
             "error",
+            "requestBody",
+            "responseBody",
             "durationMs",
             "attemptedAt",
           ],
@@ -1171,6 +1174,21 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "failure such as DNS/refused/timeout, or a pre-flight failure).",
             },
             error: { type: ["string", "null"], description: "Failure detail when `outcome` is `failed`; null on success." },
+            requestBody: {
+              type: ["string", "null"],
+              maxLength: MAX_CAPTURED_BODY_BYTES,
+              description:
+                `The signed message payload sent to the receiver, truncated to ${MAX_CAPTURED_BODY_BYTES} bytes. ` +
+                "Null when no send was attempted (pre-flight failure: message not found or endpoint not resolved).",
+            },
+            responseBody: {
+              type: ["string", "null"],
+              maxLength: MAX_CAPTURED_BODY_BYTES,
+              description:
+                `The HTTP response body returned by the receiver, truncated to ${MAX_CAPTURED_BODY_BYTES} bytes. ` +
+                "Null when no response arrived (transport error or pre-flight failure). " +
+                'An empty string means the receiver responded with an empty body.',
+            },
             durationMs: {
               type: "integer",
               minimum: 0,

@@ -69,6 +69,8 @@ interface AttemptRow {
   readonly outcome: string;
   readonly response_status: number | null;
   readonly error: string | null;
+  readonly request_body: string | null;
+  readonly response_body: string | null;
   readonly duration_ms: number;
   readonly attempted_at: number;
 }
@@ -84,6 +86,8 @@ function rowToAttempt(row: AttemptRow): DeliveryAttempt {
     outcome: row.outcome as DeliveryAttemptOutcome,
     responseStatus: row.response_status === null ? null : Number(row.response_status),
     error: row.error,
+    requestBody: row.request_body,
+    responseBody: row.response_body,
     durationMs: Number(row.duration_ms),
     attemptedAt: Number(row.attempted_at),
   };
@@ -118,6 +122,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec(SCHEMA);
     this.#migrateAppIdColumn();
+    this.#migrateBodyColumns();
     // Composite covering index for paginated per-message reads; idempotent (IF NOT
     // EXISTS). Added after migrations so the column is guaranteed to exist.
     this.#db.exec(
@@ -133,8 +138,8 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#insert = this.#db.prepare(
       `INSERT INTO delivery_attempts
          (id, task_id, message_id, app_id, endpoint_id, attempt_number, outcome,
-          response_status, error, duration_ms, attempted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          response_status, error, request_body, response_body, duration_ms, attempted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // First page — no cursor. Ordered by (attempted_at ASC, id ASC) for stable
     // oldest-first pagination; backed by idx_delivery_attempts_message_paged.
@@ -213,6 +218,25 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     );
   }
 
+  /**
+   * Ensure `request_body` and `response_body` columns exist. A database created
+   * before this feature shipped has the columns missing; add them nullable so the
+   * upgrade is seamless. Existing rows keep both columns as NULL — honest: the data
+   * was never captured for those attempts. For a fresh database both columns are
+   * already in {@link SCHEMA} and the ALTERs are skipped.
+   */
+  #migrateBodyColumns(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_attempts)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "request_body")) {
+      this.#db.exec("ALTER TABLE delivery_attempts ADD COLUMN request_body TEXT");
+    }
+    if (!columns.some((c) => c.name === "response_body")) {
+      this.#db.exec("ALTER TABLE delivery_attempts ADD COLUMN response_body TEXT");
+    }
+  }
+
   /** Number of attempts recorded (append-only — never decreases). */
   get size(): number {
     return Number((this.#countAll.get() as { n: number }).n);
@@ -232,6 +256,8 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
       n.outcome,
       n.responseStatus,
       n.error,
+      n.requestBody,
+      n.responseBody,
       n.durationMs,
       n.attemptedAt,
     );
@@ -357,6 +383,8 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   outcome         TEXT    NOT NULL,
   response_status INTEGER,
   error           TEXT,
+  request_body    TEXT,
+  response_body   TEXT,
   duration_ms     INTEGER NOT NULL,
   attempted_at    INTEGER NOT NULL
 ) STRICT;

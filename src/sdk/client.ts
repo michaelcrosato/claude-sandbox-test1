@@ -170,6 +170,10 @@ export interface DeliveryAttemptView {
   readonly responseStatus: number | null;
   /** Failure detail when `outcome` is `failed`; `null` on success. */
   readonly error: string | null;
+  /** The signed payload sent to the receiver, truncated to 4096 bytes; null on pre-flight failure. */
+  readonly requestBody: string | null;
+  /** The HTTP response body, truncated to 4096 bytes; null when no response arrived. */
+  readonly responseBody: string | null;
   /** Wall-clock duration of the attempt, ms. */
   readonly durationMs: number;
   /** When the attempt started, epoch ms. */

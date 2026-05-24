@@ -53,7 +53,7 @@ import {
   type DeliveryQueue,
   type DeliveryTask,
 } from "../queue/delivery-queue.js";
-import type { NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
+import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 
 /**
  * Where a task's message should be delivered, and the secret to sign it with.
@@ -119,6 +119,13 @@ export interface HttpDeliveryResponse {
    * `null` or absent = no hint; the policy-computed delay applies unchanged.
    */
   readonly retryAfter?: string | null;
+  /**
+   * The HTTP response body returned by the receiver, already drained and
+   * truncated to {@link MAX_CAPTURED_BODY_BYTES} bytes. Absent when the body
+   * drain failed (e.g. the connection was cut mid-response); the worker treats
+   * an absent field as `null` when recording the attempt.
+   */
+  readonly responseBody?: string;
 }
 
 /**
@@ -231,16 +238,21 @@ export const fetchTransport: Transport = async (request, signal) => {
   // Capture Retry-After before draining so the header is available even if the
   // body drain fails. The value is the raw header string; the worker parses it.
   const retryAfter = response.headers.get("retry-after");
-  // Drain the body so the socket is released; the bytes are not needed here
-  // (a per-attempt audit log capturing response detail is a later add-on).
+  // Drain and capture the response body for the per-attempt audit log, truncated
+  // to MAX_CAPTURED_BODY_BYTES. A drain failure must not mask the status we already
+  // have, so the body is omitted from the return value on failure.
+  let responseBody: string | undefined;
   try {
-    await response.text();
+    const text = await response.text();
+    responseBody =
+      text.length > MAX_CAPTURED_BODY_BYTES ? text.slice(0, MAX_CAPTURED_BODY_BYTES) : text;
   } catch {
-    // A drain failure must not mask the status we already have.
+    // Drain failure — responseBody stays absent.
   }
   return {
     status: response.status,
     ...(retryAfter !== null ? { retryAfter } : {}),
+    ...(responseBody !== undefined ? { responseBody } : {}),
   };
 };
 
@@ -619,6 +631,11 @@ export class DeliveryWorker {
     // (the basis for per-tenant delivery-usage metering). Null until the message loads;
     // it stays null for a vanished message, whose attempt belongs to no tenant.
     let appId: string | null = null;
+    // Bodies captured for the per-attempt audit log. requestBody is set when a signed
+    // request is built; responseBody is set when the transport returns a response.
+    // Both stay null on pre-flight failures and transport errors.
+    let requestBody: string | null = null;
+    let responseBody: string | null = null;
     try {
       const message = await this.#store.get(task.messageId);
       if (message === null) {
@@ -631,7 +648,12 @@ export class DeliveryWorker {
         } else {
           const sentAt = this.#now();
           try {
-            response = await this.#send(buildSignedRequest(message, target, nowMs));
+            const signedRequest = buildSignedRequest(message, target, nowMs);
+            requestBody =
+              signedRequest.body.length > MAX_CAPTURED_BODY_BYTES
+                ? signedRequest.body.slice(0, MAX_CAPTURED_BODY_BYTES)
+                : signedRequest.body;
+            response = await this.#send(signedRequest);
           } finally {
             // Capture latency even when #send throws — a timeout's duration is the
             // most useful number there is. Math.max guards a non-monotonic clock.
@@ -641,6 +663,11 @@ export class DeliveryWorker {
       }
     } catch (error) {
       failure = describeError(error);
+    }
+
+    responseBody = response?.responseBody ?? null;
+    if (responseBody !== null && responseBody.length > MAX_CAPTURED_BODY_BYTES) {
+      responseBody = responseBody.slice(0, MAX_CAPTURED_BODY_BYTES);
     }
 
     const succeeded = response !== null && isSuccessStatus(response.status);
@@ -662,6 +689,8 @@ export class DeliveryWorker {
       responseStatus: response?.status ?? null,
       error,
       durationMs,
+      requestBody,
+      responseBody,
     });
 
     const outcome = succeeded
@@ -750,6 +779,8 @@ export class DeliveryWorker {
       readonly responseStatus: number | null;
       readonly error: string | null;
       readonly durationMs: number;
+      readonly requestBody: string | null;
+      readonly responseBody: string | null;
     },
   ): Promise<void> {
     const record = this.#recordAttempt;
@@ -766,6 +797,8 @@ export class DeliveryWorker {
         outcome: detail.succeeded ? "succeeded" : "failed",
         responseStatus: detail.responseStatus,
         error: detail.error,
+        requestBody: detail.requestBody,
+        responseBody: detail.responseBody,
         durationMs: detail.durationMs,
         attemptedAt,
       });

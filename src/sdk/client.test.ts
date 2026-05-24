@@ -626,6 +626,30 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(seenUrl).toContain("status=dead_letter");
   });
 
+  it("listMessageAttempts returns requestBody and responseBody from the server payload", async () => {
+    const attempt = {
+      id: "datt_1",
+      taskId: "dtask_1",
+      endpointId: "ep_1",
+      attemptNumber: 1,
+      outcome: "failed",
+      responseStatus: 503,
+      error: "endpoint returned HTTP 503",
+      requestBody: '{"eventType":"test"}',
+      responseBody: "Service Unavailable",
+      durationMs: 120,
+      attemptedAt: 1_700_000_000_000,
+    };
+    const client = fakeClient(() =>
+      Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [attempt], nextCursor: null })),
+      ),
+    );
+    const page = await client.listMessageAttempts("msg_1");
+    expect(page.data[0]!.requestBody).toBe('{"eventType":"test"}');
+    expect(page.data[0]!.responseBody).toBe("Service Unavailable");
+  });
+
   it("omits query string from listDeliveries when no params given", async () => {
     let seenUrl = "";
     const client = fakeClient((url) => {

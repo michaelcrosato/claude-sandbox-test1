@@ -617,6 +617,8 @@ function attemptView(attempt: DeliveryAttempt): Record<string, unknown> {
     outcome: attempt.outcome,
     responseStatus: attempt.responseStatus,
     error: attempt.error,
+    requestBody: attempt.requestBody,
+    responseBody: attempt.responseBody,
     durationMs: attempt.durationMs,
     attemptedAt: attempt.attemptedAt,
   };

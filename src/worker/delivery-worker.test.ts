@@ -23,7 +23,7 @@ import {
 import { fixedSchedule, type RetryPolicy } from "../delivery/retry-policy.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
 import { type Message } from "../storage/message-store.js";
-import { type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
+import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 
 // A fixed, valid base64 secret reused across the suite so signature round-trips
 // against the real verifier are deterministic.
@@ -942,6 +942,108 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
       transport: recordingTransport(200).transport,
     }).processOnce();
     expect(result).toMatchObject({ claimed: 1, succeeded: 1 });
+  });
+});
+
+describe("DeliveryWorker — body capture", () => {
+  function collector(): {
+    recordAttempt: (a: NewDeliveryAttempt) => void;
+    attempts: NewDeliveryAttempt[];
+  } {
+    const attempts: NewDeliveryAttempt[] = [];
+    return {
+      recordAttempt: (a) => {
+        attempts.push(a);
+      },
+      attempts,
+    };
+  }
+
+  async function enqueueOne(
+    env: ReturnType<typeof setup>,
+    payload = "{}",
+  ): Promise<Message> {
+    const { message } = await env.store.create({ appId: "app_1", eventType: "e", payload });
+    await env.queue.enqueue({ messageId: message.id, endpointId: "ep_1" });
+    return message;
+  }
+
+  it("captures the request body (signed payload) on a successful delivery", async () => {
+    const env = setup();
+    const message = await enqueueOne(env, '{"hello":"world"}');
+    const { recordAttempt, attempts } = collector();
+    await makeWorker(env, {
+      transport: async () => ({ status: 200 }),
+      recordAttempt,
+    }).processOnce();
+    expect(attempts[0]!.requestBody).toBe(message.payload);
+  });
+
+  it("captures the response body returned by the transport", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+    await makeWorker(env, {
+      transport: async () => ({ status: 503, responseBody: "Service Unavailable" }),
+      recordAttempt,
+    }).processOnce();
+    expect(attempts[0]!.responseBody).toBe("Service Unavailable");
+  });
+
+  it("records null requestBody and null responseBody on a pre-flight failure (no send)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+    await makeWorker(env, {
+      transport: async () => ({ status: 200 }),
+      resolveEndpoint: () => null,
+      recordAttempt,
+    }).processOnce();
+    expect(attempts[0]!.requestBody).toBeNull();
+    expect(attempts[0]!.responseBody).toBeNull();
+  });
+
+  it("records null responseBody on a transport error (no response object)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env, '{"key":"val"}');
+    const { recordAttempt, attempts } = collector();
+    const transport: Transport = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    await makeWorker(env, { transport, recordAttempt }).processOnce();
+    // Request was built (and signed) before the send threw — payload is captured.
+    expect(attempts[0]!.requestBody).toBe('{"key":"val"}');
+    // No response arrived — responseBody is null.
+    expect(attempts[0]!.responseBody).toBeNull();
+  });
+
+  it("truncates requestBody at MAX_CAPTURED_BODY_BYTES", async () => {
+    const env = setup();
+    const longPayload = "x".repeat(MAX_CAPTURED_BODY_BYTES + 100);
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: longPayload,
+    });
+    await env.queue.enqueue({ messageId: message.id, endpointId: "ep_1" });
+    const { recordAttempt, attempts } = collector();
+    await makeWorker(env, {
+      transport: async () => ({ status: 200 }),
+      recordAttempt,
+    }).processOnce();
+    expect(attempts[0]!.requestBody).toHaveLength(MAX_CAPTURED_BODY_BYTES);
+  });
+
+  it("truncates responseBody longer than MAX_CAPTURED_BODY_BYTES", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    await enqueueOne(env);
+    const { recordAttempt, attempts } = collector();
+    const longBody = "y".repeat(MAX_CAPTURED_BODY_BYTES + 50);
+    await makeWorker(env, {
+      transport: async () => ({ status: 503, responseBody: longBody }),
+      recordAttempt,
+    }).processOnce();
+    expect(attempts[0]!.responseBody).toHaveLength(MAX_CAPTURED_BODY_BYTES);
   });
 });
 

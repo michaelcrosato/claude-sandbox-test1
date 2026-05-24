@@ -29,6 +29,15 @@ import { randomBytes } from "node:crypto";
 import type { UsageRange } from "../storage/message-store.js";
 
 /**
+ * Maximum bytes captured per body field ({@link DeliveryAttempt.requestBody} and
+ * {@link DeliveryAttempt.responseBody}). The delivery worker truncates both at this
+ * limit before recording, so the audit table never grows faster than delivery volume
+ * while still surfacing the detail most useful for debugging (the first 4 KB of a
+ * response error or a large payload).
+ */
+export const MAX_CAPTURED_BODY_BYTES = 4096;
+
+/**
  * The outcome of a single attempt. Narrower than the delivery {@link DeliveryStatus}
  * on purpose: an *attempt* either reached the receiver with a 2xx (`succeeded`) or
  * it did not (`failed`). `dead_letter` is a property of the *task* once its attempts
@@ -80,6 +89,20 @@ export interface DeliveryAttempt {
   readonly responseStatus: number | null;
   /** Failure detail when `outcome` is `failed`; `null` on success. */
   readonly error: string | null;
+  /**
+   * The request body (signed message payload) sent to the receiver, truncated to
+   * {@link MAX_CAPTURED_BODY_BYTES} bytes. `null` when no send was attempted — a
+   * pre-flight failure (message vanished, endpoint unresolvable) or a transport error
+   * that occurred before the request was built.
+   */
+  readonly requestBody: string | null;
+  /**
+   * The HTTP response body the receiver returned, truncated to
+   * {@link MAX_CAPTURED_BODY_BYTES} bytes. `null` when no response arrived — a
+   * transport error (DNS, refused, timeout) or a pre-flight failure. An empty string
+   * `""` means the receiver responded with an empty body.
+   */
+  readonly responseBody: string | null;
   /** Wall-clock duration of the attempt, in ms (0 for a pre-flight failure with no send). */
   readonly durationMs: number;
   /** When the attempt started, epoch ms. */
@@ -105,6 +128,10 @@ export interface NewDeliveryAttempt {
   readonly outcome: DeliveryAttemptOutcome;
   readonly responseStatus?: number | null;
   readonly error?: string | null;
+  /** The request body sent to the receiver. Defaults to `null` when omitted. */
+  readonly requestBody?: string | null;
+  /** The response body received from the receiver. Defaults to `null` when omitted. */
+  readonly responseBody?: string | null;
   readonly durationMs: number;
   readonly attemptedAt: number;
 }
@@ -407,6 +434,8 @@ export interface NormalizedNewAttempt {
   readonly outcome: DeliveryAttemptOutcome;
   readonly responseStatus: number | null;
   readonly error: string | null;
+  readonly requestBody: string | null;
+  readonly responseBody: string | null;
   readonly durationMs: number;
   readonly attemptedAt: number;
 }
@@ -449,6 +478,14 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
   if (error !== null && typeof error !== "string") {
     throw new TypeError("error must be a string or null");
   }
+  const requestBody = input.requestBody ?? null;
+  if (requestBody !== null && typeof requestBody !== "string") {
+    throw new TypeError("requestBody must be a string or null");
+  }
+  const responseBody = input.responseBody ?? null;
+  if (responseBody !== null && typeof responseBody !== "string") {
+    throw new TypeError("responseBody must be a string or null");
+  }
   if (!Number.isInteger(input.durationMs) || input.durationMs < 0) {
     throw new TypeError("durationMs must be a non-negative integer");
   }
@@ -464,6 +501,8 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
     outcome: input.outcome,
     responseStatus,
     error,
+    requestBody,
+    responseBody,
     durationMs: input.durationMs,
     attemptedAt: input.attemptedAt,
   };

@@ -131,6 +131,7 @@ export {
   type EndpointStats,
   type EndpointStatsDay,
   DEFAULT_STATS_DAYS,
+  MAX_CAPTURED_BODY_BYTES,
   MAX_STATS_DAYS,
 } from "./attempts/delivery-attempt.js";
 

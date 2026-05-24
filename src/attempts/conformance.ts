@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  MAX_CAPTURED_BODY_BYTES,
   normalizeNewAttempt,
   type DeliveryAttemptStore,
   type NewDeliveryAttempt,
@@ -140,6 +141,27 @@ export function describeDeliveryAttemptStoreContract(
         );
         expect(attempt.responseStatus).toBeNull();
         expect(attempt.error).toBe("connection refused");
+      });
+
+      it("stores requestBody and responseBody when provided", async () => {
+        const attempt = await store.record(
+          attemptInput({ requestBody: '{"event":"test"}', responseBody: "Service Unavailable" }),
+        );
+        expect(attempt.requestBody).toBe('{"event":"test"}');
+        expect(attempt.responseBody).toBe("Service Unavailable");
+      });
+
+      it("defaults requestBody and responseBody to null when omitted", async () => {
+        const attempt = await store.record(attemptInput());
+        expect(attempt.requestBody).toBeNull();
+        expect(attempt.responseBody).toBeNull();
+      });
+
+      it("stores bodies up to MAX_CAPTURED_BODY_BYTES without truncation", async () => {
+        const body = "x".repeat(MAX_CAPTURED_BODY_BYTES);
+        const attempt = await store.record(attemptInput({ requestBody: body, responseBody: body }));
+        expect(attempt.requestBody).toHaveLength(MAX_CAPTURED_BODY_BYTES);
+        expect(attempt.responseBody).toHaveLength(MAX_CAPTURED_BODY_BYTES);
       });
 
       it("rejects malformed input with a TypeError", async () => {
