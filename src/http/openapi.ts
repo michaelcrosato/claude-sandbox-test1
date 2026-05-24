@@ -137,6 +137,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
           "`POSTHORN_ADMIN_TOKEN` is set.",
       },
       { name: "Operational", description: "Liveness, metrics, and this document." },
+      {
+        name: "Portal",
+        description:
+          "Consumer App Portal: the customer-facing webhook management UI. A tenant mints " +
+          "a portal session (via `POST /v1/portal/sessions`) and receives a short-lived token " +
+          "that grants their customer access to the portal at `/portal/login?token=<token>`. " +
+          "The customer can then create, edit, and delete endpoints, rotate signing secrets, " +
+          "and view recent delivery status — all scoped to the tenant's `appId`, without the " +
+          "customer ever seeing the tenant API key.",
+      },
     ],
     security: [{ bearerAuth: [] }],
     paths: {
@@ -553,6 +563,28 @@ export function buildOpenApiDocument(): OpenApiDocument {
               ref("TenantUsage"),
             ),
             "400": errorResponse("A partial or invalid `from`/`to`, or a range over the day cap."),
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+      },
+      "/v1/portal/sessions": {
+        post: {
+          operationId: "createPortalSession",
+          tags: ["Portal"],
+          summary: "Mint a consumer portal session",
+          description:
+            "Create a short-lived portal session for one of your customers. Returns a `token` " +
+            "and a `portalUrl` — redirect your customer to `portalUrl` (or embed it in an `<iframe>`) " +
+            "and they will be able to manage their webhook endpoints in your Posthorn tenant without " +
+            "ever seeing your API key. The session is scoped to your tenant; every portal action is " +
+            "automatically tenant-isolated. Requires a tenant API key.",
+          requestBody: jsonBody(ref("NewPortalSession")),
+          responses: {
+            "201": jsonResponse(
+              "The portal session token and a ready-to-use redirect URL.",
+              ref("PortalSessionResult"),
+            ),
+            "400": errorResponse("Missing or invalid `externalUserId` or `expiresIn` out of range."),
             "401": errorResponse("Missing or invalid API key."),
           },
         },
@@ -1407,6 +1439,51 @@ export function buildOpenApiDocument(): OpenApiDocument {
               properties: { quota: ref("QuotaStatus") },
             },
           ],
+        },
+        NewPortalSession: {
+          type: "object",
+          description: "Input to `POST /v1/portal/sessions`.",
+          required: ["externalUserId"],
+          properties: {
+            externalUserId: {
+              type: "string",
+              description:
+                "Your identifier for the customer gaining portal access. Opaque to Posthorn — " +
+                "used for auditing and to let you revoke the session later. Must be non-empty.",
+              examples: ["user_123", "org_456"],
+            },
+            expiresIn: {
+              type: "integer",
+              minimum: 1,
+              maximum: 604800,
+              description:
+                "How long the session remains valid, in seconds. Defaults to 86400 (24 h). " +
+                "Maximum 604800 (7 days).",
+              examples: [86400],
+            },
+          },
+        },
+        PortalSessionResult: {
+          type: "object",
+          description: "A minted consumer portal session.",
+          required: ["token", "portalUrl", "expiresAt"],
+          properties: {
+            token: {
+              type: "string",
+              description:
+                "The opaque session token. Pass it to the customer via `portalUrl` — there is " +
+                "no need to handle it directly.",
+            },
+            portalUrl: {
+              type: "string",
+              format: "uri",
+              description:
+                "The full URL to redirect your customer to. It exchanges the token for an " +
+                "`HttpOnly` session cookie and lands the customer at the portal endpoints page.",
+              examples: ["https://webhooks.example.com/portal/login?token=…"],
+            },
+            expiresAt: epochMs("When the session expires, epoch ms."),
+          },
         },
       },
     },

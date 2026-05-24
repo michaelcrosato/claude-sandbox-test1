@@ -41,6 +41,12 @@ export interface HttpServerOptions {
    * return `404`).
    */
   readonly tenantDashboardHandler?: ApiHandler;
+  /**
+   * When provided, requests whose pathname begins with `/portal` are forwarded
+   * to this handler. Omit to disable the consumer portal (those paths return
+   * `404`). The portal is always enabled when the gateway creates it.
+   */
+  readonly portalHandler?: ApiHandler;
 }
 
 /** Signals that a request body exceeded the configured cap. */
@@ -146,6 +152,7 @@ async function serve(
   maxBodyBytes: number,
   dashboardHandler: ApiHandler | undefined,
   tenantDashboardHandler: ApiHandler | undefined,
+  portalHandler: ApiHandler | undefined,
 ): Promise<void> {
   let rawBody: string;
   try {
@@ -187,11 +194,16 @@ async function serve(
     !isTenantDashboard &&
     dashboardHandler !== undefined &&
     (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"));
+  const isPortal =
+    portalHandler !== undefined &&
+    (url.pathname === "/portal" || url.pathname.startsWith("/portal/"));
   const activeHandle = isTenantDashboard
     ? tenantDashboardHandler
     : isAdminDashboard
       ? dashboardHandler
-      : handle;
+      : isPortal
+        ? portalHandler
+        : handle;
   let response: ApiResponse;
   try {
     response = await activeHandle({
@@ -221,8 +233,8 @@ async function serve(
 export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {}): Server {
   const handle = createApi(deps);
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-  const { dashboardHandler, tenantDashboardHandler } = options;
+  const { dashboardHandler, tenantDashboardHandler, portalHandler } = options;
   return createServer((req, res) => {
-    void serve(req, res, handle, maxBodyBytes, dashboardHandler, tenantDashboardHandler);
+    void serve(req, res, handle, maxBodyBytes, dashboardHandler, tenantDashboardHandler, portalHandler);
   });
 }

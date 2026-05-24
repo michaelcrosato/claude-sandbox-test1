@@ -10,6 +10,7 @@ import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js"
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
+import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
 import {
   PosthornApiError,
   PosthornClient,
@@ -669,4 +670,66 @@ describe("PosthornClient end-to-end via a running gateway", () => {
     },
     15_000,
   );
+});
+
+describe("PosthornClient — createPortalSession", () => {
+  async function startPortalServer(): Promise<Harness> {
+    const apps = new InMemoryAppStore();
+    const app = await apps.create({ name: "Acme" });
+    const { secret: apiKey } = await apps.createApiKey(app.id);
+    const portalSessions = new InMemoryPortalSessionStore();
+    const server = createHttpServer({
+      apps,
+      endpoints: new InMemoryEndpointStore(),
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      portalSessions,
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const base = `http://127.0.0.1:${port}`;
+    return { client: new PosthornClient({ baseUrl: base, apiKey }), base, apiKey };
+  }
+
+  it("mints a portal session and returns token, portalUrl, and expiresAt", async () => {
+    const { client } = await startPortalServer();
+    const result = await client.createPortalSession({ externalUserId: "user-abc" });
+    expect(typeof result.token).toBe("string");
+    expect(result.token.length).toBeGreaterThan(0);
+    expect(result.portalUrl).toContain("/portal/login?token=");
+    expect(result.portalUrl).toContain(result.token);
+    expect(typeof result.expiresAt).toBe("number");
+    expect(result.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("sends expiresIn when provided", async () => {
+    let capturedBody: string | null = null;
+    const client = fakeClient(async (url, init) => {
+      capturedBody = (init?.body as string) ?? null;
+      return fakeResponse(
+        201,
+        JSON.stringify({ token: "tok", portalUrl: "http://h/portal/login?token=tok", expiresAt: 9999 }),
+      );
+    });
+    await client.createPortalSession({ externalUserId: "u", expiresIn: 3600 });
+    expect(capturedBody).not.toBeNull();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.externalUserId).toBe("u");
+    expect(parsed.expiresIn).toBe(3600);
+  });
+
+  it("omits expiresIn from the request body when not provided", async () => {
+    let capturedBody: string | null = null;
+    const client = fakeClient(async (url, init) => {
+      capturedBody = (init?.body as string) ?? null;
+      return fakeResponse(
+        201,
+        JSON.stringify({ token: "tok", portalUrl: "http://h/portal/login?token=tok", expiresAt: 9999 }),
+      );
+    });
+    await client.createPortalSession({ externalUserId: "u" });
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed).not.toHaveProperty("expiresIn");
+  });
 });

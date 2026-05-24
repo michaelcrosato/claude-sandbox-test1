@@ -452,6 +452,36 @@ export interface GetUsageParams {
   readonly to?: string;
 }
 
+/** Input to {@link PosthornClient.createPortalSession}. */
+export interface CreatePortalSessionInput {
+  /**
+   * Your identifier for the customer gaining portal access (opaque to Posthorn —
+   * used for auditing). Must be a non-empty string.
+   */
+  readonly externalUserId: string;
+  /**
+   * How long the session remains valid, in seconds. Defaults to 86400 (24 h).
+   * Maximum 604800 (7 days).
+   */
+  readonly expiresIn?: number;
+}
+
+/**
+ * A minted consumer portal session — the result of
+ * {@link PosthornClient.createPortalSession}.
+ */
+export interface PortalSessionResult {
+  /** The opaque session token (embedded in `portalUrl` — no need to handle separately). */
+  readonly token: string;
+  /**
+   * The full URL to redirect your customer to. It exchanges the token for a session
+   * cookie and lands the customer at the portal endpoint management page.
+   */
+  readonly portalUrl: string;
+  /** When the session expires, epoch ms. */
+  readonly expiresAt: number;
+}
+
 /**
  * A typed client for a Posthorn gateway. Construct one per `(baseUrl, apiKey)`
  * pair and reuse it; it holds no per-request mutable state.
@@ -699,5 +729,19 @@ export class PosthornClient {
       "GET",
       `/v1/usage${qs.length > 0 ? `?${qs}` : ""}`,
     );
+  }
+
+  /**
+   * Mint a consumer portal session for one of your customers —
+   * `POST /v1/portal/sessions`. Returns a `token` and a `portalUrl`; redirect
+   * your customer to `portalUrl` and they will be able to manage their webhook
+   * endpoints without seeing your API key. The session is scoped to your tenant.
+   */
+  async createPortalSession(input: CreatePortalSessionInput): Promise<PortalSessionResult> {
+    const body: Record<string, unknown> = { externalUserId: input.externalUserId };
+    if (input.expiresIn !== undefined) {
+      body["expiresIn"] = input.expiresIn;
+    }
+    return this.#transport.request<PortalSessionResult>("POST", "/v1/portal/sessions", body);
   }
 }

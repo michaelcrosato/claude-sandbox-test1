@@ -167,6 +167,12 @@ export interface ApiDeps {
    * {@link Date.now}; injected by tests to pin the billing window deterministically.
    */
   readonly now?: () => number;
+  /**
+   * Portal session store enabling the `POST /v1/portal/sessions` route. When
+   * omitted, that route returns `404` — the portal feature is disabled. Wired
+   * in the gateway alongside the portal handler so they share the same store.
+   */
+  readonly portalSessions?: import("../portal/portal-session.js").PortalSessionStore;
 }
 
 /**
@@ -746,6 +752,7 @@ export const API_ROUTE_KEYS = [
   "GET /v1/endpoints/:id/deliveries",
   "GET /v1/deliveries",
   "GET /v1/usage",
+  "POST /v1/portal/sessions",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
   "POST /v1/admin/apps",
@@ -1247,6 +1254,55 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, usageView(summary, deliveries));
   };
 
+  // Maximum portal session TTL the caller can request (7 days in seconds).
+  const MAX_PORTAL_EXPIRES_IN_S = 7 * 24 * 60 * 60;
+  // Default portal session TTL (24 h in seconds).
+  const DEFAULT_PORTAL_EXPIRES_IN_S = 24 * 60 * 60;
+
+  const createPortalSession: AuthedHandler = async (ctx) => {
+    if (deps.portalSessions === undefined) {
+      // Portal feature disabled on this instance (no session store wired).
+      return json(404, { error: { code: "not_found", message: "portal is not enabled on this instance" } });
+    }
+    const body = parseJsonObject(ctx.req);
+    const rawUserId = body["externalUserId"];
+    if (typeof rawUserId !== "string" || rawUserId.trim().length === 0) {
+      throw new HttpError(400, "invalid_request", "externalUserId must be a non-empty string");
+    }
+    const externalUserId = rawUserId.trim();
+
+    let expiresInS = DEFAULT_PORTAL_EXPIRES_IN_S;
+    if ("expiresIn" in body) {
+      const raw = body["expiresIn"];
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) {
+        throw new HttpError(400, "invalid_request", "expiresIn must be a positive integer (seconds)");
+      }
+      if (raw > MAX_PORTAL_EXPIRES_IN_S) {
+        throw new HttpError(
+          400,
+          "invalid_request",
+          `expiresIn must not exceed ${MAX_PORTAL_EXPIRES_IN_S} (7 days)`,
+        );
+      }
+      expiresInS = raw;
+    }
+
+    const nowMs = (deps.now ?? Date.now)();
+    const ttlMs = expiresInS * 1000;
+    const token = deps.portalSessions.createSession(ctx.app.id, externalUserId, nowMs, ttlMs);
+    const expiresAt = nowMs + ttlMs;
+
+    // Derive the portal URL from the request's Host header so the caller gets a
+    // ready-to-use redirect target regardless of whether the gateway is behind
+    // a proxy. `x-forwarded-proto` (set by common reverse proxies) is preferred
+    // over a hard-coded `http` so TLS-terminated deployments return `https://`.
+    const proto = ctx.req.headers["x-forwarded-proto"] ?? "http";
+    const host = ctx.req.headers["host"] ?? "localhost";
+    const portalUrl = `${proto}://${host}/portal/login?token=${token}`;
+
+    return json(201, { token, portalUrl, expiresAt });
+  };
+
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
   // exhaustive: a missing key or a stray extra key is a compile error, so the route
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
@@ -1268,6 +1324,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
     "GET /v1/deliveries": authed(getAppDeliveries),
     "GET /v1/usage": authed(getUsage),
+    "POST /v1/portal/sessions": authed(createPortalSession),
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),
     "GET /v1/admin/apps/:id": adminAuthed(getApp),

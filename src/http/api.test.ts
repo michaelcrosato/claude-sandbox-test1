@@ -10,6 +10,7 @@ import { DeliveryWorker, type HttpDeliveryRequest } from "../worker/delivery-wor
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { verify } from "../signing/webhook-signature.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
+import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
 
 interface Fixture {
   readonly apps: InMemoryAppStore;
@@ -2366,5 +2367,115 @@ describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
     );
     expect(res.status).toBe(400);
     expect(body(res).error.code).toBe("invalid_request");
+  });
+});
+
+describe("createApi — POST /v1/portal/sessions (portal session minting)", () => {
+  async function portalSetup() {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const portalSessions = new InMemoryPortalSessionStore();
+    const now = () => 1_700_000_000_000;
+    const api = createApi({ apps, endpoints, messages, queue, attempts, portalSessions, now });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    return { api, secret, portalSessions };
+  }
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const { api } = await portalSetup();
+    const res = await api(jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "u1" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 when portalSessions is not configured", async () => {
+    const { api, secret } = await setup();
+    const res = await api(jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "u1" }, secret));
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("returns 400 for a missing externalUserId", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(jsonRequest("POST", "/v1/portal/sessions", {}, secret));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("returns 400 for a blank externalUserId", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "   " }, secret));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("returns 201 with token, portalUrl, and expiresAt on a valid request", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(
+      jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "user-123" }, secret),
+    );
+    expect(res.status).toBe(201);
+    const b = body(res);
+    expect(typeof b.token).toBe("string");
+    expect(b.token.length).toBeGreaterThan(0);
+    expect(b.portalUrl).toContain("/portal/login?token=");
+    expect(b.portalUrl).toContain(b.token);
+    // Default TTL = 24 h = 86400 s; nowMs fixed at 1_700_000_000_000
+    expect(b.expiresAt).toBe(1_700_000_000_000 + 86_400 * 1000);
+  });
+
+  it("respects a custom expiresIn (seconds)", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(
+      jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "user-abc", expiresIn: 3600 }, secret),
+    );
+    expect(res.status).toBe(201);
+    const b = body(res);
+    expect(b.expiresAt).toBe(1_700_000_000_000 + 3600 * 1000);
+  });
+
+  it("returns 400 when expiresIn exceeds the 7-day maximum", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/portal/sessions",
+        { externalUserId: "u", expiresIn: 7 * 24 * 60 * 60 + 1 },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("returns 400 when expiresIn is zero or negative", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(
+      jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "u", expiresIn: 0 }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("derives portalUrl proto from x-forwarded-proto header", async () => {
+    const { api, secret } = await portalSetup();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/portal/sessions",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          "x-forwarded-proto": "https",
+          host: "hooks.example.com",
+        },
+        rawBody: JSON.stringify({ externalUserId: "u" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).portalUrl).toMatch(/^https:\/\/hooks\.example\.com\/portal\/login\?token=/);
   });
 });

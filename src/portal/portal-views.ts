@@ -1,0 +1,335 @@
+/**
+ * Pure HTML string builders for the consumer app portal.
+ *
+ * The portal is the embeddable, customer-facing face of Posthorn: a SaaS tenant
+ * mints a time-limited portal session for one of their customers, who is then
+ * redirected here to manage their own webhook endpoints (create, edit, delete,
+ * view delivery status) without ever seeing the tenant's API key.
+ *
+ * All user-supplied strings pass through {@link esc} before insertion so the
+ * views are XSS-safe regardless of content. Styles are inlined; zero external
+ * assets — the same posture as the admin and tenant dashboards. The UI is
+ * intentionally neutral (no Posthorn branding in the main chrome) so a SaaS
+ * can embed it in an iframe without it looking out of place.
+ */
+
+import type { Endpoint } from "../endpoints/endpoint.js";
+import type { DeliveryTask } from "../queue/delivery-queue.js";
+
+/** Escape HTML entities to prevent XSS. */
+export function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const CSS = `
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;background:#f8fafc;color:#0f172a;font-size:14px;line-height:1.5}
+a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}
+header{background:#fff;border-bottom:1px solid #e2e8f0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+header .brand{font-size:14px;font-weight:600;color:#334155}
+.wrap{max-width:900px;margin:0 auto;padding:24px 20px}
+h2{font-size:15px;font-weight:600;margin-bottom:14px;color:#0f172a}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:18px;margin-bottom:16px}
+.alert{padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:13px}
+.alert-err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.alert-ok{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0}
+.banner{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin-bottom:16px}
+.banner label{display:block;font-size:11px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.banner .secret-val{font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;color:#1e40af;word-break:break-all;background:#dbeafe;padding:6px 10px;border-radius:4px;margin-top:4px}
+.banner p{font-size:12px;color:#2563eb;margin-top:6px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:13px;vertical-align:middle}
+th{background:#f8fafc;font-weight:600;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #e2e8f0}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#f8fafc}
+.btn{display:inline-flex;align-items:center;padding:6px 14px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;line-height:1}
+.btn:hover{text-decoration:none;filter:brightness(.93)}
+.btn-blue{background:#2563eb;color:#fff}
+.btn-gray{background:#e2e8f0;color:#374151}
+.btn-red{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.btn-sm{padding:4px 8px;font-size:12px}
+input[type=text],input[type=url],textarea{padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;outline:none;width:100%}
+input:focus,textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+label{display:block;font-size:12px;font-weight:600;margin-bottom:3px;color:#374151;text-transform:uppercase;letter-spacing:.04em}
+.form-row{margin-bottom:14px}
+.pill{display:inline-block;padding:2px 7px;border-radius:9999px;font-size:11px;font-weight:600}
+.pill-green{background:#dcfce7;color:#15803d}
+.pill-yellow{background:#fef9c3;color:#92400e}
+.pill-red{background:#fee2e2;color:#b91c1c}
+.pill-gray{background:#f1f5f9;color:#64748b}
+.pill-blue{background:#dbeafe;color:#1d4ed8}
+.mono{font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}
+.meta{color:#64748b;font-size:12px}
+.empty{color:#64748b;font-size:13px;font-style:italic;padding:10px 0}
+.trunc{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+/* login */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc}
+.login-box{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;width:400px;box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.login-box .heading{font-size:18px;font-weight:700;text-align:center;margin-bottom:4px;color:#0f172a}
+.login-box .sub{color:#64748b;font-size:13px;text-align:center;margin-bottom:22px}
+`;
+
+function statusPill(status: string): string {
+  const map: Record<string, string> = {
+    succeeded: "pill-green",
+    pending: "pill-blue",
+    delivering: "pill-yellow",
+    dead_letter: "pill-red",
+  };
+  const cls = map[status] ?? "pill-gray";
+  return `<span class="pill ${cls}">${esc(status.replace("_", " "))}</span>`;
+}
+
+function fmtTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
+
+function base(title: string, body: string, backLink = ""): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} — Webhooks</title>
+<style>${CSS}</style>
+</head>
+<body>
+<header>
+  <div class="brand">Webhooks</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    ${backLink}
+    <form method="POST" action="/portal/logout" style="display:inline">
+      <button type="submit" class="btn btn-gray btn-sm">Sign out</button>
+    </form>
+  </div>
+</header>
+<div class="wrap">
+${body}
+</div>
+</body>
+</html>`;
+}
+
+/** "Access denied / link expired" page — shown at GET /portal/login with no valid token. */
+export function portalExpiredPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link expired — Webhooks</title>
+<style>${CSS}</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box">
+    <div class="heading">Link expired</div>
+    <div class="sub" style="margin-top:8px">This portal link has expired or is invalid.<br>
+    Please contact support for a new link.</div>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+/** Endpoints list page. `createdSecret` is set right after endpoint creation (one-time display). */
+export function portalEndpointsPage(
+  endpoints: readonly Endpoint[],
+  createdSecret?: string,
+): string {
+  const secretBanner = createdSecret
+    ? `<div class="banner">
+  <label>Signing secret (shown once — copy it now)</label>
+  <div class="secret-val">${esc(createdSecret)}</div>
+  <p>Store this in your server's environment. After leaving this page it cannot be retrieved.<br>
+  Use the <b>Rotate secret</b> button on an endpoint if you need a new one.</p>
+</div>`
+    : "";
+
+  const rows =
+    endpoints.length === 0
+      ? `<tr><td colspan="4" class="empty">No endpoints yet. Create one below.</td></tr>`
+      : endpoints
+          .map((ep) => {
+            const types =
+              ep.eventTypes === null
+                ? '<span class="pill pill-gray">All events</span>'
+                : ep.eventTypes.length === 0
+                  ? '<span class="meta">—</span>'
+                  : ep.eventTypes.map((t) => `<span class="pill pill-gray">${esc(t)}</span>`).join(" ");
+            const status = ep.disabled
+              ? '<span class="pill pill-gray">disabled</span>'
+              : '<span class="pill pill-green">active</span>';
+            return `<tr>
+  <td class="trunc"><a href="/portal/endpoints/${esc(ep.id)}" title="${esc(ep.url)}">${esc(ep.url)}</a></td>
+  <td style="max-width:180px">${types}</td>
+  <td>${status}</td>
+  <td class="meta">${fmtTime(ep.createdAt)}</td>
+</tr>`;
+          })
+          .join("");
+
+  const createForm = `<div class="card">
+  <h2 style="margin-bottom:16px">Add endpoint</h2>
+  <form method="POST" action="/portal/endpoints">
+    <div class="form-row">
+      <label for="url">URL <span style="color:#ef4444">*</span></label>
+      <input id="url" type="url" name="url" placeholder="https://your-server.example/webhooks" required autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="description">Description</label>
+      <input id="description" type="text" name="description" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+      <label for="eventTypes">Event types (leave blank to receive all)</label>
+      <input id="eventTypes" type="text" name="eventTypes" placeholder="user.created, order.shipped">
+      <div class="meta" style="margin-top:4px">Comma-separated list. Leave blank to receive every event type.</div>
+    </div>
+    <button type="submit" class="btn btn-blue">Create endpoint</button>
+  </form>
+</div>`;
+
+  const body = `${secretBanner}<div class="section-head">
+  <h2>Endpoints</h2>
+</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>URL</th><th>Event types</th><th>Status</th><th>Created</th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>
+${createForm}`;
+
+  return base("Endpoints", body);
+}
+
+export interface DeliveryRow {
+  readonly task: DeliveryTask;
+  readonly messageId: string;
+}
+
+/** Endpoint detail page — config + edit form + recent deliveries. */
+export function portalEndpointDetailPage(
+  endpoint: Endpoint,
+  deliveries: readonly DeliveryRow[],
+  error?: string,
+): string {
+  const errorBanner = error
+    ? `<div class="alert alert-err">${esc(error)}</div>`
+    : "";
+
+  const types =
+    endpoint.eventTypes === null
+      ? "All events"
+      : endpoint.eventTypes.length === 0
+        ? "None"
+        : endpoint.eventTypes.join(", ");
+
+  const deliveryRows =
+    deliveries.length === 0
+      ? `<tr><td colspan="4" class="empty">No deliveries yet for this endpoint.</td></tr>`
+      : deliveries
+          .map(
+            (d) => `<tr>
+  <td class="mono meta trunc">${esc(d.messageId.slice(0, 20))}…</td>
+  <td>${statusPill(d.task.status)}</td>
+  <td class="meta">${d.task.attempts}</td>
+  <td class="meta">${fmtTime(d.task.createdAt)}</td>
+</tr>`,
+          )
+          .join("");
+
+  const editForm = `<div class="card">
+  <h2 style="margin-bottom:16px">Edit endpoint</h2>
+  ${errorBanner}
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/update">
+    <div class="form-row">
+      <label for="url">URL</label>
+      <input id="url" type="url" name="url" value="${esc(endpoint.url)}" required autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="description">Description</label>
+      <input id="description" type="text" name="description" value="${esc(endpoint.description)}">
+    </div>
+    <div class="form-row">
+      <label for="eventTypes">Event types (leave blank for all)</label>
+      <input id="eventTypes" type="text" name="eventTypes" value="${esc(endpoint.eventTypes !== null ? endpoint.eventTypes.join(", ") : "")}">
+    </div>
+    <div class="form-row" style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="disabled" name="disabled" value="1"${endpoint.disabled ? " checked" : ""} style="width:auto">
+      <label for="disabled" style="text-transform:none;letter-spacing:0;margin:0">Disabled (pauses delivery to this endpoint)</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button type="submit" class="btn btn-blue">Save changes</button>
+    </div>
+  </form>
+</div>`;
+
+  const rotateForm = `<div class="card">
+  <h2 style="margin-bottom:8px">Signing secret</h2>
+  <p class="meta" style="margin-bottom:12px">Rotate the signing secret when you need to reconfigure your webhook receiver. The old secret remains active for 24 h so you can update your server without downtime.</p>
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/rotate-secret">
+    <button type="submit" class="btn btn-gray">Rotate secret</button>
+  </form>
+</div>`;
+
+  const deleteForm = `<div class="card">
+  <h2 style="margin-bottom:8px">Delete endpoint</h2>
+  <p class="meta" style="margin-bottom:12px">Permanently remove this endpoint. Any in-flight deliveries will not be retried.</p>
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/delete" onsubmit="return confirm('Delete this endpoint? This cannot be undone.')">
+    <button type="submit" class="btn btn-red">Delete endpoint</button>
+  </form>
+</div>`;
+
+  const body = `<h2 style="margin-bottom:4px">
+  <a href="/portal/endpoints" style="color:#64748b;font-weight:400;font-size:13px">← Endpoints</a>
+</h2>
+<div class="card" style="margin-top:12px">
+  <table style="width:auto">
+    <tr><td style="color:#64748b;padding-right:24px;white-space:nowrap">URL</td><td class="mono">${esc(endpoint.url)}</td></tr>
+    <tr><td style="color:#64748b">Description</td><td>${esc(endpoint.description) || '<span class="meta">—</span>'}</td></tr>
+    <tr><td style="color:#64748b">Event types</td><td>${esc(types)}</td></tr>
+    <tr><td style="color:#64748b">Status</td><td>${endpoint.disabled ? '<span class="pill pill-gray">disabled</span>' : '<span class="pill pill-green">active</span>'}</td></tr>
+    <tr><td style="color:#64748b">Created</td><td class="meta">${fmtTime(endpoint.createdAt)}</td></tr>
+  </table>
+</div>
+
+<h2 style="margin-top:4px">Recent deliveries</h2>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>Message ID</th><th>Status</th><th>Attempts</th><th>Queued</th></tr>
+    </thead>
+    <tbody>${deliveryRows}</tbody>
+  </table>
+</div>
+
+${editForm}
+${rotateForm}
+${deleteForm}`;
+
+  return base(`Endpoint ${endpoint.id}`, body, `<a href="/portal/endpoints" style="color:#64748b;font-size:13px">← Endpoints</a>`);
+}
+
+/** Page shown after rotating the secret — displays the new secret once. */
+export function portalRotatedSecretPage(endpoint: Endpoint, newSecret: string): string {
+  const body = `<h2 style="margin-bottom:4px">
+  <a href="/portal/endpoints/${esc(endpoint.id)}" style="color:#64748b;font-weight:400;font-size:13px">← Endpoint</a>
+</h2>
+<div class="banner" style="margin-top:12px">
+  <label>New signing secret (shown once — copy it now)</label>
+  <div class="secret-val">${esc(newSecret)}</div>
+  <p>Update your server to use this secret. The previous secret stays active for 24 h so you can update without downtime.</p>
+</div>
+<p><a href="/portal/endpoints/${esc(endpoint.id)}" class="btn btn-gray">← Back to endpoint</a></p>`;
+
+  return base("Secret rotated", body);
+}

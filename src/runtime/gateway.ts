@@ -33,6 +33,8 @@ import { createDashboardHandler } from "../dashboard/handler.js";
 import { InMemorySessionStore } from "../dashboard/sessions.js";
 import { createTenantDashboardHandler } from "../dashboard/tenant-handler.js";
 import { InMemoryTenantSessionStore } from "../dashboard/tenant-sessions.js";
+import { createPortalHandler } from "../portal/portal-handler.js";
+import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
 import { POSTHORN_VERSION } from "../version.js";
 import type { AppStore } from "../apps/app.js";
@@ -239,6 +241,16 @@ export function createGateway(config: GatewayConfig): Gateway {
     sessions: new InMemoryTenantSessionStore(),
   });
 
+  // The portal session store is shared between the JSON API (`POST /v1/portal/sessions`
+  // mints sessions) and the portal handler (which validates them from cookies). Both
+  // must reference the same store instance so the token exchange works correctly.
+  const portalSessions = new InMemoryPortalSessionStore();
+
+  // The consumer portal is always enabled — it adds no new credential surface beyond
+  // the existing JSON API: a portal session can only be minted with a valid tenant API
+  // key, and the portal itself only manages endpoints for the session's tenant.
+  const portalHandler = createPortalHandler({ endpoints, queue, sessions: portalSessions });
+
   const httpServer = createHttpServer(
     {
       apps,
@@ -250,11 +262,14 @@ export function createGateway(config: GatewayConfig): Gateway {
       // Enable the admin/control-plane routes only when a token is configured; when
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
+      // Always wire the portal session store so POST /v1/portal/sessions works.
+      portalSessions,
     },
     {
       maxBodyBytes: config.maxBodyBytes,
       ...(dashboardHandler !== undefined ? { dashboardHandler } : {}),
       tenantDashboardHandler,
+      portalHandler,
     },
   );
 
