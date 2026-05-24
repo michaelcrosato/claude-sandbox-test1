@@ -7,9 +7,9 @@ if ($null -eq $GitStatus) {
     exit 0
 }
 
-# If there are changes, ensure no gross git structural corruption
-if ($GitStatus -match "▲") { 
-    Write-Error "Gate Failed: Unresolved conflict markers found in code!"
+# Ensure no standard git merge conflict markers have leaked into files
+if ($GitStatus -match "(<<<<<<<|=======|>>>>>>>)") { 
+    Write-Error "Gate Failed: Unresolved conflict markers found in source files!"
     exit 1 
 }
 

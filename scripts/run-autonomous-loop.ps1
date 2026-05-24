@@ -1,3 +1,4 @@
+# File Name: template/scripts/run-autonomous-loop.ps1
 <#
 .SYNOPSIS
     The Continuous Autonomous Power Loop Substrate.
@@ -43,6 +44,16 @@ while ($true) {
         git clean -fd
     } else {
         Write-Host "[VERIFIED] Iteration verified clean." -ForegroundColor Green
+    }
+
+    # 4. Handle Lifecycle State Machine Pauses
+    if (Test-Path "docs/GOAL.md") {
+        $GoalState = Select-String -Path "docs/GOAL.md" -Pattern "CURRENT_STATE:\s*BOOTSTRAP"
+        if ($GoalState) {
+            Write-Host "`n[PAUSED] Discovery Interview blueprint generated successfully inside docs/GOAL.md." -ForegroundColor Yellow
+            Write-Host "[PAUSED] Please review the file, answer the 5 questions, switch CURRENT_STATE to ACTIVE_SPECIFICATION, and re-run this loop script to begin automated development." -ForegroundColor Cyan
+            break
+        }
     }
 
     # Rest the processor briefly before the next machine cycle
