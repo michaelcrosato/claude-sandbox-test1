@@ -27,19 +27,24 @@ import {
   assertValidVisibilityTimeout,
   createLeaseToken,
   createTaskId,
+  decodeDeliveryCursor,
+  encodeDeliveryCursor,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
   normalizeClaimOptions,
   normalizeEnqueueInput,
   normalizeFailInput,
+  resolveListDeliveriesQuery,
   StaleLeaseError,
   UnknownDeliveryTaskError,
   zeroDeliveryCounts,
   type ClaimOptions,
   type DeliveryCountsByStatus,
+  type DeliveryPage,
   type DeliveryQueue,
   type DeliveryTask,
   type EnqueueInput,
   type FailInput,
+  type ListDeliveriesOptions,
 } from "./delivery-queue.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -125,6 +130,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   // Prepared once at construction, reused per call.
   readonly #selectTask: StatementSync;
   readonly #selectByMessage: StatementSync;
+  readonly #selectByEndpoint: StatementSync;
+  readonly #selectByEndpointAfter: StatementSync;
   readonly #selectClaimable: StatementSync;
   readonly #insertTask: StatementSync;
   readonly #updateTask: StatementSync;
@@ -164,6 +171,22 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     // grows unbounded (terminal tasks are never pruned).
     this.#selectByMessage = this.#db.prepare(
       "SELECT * FROM delivery_tasks WHERE message_id = ? ORDER BY rowid",
+    );
+    // All tasks for one endpoint, newest-first — the endpoint history view.
+    // Backed by idx_delivery_tasks_endpoint_created (endpoint_id, created_at, id).
+    this.#selectByEndpoint = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE endpoint_id = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    // Continuation page: keyset predicate advances past (cursorCreatedAt, cursorId).
+    this.#selectByEndpointAfter = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE endpoint_id = ?
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
     );
     // Claimable = due pending OR delivering with a lapsed lease. rowid order
     // claims oldest-first; the partial-ish index keeps the scan cheap.
@@ -308,6 +331,32 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     return rows.map(rowToTask);
   }
 
+  async listByEndpoint(
+    endpointId: string,
+    options?: ListDeliveriesOptions,
+  ): Promise<DeliveryPage> {
+    const { limit, cursor } = resolveListDeliveriesQuery(options);
+    // Fetch one extra to detect whether a further page exists.
+    const fetchLimit = limit + 1;
+    const rows = (
+      cursor === null
+        ? this.#selectByEndpoint.all(endpointId, fetchLimit)
+        : this.#selectByEndpointAfter.all(
+            endpointId,
+            cursor.createdAt,
+            cursor.createdAt,
+            cursor.id,
+            fetchLimit,
+          )
+    ) as unknown as TaskRow[];
+    const hasMore = rows.length > limit;
+    const deliveries = rows.slice(0, limit).map(rowToTask);
+    const last = deliveries[deliveries.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
+    return { deliveries, nextCursor };
+  }
+
   async countByStatus(): Promise<DeliveryCountsByStatus> {
     const counts = zeroDeliveryCounts();
     const rows = this.#countByStatus.all() as unknown as {
@@ -402,4 +451,10 @@ CREATE INDEX IF NOT EXISTS idx_delivery_tasks_claimable
 -- migration step needed, since it is a pure read optimization over existing rows.
 CREATE INDEX IF NOT EXISTS idx_delivery_tasks_message
   ON delivery_tasks (message_id);
+
+-- Backs listByEndpoint (endpoint delivery history, newest-first).
+-- Partial index (WHERE endpoint_id IS NOT NULL) keeps it focused on fan-out tasks.
+CREATE INDEX IF NOT EXISTS idx_delivery_tasks_endpoint_created
+  ON delivery_tasks (endpoint_id, created_at, id)
+  WHERE endpoint_id IS NOT NULL;
 `;

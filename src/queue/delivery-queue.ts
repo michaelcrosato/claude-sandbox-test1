@@ -123,6 +123,113 @@ export interface FailInput {
  */
 export type DeliveryCountsByStatus = Readonly<Record<DeliveryStatus, number>>;
 
+/** Default page size for {@link DeliveryQueue.listByEndpoint}. */
+export const DEFAULT_LIST_DELIVERIES_LIMIT = 50;
+
+/**
+ * Largest page {@link DeliveryQueue.listByEndpoint} will return in one call.
+ * A caller asking for more is a {@link RangeError}.
+ */
+export const MAX_LIST_DELIVERIES_LIMIT = 200;
+
+/** Options for {@link DeliveryQueue.listByEndpoint}. */
+export interface ListDeliveriesOptions {
+  /**
+   * Page size, an integer in `[1, {@link MAX_LIST_DELIVERIES_LIMIT}]`. Defaults
+   * to {@link DEFAULT_LIST_DELIVERIES_LIMIT}.
+   */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link DeliveryPage.nextCursor}. Omit (or
+   * `null`) for the first page. A malformed cursor throws {@link TypeError}.
+   */
+  readonly cursor?: string | null;
+}
+
+/** One page of {@link DeliveryQueue.listByEndpoint}, newest-first. */
+export interface DeliveryPage {
+  /** This page's delivery tasks, newest-first. */
+  readonly deliveries: DeliveryTask[];
+  /** Opaque cursor for the following page, or `null` when this is the last page. */
+  readonly nextCursor: string | null;
+}
+
+/** A decoded keyset cursor — the `(createdAt, id)` of the last task on a page. */
+export interface DeliveryCursor {
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/**
+ * Encode a keyset cursor that points just *after* `task` in newest-first order.
+ * Opaque, URL-safe (base64url). Mirrors the message cursor encoding.
+ */
+export function encodeDeliveryCursor(task: {
+  readonly createdAt: number;
+  readonly id: string;
+}): string {
+  return Buffer.from(`${task.createdAt}:${task.id}`, "utf8").toString("base64url");
+}
+
+/**
+ * Decode a cursor produced by {@link encodeDeliveryCursor}, throwing
+ * {@link TypeError} on any malformed token (so the HTTP layer renders a 400).
+ */
+export function decodeDeliveryCursor(cursor: string): DeliveryCursor {
+  if (typeof cursor !== "string" || cursor.length === 0) {
+    throw new TypeError("cursor must be a non-empty string");
+  }
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const sep = decoded.indexOf(":");
+  if (sep <= 0) {
+    throw new TypeError("malformed cursor");
+  }
+  const createdAt = Number(decoded.slice(0, sep));
+  const id = decoded.slice(sep + 1);
+  if (!Number.isInteger(createdAt) || createdAt < 0 || id.length === 0) {
+    throw new TypeError("malformed cursor");
+  }
+  return { createdAt, id };
+}
+
+/**
+ * Resolve {@link ListDeliveriesOptions} into a concrete `(limit, cursor)`. Shared
+ * by every backend so they page identically. `limit` defaults to
+ * {@link DEFAULT_LIST_DELIVERIES_LIMIT} and must be a positive integer in
+ * `[1, {@link MAX_LIST_DELIVERIES_LIMIT}]`.
+ */
+export function resolveListDeliveriesQuery(options: ListDeliveriesOptions = {}): {
+  limit: number;
+  cursor: DeliveryCursor | null;
+} {
+  const limit = options.limit ?? DEFAULT_LIST_DELIVERIES_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_DELIVERIES_LIMIT) {
+    throw new RangeError(
+      `limit must be an integer in [1, ${MAX_LIST_DELIVERIES_LIMIT}]`,
+    );
+  }
+  const cursor =
+    options.cursor === undefined || options.cursor === null
+      ? null
+      : decodeDeliveryCursor(options.cursor);
+  return { limit, cursor };
+}
+
+/**
+ * Whether `task` comes *after* `cursor` in newest-first order — i.e. it is older
+ * (lower `createdAt`), or has the same timestamp and a lexicographically smaller `id`.
+ * The single shared rule for the in-memory filter and the SQLite keyset predicate.
+ */
+export function isDeliveryAfterCursor(
+  task: { readonly createdAt: number; readonly id: string },
+  cursor: DeliveryCursor,
+): boolean {
+  if (task.createdAt !== cursor.createdAt) {
+    return task.createdAt < cursor.createdAt;
+  }
+  return task.id < cursor.id;
+}
+
 /**
  * A fresh, all-zero status→count map. Backends start from this and fold their
  * counts into it, so every status is represented even when the queue is empty.
@@ -192,6 +299,19 @@ export interface DeliveryQueue {
    * `status`/`attempts`/`lastError` here, and this exposes them per message.
    */
   listByMessage(messageId: string): Promise<readonly DeliveryTask[]>;
+  /**
+   * List delivery tasks for `endpointId`, newest-first (enqueue-time descending),
+   * keyset-paginated. Returns an empty page when the endpoint has no tasks — because
+   * no messages matched it, or the id is unknown. A pure read: never mutates, never
+   * throws on an unknown endpoint id. This is the endpoint-centric view that
+   * complements {@link listByMessage}: "what messages has this endpoint received,
+   * and what is their delivery status?" The cursor encodes the last row's
+   * `(createdAt, id)` so the page is stable under concurrent inserts.
+   */
+  listByEndpoint(
+    endpointId: string,
+    options?: ListDeliveriesOptions,
+  ): Promise<DeliveryPage>;
   /**
    * Count tasks grouped by delivery status — the point-in-time backlog/health
    * gauge behind the metrics surface ("how much is queued / in flight / stuck in

@@ -513,6 +513,7 @@ describe("DeliveryWorker.processOnce", () => {
       retry: async () => claimedTask,
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
+      listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
       countByStatus: async () => ({
         pending: 0,
         delivering: 1,
@@ -1134,6 +1135,7 @@ describe("DeliveryWorker.run", () => {
       },
       get: async () => null,
       listByMessage: async () => [],
+      listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
       countByStatus: async () => ({
         pending: 0,
         delivering: 0,

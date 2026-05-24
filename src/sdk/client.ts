@@ -169,6 +169,44 @@ export interface AttemptListPage {
   readonly nextCursor: string | null;
 }
 
+/** Options for {@link PosthornClient.listEndpointDeliveries}. */
+export interface ListEndpointDeliveriesParams {
+  /** Page size, 1..200. Defaults to the gateway's default (50). */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link EndpointDeliveryListPage.nextCursor};
+   * omit (or `null`) for the first page.
+   */
+  readonly cursor?: string | null;
+}
+
+/**
+ * One delivery in an endpoint's history — the current state of one (message, endpoint)
+ * delivery. Extends {@link DeliveryView} with `messageId` so you can navigate to the
+ * full message detail.
+ */
+export interface EndpointDeliveryView {
+  readonly id: string;
+  readonly messageId: string;
+  readonly endpointId: string | null;
+  readonly status: DeliveryStatus;
+  readonly attempts: number;
+  readonly nextAttemptAt: number | null;
+  readonly lastError: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+/**
+ * One page of {@link PosthornClient.listEndpointDeliveries}: a newest-first slice
+ * of the endpoint's deliveries plus the cursor to fetch the next page.
+ */
+export interface EndpointDeliveryListPage {
+  readonly data: readonly EndpointDeliveryView[];
+  /** Pass back as {@link ListEndpointDeliveriesParams.cursor}; `null` on the last page. */
+  readonly nextCursor: string | null;
+}
+
 /** Options for {@link PosthornClient.listMessages}. */
 export interface ListMessagesParams {
   /** Page size, 1..200. Defaults to the gateway's default (50). */
@@ -555,6 +593,28 @@ export class PosthornClient {
       "POST",
       `/v1/endpoints/${encodeURIComponent(id)}/rotate-secret`,
       body,
+    );
+  }
+
+  /**
+   * List an endpoint's delivery history, newest-first —
+   * `GET /v1/endpoints/:id/deliveries`. Each item is the current state of one
+   * (message, endpoint) delivery — status, attempts, last error, and the source
+   * `messageId` so you can navigate to the full message detail. Keyset-paginated:
+   * pass the returned {@link EndpointDeliveryListPage.nextCursor} back as
+   * {@link ListEndpointDeliveriesParams.cursor} to fetch the next page (`null` = last page).
+   */
+  async listEndpointDeliveries(
+    id: string,
+    params: ListEndpointDeliveriesParams = {},
+  ): Promise<EndpointDeliveryListPage> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.cursor !== undefined && params.cursor !== null) query.set("cursor", params.cursor);
+    const qs = query.toString();
+    return this.#transport.request<EndpointDeliveryListPage>(
+      "GET",
+      `/v1/endpoints/${encodeURIComponent(id)}/deliveries${qs.length > 0 ? `?${qs}` : ""}`,
     );
   }
 

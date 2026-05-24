@@ -718,6 +718,24 @@ Probed available: **Node 24, npm 11, pnpm, Python 3.14, Docker 29** — **no Go*
     Standard Webhooks signer) and POSTs via an injected transport — best-effort, never blocking
     delivery. Admin SDK gains `CreatedAdminApp.systemWebhookSecret` + `rotateSystemWebhookSecret`.
     Both store backends carry the new columns behind seamless `ALTER TABLE` migrations.
+  - **`?eventType=` filter on `GET /v1/messages` ✅ (iter 38):** `ListMessagesOptions` gains
+    `eventType?: string | null` (null/omitted = no filter). Both backends handle the filter (`WHERE
+    event_type = ?` in SQLite with a new covering `idx_messages_app_event_created (app_id,
+    event_type, created_at, id)` index, `IF NOT EXISTS`; in-memory one-liner filter). Cursor is
+    scoped to the same event type so pagination is stable across a filtered result. HTTP layer
+    parses `?eventType=`; SDK `ListMessagesParams` gains `eventType?: string | null`;
+    `listMessages` appends it to the query string when set.
+  - **`GET /v1/endpoints/:id/deliveries` ✅ (iter 39):** endpoint-centric delivery history — the
+    complement to `GET /v1/messages/:id` (which shows per-message delivery status per endpoint).
+    `DeliveryQueue` gains `listByEndpoint(endpointId, options?)` returning a keyset-paginated
+    `DeliveryPage` (newest-first, cursor on `(createdAt, id)`). SQLite adds a partial index
+    `ON delivery_tasks (endpoint_id, created_at, id) WHERE endpoint_id IS NOT NULL` (`IF NOT
+    EXISTS`). One shared conformance suite (7 cases × 2 backends). The HTTP route is tenant-scoped
+    (cross-tenant endpoint → 404); response view (`endpointDeliveryView`) includes `messageId`
+    (unlike the message-centric view where the message is implicit); `leaseToken`/`leaseExpiresAt`
+    are omitted. OpenAPI gains `EndpointDelivery` (`allOf: [Delivery, {messageId}]`) +
+    `EndpointDeliveryList` schemas; SDK gains `client.listEndpointDeliveries(id, {limit?,
+    cursor?})` → `EndpointDeliveryListPage`. The bidirectional drift test forced both.
   - Remaining: usage-based billing integration (Stripe; needs an external account — permanently
     ungateable in the loop). **P5 is otherwise complete.**
 

@@ -80,11 +80,18 @@ export {
   createLeaseToken,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
   DEFAULT_CLAIM_LIMIT,
+  DEFAULT_LIST_DELIVERIES_LIMIT,
+  MAX_LIST_DELIVERIES_LIMIT,
+  encodeDeliveryCursor,
+  decodeDeliveryCursor,
   type DeliveryQueue,
   type DeliveryTask,
   type EnqueueInput,
   type ClaimOptions,
   type FailInput,
+  type ListDeliveriesOptions,
+  type DeliveryPage,
+  type DeliveryCursor,
 } from "./queue/delivery-queue.js";
 
 export {

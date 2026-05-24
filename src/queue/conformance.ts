@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  encodeDeliveryCursor,
   StaleLeaseError,
   UnknownDeliveryTaskError,
   type DeliveryQueue,
@@ -466,6 +467,97 @@ export function describeDeliveryQueueContract(
         expect(listed).toHaveLength(1);
         expect(listed[0]).toEqual(done);
         expect(listed[0]!.status).toBe("succeeded");
+      });
+    });
+
+    describe("listByEndpoint", () => {
+      it("returns empty page for an endpoint with no tasks", async () => {
+        await queue.enqueue({ messageId: "m-other", endpointId: "ep_other" });
+        const page = await queue.listByEndpoint("ep_unknown");
+        expect(page.deliveries).toEqual([]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("returns tasks newest-first, scoped to the endpoint", async () => {
+        // Three tasks: two for ep_1 (interleaved with ep_2), one for ep_2.
+        const t1 = await queue.enqueue({ messageId: "m-a", endpointId: "ep_1" });
+        clock.advance(1_000);
+        await queue.enqueue({ messageId: "m-b", endpointId: "ep_2" });
+        clock.advance(1_000);
+        const t3 = await queue.enqueue({ messageId: "m-c", endpointId: "ep_1" });
+
+        const page = await queue.listByEndpoint("ep_1");
+        expect(page.deliveries.map((t) => t.id)).toEqual([t3.id, t1.id]); // newest-first
+        expect(page.deliveries.every((t) => t.endpointId === "ep_1")).toBe(true);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("reflects a task's current state after a transition", async () => {
+        await queue.enqueue({ messageId: "m", endpointId: "ep_1" });
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        const done = await queue.complete(claimed!.id, claimed!.leaseToken!);
+
+        const page = await queue.listByEndpoint("ep_1");
+        expect(page.deliveries).toHaveLength(1);
+        expect(page.deliveries[0]).toEqual(done);
+        expect(page.deliveries[0]!.status).toBe("succeeded");
+      });
+
+      it("paginates correctly: cursor advances the page, nextCursor signals more", async () => {
+        // Enqueue 3 tasks for ep_1 at distinct timestamps (newest = t3).
+        const t1 = await queue.enqueue({ messageId: "m1", endpointId: "ep_1" });
+        clock.advance(1_000);
+        const t2 = await queue.enqueue({ messageId: "m2", endpointId: "ep_1" });
+        clock.advance(1_000);
+        const t3 = await queue.enqueue({ messageId: "m3", endpointId: "ep_1" });
+
+        // First page (limit=2): should get t3, t2; nextCursor non-null.
+        const first = await queue.listByEndpoint("ep_1", { limit: 2 });
+        expect(first.deliveries.map((t) => t.id)).toEqual([t3.id, t2.id]);
+        expect(first.nextCursor).not.toBeNull();
+
+        // Second page using the cursor: should get t1; nextCursor null.
+        const second = await queue.listByEndpoint("ep_1", {
+          limit: 2,
+          cursor: first.nextCursor!,
+        });
+        expect(second.deliveries.map((t) => t.id)).toEqual([t1.id]);
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it("rejects an invalid limit", async () => {
+        await expect(queue.listByEndpoint("ep_1", { limit: 0 })).rejects.toThrow(RangeError);
+        await expect(queue.listByEndpoint("ep_1", { limit: -1 })).rejects.toThrow(RangeError);
+        await expect(queue.listByEndpoint("ep_1", { limit: 1.5 })).rejects.toThrow(RangeError);
+        await expect(queue.listByEndpoint("ep_1", { limit: 201 })).rejects.toThrow(RangeError);
+      });
+
+      it("rejects a malformed cursor", async () => {
+        await expect(
+          queue.listByEndpoint("ep_1", { cursor: "not-valid!!" }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          queue.listByEndpoint("ep_1", { cursor: "" }),
+        ).rejects.toThrow(TypeError);
+      });
+
+      it("terminates cleanly on exact-multiple page boundary", async () => {
+        const t1 = await queue.enqueue({ messageId: "m1", endpointId: "ep_1" });
+        clock.advance(1_000);
+        const t2 = await queue.enqueue({ messageId: "m2", endpointId: "ep_1" });
+
+        const first = await queue.listByEndpoint("ep_1", { limit: 2 });
+        expect(first.deliveries.map((t) => t.id)).toEqual([t2.id, t1.id]);
+        expect(first.nextCursor).toBeNull(); // exact page → no further cursor
+
+        // A continuation with the last cursor returns empty + null.
+        const manualCursor = encodeDeliveryCursor(t1);
+        const second = await queue.listByEndpoint("ep_1", {
+          limit: 2,
+          cursor: manualCursor,
+        });
+        expect(second.deliveries).toEqual([]);
+        expect(second.nextCursor).toBeNull();
       });
     });
 

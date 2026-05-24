@@ -89,7 +89,13 @@ import {
   type NewEndpoint,
   type RotateSecretOptions,
 } from "../endpoints/endpoint.js";
-import type { DeliveryQueue, DeliveryTask } from "../queue/delivery-queue.js";
+import {
+  MAX_LIST_DELIVERIES_LIMIT,
+  type DeliveryPage,
+  type DeliveryQueue,
+  type DeliveryTask,
+  type ListDeliveriesOptions,
+} from "../queue/delivery-queue.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import {
   MAX_LIST_ATTEMPTS_LIMIT,
@@ -338,6 +344,33 @@ function parseListMessagesParams(
 }
 
 /**
+ * Parse the `?limit=&cursor=` query of the endpoint deliveries route into store
+ * options. Mirrors {@link parseListMessagesParams}.
+ */
+function parseListDeliveriesParams(
+  query: Readonly<Record<string, string | undefined>>,
+): ListDeliveriesOptions {
+  const options: { limit?: number; cursor?: string } = {};
+  const rawLimit = query["limit"];
+  if (rawLimit !== undefined) {
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_DELIVERIES_LIMIT) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `limit must be an integer in [1, ${MAX_LIST_DELIVERIES_LIMIT}]`,
+      );
+    }
+    options.limit = limit;
+  }
+  const rawCursor = query["cursor"];
+  if (rawCursor !== undefined && rawCursor.length > 0) {
+    options.cursor = rawCursor;
+  }
+  return options;
+}
+
+/**
  * Parse the `?limit=&cursor=` query of the attempt-log route into store options.
  * Mirrors {@link parseListMessagesParams}: a present-but-invalid `limit` is `400`;
  * the cursor is passed through opaquely (the store validates its shape → `400`).
@@ -449,6 +482,25 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
 function deliveryView(task: DeliveryTask): Record<string, unknown> {
   return {
     id: task.id,
+    endpointId: task.endpointId,
+    status: task.status,
+    attempts: task.attempts,
+    nextAttemptAt: task.nextAttemptAt,
+    lastError: task.lastError,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+/**
+ * The tenant-facing view of a delivery in an endpoint's history list. Extends
+ * {@link deliveryView} with `messageId` — in the endpoint-centric view the source
+ * message is not implied by context, so the caller needs it to navigate.
+ */
+function endpointDeliveryView(task: DeliveryTask): Record<string, unknown> {
+  return {
+    id: task.id,
+    messageId: task.messageId,
     endpointId: task.endpointId,
     status: task.status,
     attempts: task.attempts,
@@ -666,6 +718,7 @@ export const API_ROUTE_KEYS = [
   "PATCH /v1/endpoints/:id",
   "DELETE /v1/endpoints/:id",
   "POST /v1/endpoints/:id/rotate-secret",
+  "GET /v1/endpoints/:id/deliveries",
   "GET /v1/usage",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
@@ -997,6 +1050,21 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, { ...endpointView(rotated), secret: rotated.secret });
   };
 
+  const getEndpointDeliveries: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    // Ownership check: another tenant's (or an absent) endpoint is 404 — existence
+    // is never revealed, consistent with every other endpoint route.
+    await loadOwnedEndpoint(ctx.app.id, id);
+    const page = await deps.queue.listByEndpoint(
+      id,
+      parseListDeliveriesParams(ctx.req.query),
+    );
+    return json(200, {
+      data: page.deliveries.map(endpointDeliveryView),
+      nextCursor: page.nextCursor,
+    });
+  };
+
   const getUsage: AuthedHandler = async (ctx) => {
     // The tenant's *own* usage + live quota status — the self-service counterpart to
     // the admin metering route (`GET /v1/admin/apps/:id/usage`), scoped to the key's
@@ -1160,6 +1228,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "PATCH /v1/endpoints/:id": authed(updateEndpoint),
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
+    "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
     "GET /v1/usage": authed(getUsage),
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),

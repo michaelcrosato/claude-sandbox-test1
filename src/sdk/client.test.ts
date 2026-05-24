@@ -501,6 +501,32 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     const client = fakeClient(hanging, 20);
     await expect(client.health()).rejects.toBeInstanceOf(PosthornTimeoutError);
   });
+
+  it("includes limit and cursor in listEndpointDeliveries query string", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listEndpointDeliveries("ep_1", { limit: 10, cursor: "c/2" });
+    expect(seenUrl).toContain("/v1/endpoints/ep_1/deliveries");
+    expect(seenUrl).toContain("limit=10");
+    expect(seenUrl).toContain("cursor=c%2F2");
+  });
+
+  it("omits query string from listEndpointDeliveries when no params given", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listEndpointDeliveries("ep_1");
+    expect(seenUrl.endsWith("/v1/endpoints/ep_1/deliveries")).toBe(true);
+  });
 });
 
 describe("PosthornClient end-to-end via a running gateway", () => {

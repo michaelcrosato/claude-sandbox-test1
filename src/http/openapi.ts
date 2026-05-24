@@ -23,6 +23,7 @@ import {
   MAX_USAGE_RANGE_DAYS,
 } from "../storage/message-store.js";
 import { MAX_LIST_ATTEMPTS_LIMIT } from "../attempts/delivery-attempt.js";
+import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** A JSON Schema / OpenAPI schema object (or a `$ref`). Loosely typed on purpose. */
@@ -389,6 +390,46 @@ export function buildOpenApiDocument(): OpenApiDocument {
           parameters: [idParam("The endpoint id.")],
           responses: {
             "204": { description: "Deleted; no content." },
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
+      "/v1/endpoints/{id}/deliveries": {
+        get: {
+          operationId: "listEndpointDeliveries",
+          tags: ["Endpoints"],
+          summary: "List an endpoint's delivery history",
+          description:
+            "List all deliveries for an endpoint, newest-first — the endpoint-centric " +
+            "view that complements `GET /v1/messages/{id}`. Each entry is the current state " +
+            "of one (message, endpoint) delivery: status, attempts, next retry time, and the " +
+            "source `messageId` so you can navigate to the full message detail. Keyset-paginated: " +
+            "pass `nextCursor` back as `?cursor=` to page forward. Another tenant's (or an " +
+            "unknown) endpoint is `404`.",
+          parameters: [
+            idParam("The endpoint id."),
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: MAX_LIST_DELIVERIES_LIMIT },
+              description: `Page size, 1–${MAX_LIST_DELIVERIES_LIMIT}. Defaults to 50.`,
+            },
+            {
+              name: "cursor",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description: "Opaque cursor from a prior page's `nextCursor`.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse(
+              "A page of deliveries for the endpoint, newest-first.",
+              ref("EndpointDeliveryList"),
+            ),
+            "400": errorResponse("Malformed `?limit=` or `?cursor=` parameter."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such endpoint for this tenant."),
           },
@@ -980,6 +1021,35 @@ export function buildOpenApiDocument(): OpenApiDocument {
           required: ["data", "nextCursor"],
           properties: {
             data: { type: "array", items: ref("DeliveryAttempt") },
+            nextCursor: {
+              type: ["string", "null"],
+              description: "Opaque cursor for the next page, or null when this is the last page.",
+            },
+          },
+        },
+        EndpointDelivery: {
+          allOf: [
+            ref("Delivery"),
+            {
+              type: "object",
+              description:
+                "A delivery in an endpoint's history — extends Delivery with the " +
+                "source `messageId` so you can navigate to the originating message.",
+              required: ["messageId"],
+              properties: {
+                messageId: { type: "string", description: "The message this delivery belongs to." },
+              },
+            },
+          ],
+        },
+        EndpointDeliveryList: {
+          type: "object",
+          description:
+            "A keyset-paginated page of an endpoint's deliveries, newest-first. " +
+            "Pass `nextCursor` as `?cursor=` to fetch the next page; `null` on the last page.",
+          required: ["data", "nextCursor"],
+          properties: {
+            data: { type: "array", items: ref("EndpointDelivery") },
             nextCursor: {
               type: ["string", "null"],
               description: "Opaque cursor for the next page, or null when this is the last page.",

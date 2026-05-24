@@ -2036,3 +2036,168 @@ describe("createApi — GET /v1/admin/apps/:id/usage", () => {
     expect(body(mine).total).toBe(1);
   });
 });
+
+describe("createApi — GET /v1/endpoints/:id/deliveries (endpoint delivery history)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/endpoints/ep_1/deliveries" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown endpoint id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/endpoints/ep_unknown/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("returns an empty page for an endpoint with no deliveries", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/deliveries`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).data).toEqual([]);
+    expect(body(res).nextCursor).toBeNull();
+  });
+
+  it("lists deliveries newest-first with messageId included", async () => {
+    const { api, secret, endpoints, messages, queue } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    // Ingest two messages; fan-out enqueues one delivery each.
+    const r1 = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "a", payload: {} }, secret),
+    );
+    const r2 = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "b", payload: {} }, secret),
+    );
+    const msgId1: string = body(r1).message.id;
+    const msgId2: string = body(r2).message.id;
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/deliveries`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const data = body(res).data as Record<string, unknown>[];
+    expect(data).toHaveLength(2);
+    // Both message IDs appear (ordering may depend on the createdAt tiebreak).
+    const returnedIds = data.map((d) => d["messageId"]);
+    expect(returnedIds).toContain(msgId1);
+    expect(returnedIds).toContain(msgId2);
+    // Each delivery carries the endpoint id and status fields.
+    expect(data[0]!["endpointId"]).toBe(epId);
+    expect(data[0]!["status"]).toBe("pending");
+    expect(data[0]!).toHaveProperty("attempts");
+    expect(data[0]!).toHaveProperty("createdAt");
+    expect(data[0]!).toHaveProperty("updatedAt");
+    // Internal fields are not leaked.
+    expect(data[0]!).not.toHaveProperty("leaseToken");
+    expect(data[0]!).not.toHaveProperty("leaseExpiresAt");
+    // nextCursor is null (only 2 items, fits in one page).
+    expect(body(res).nextCursor).toBeNull();
+  });
+
+  it("paginates correctly via cursor", async () => {
+    const { api, secret } = await setup();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    // Ingest 3 messages.
+    for (let i = 0; i < 3; i++) {
+      await api(
+        jsonRequest("POST", "/v1/messages", { eventType: `e${i}`, payload: {} }, secret),
+      );
+    }
+    const ep = await api(
+      request({ method: "GET", path: "/v1/endpoints", headers: { authorization: `Bearer ${secret}` } }),
+    );
+    const epId: string = body(ep).data[0].id;
+
+    // First page (limit=2).
+    const first = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/deliveries`,
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "2" },
+      }),
+    );
+    expect(body(first).data).toHaveLength(2);
+    expect(body(first).nextCursor).not.toBeNull();
+
+    // Second page.
+    const cursor: string = body(first).nextCursor;
+    const second = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/deliveries`,
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "2", cursor },
+      }),
+    );
+    expect(body(second).data).toHaveLength(1);
+    expect(body(second).nextCursor).toBeNull();
+  });
+
+  it("hides another tenant's endpoint behind 404", async () => {
+    const { api, apps } = await setup();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+    // Tenant B creates an endpoint.
+    const bEp = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://b.example/hook" }, bKey),
+    );
+    const bEpId: string = body(bEp).id;
+
+    // Tenant A cannot see B's endpoint deliveries — 404, not 403.
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${bEpId}/deliveries`,
+        headers: { authorization: `Bearer ${aKey}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 for an invalid limit", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/endpoints/${epId}/deliveries`,
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "0" },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});

@@ -22,9 +22,12 @@ import {
   claimableState,
   createLeaseToken,
   createTaskId,
+  encodeDeliveryCursor,
+  isDeliveryAfterCursor,
   normalizeClaimOptions,
   normalizeEnqueueInput,
   normalizeFailInput,
+  resolveListDeliveriesQuery,
   StaleLeaseError,
   UnknownDeliveryTaskError,
   assertValidVisibilityTimeout,
@@ -32,10 +35,12 @@ import {
   DEFAULT_VISIBILITY_TIMEOUT_MS,
   type ClaimOptions,
   type DeliveryCountsByStatus,
+  type DeliveryPage,
   type DeliveryQueue,
   type DeliveryTask,
   type EnqueueInput,
   type FailInput,
+  type ListDeliveriesOptions,
 } from "./delivery-queue.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -182,6 +187,30 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
       if (task.messageId === messageId) tasks.push(task);
     }
     return tasks;
+  }
+
+  async listByEndpoint(
+    endpointId: string,
+    options?: ListDeliveriesOptions,
+  ): Promise<DeliveryPage> {
+    const { limit, cursor } = resolveListDeliveriesQuery(options);
+    // Sort newest-first (createdAt DESC, id DESC) — mirrors the SQLite ORDER BY.
+    const ordered = [...this.#tasks.values()]
+      .filter((t) => t.endpointId === endpointId)
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+        return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+      });
+    const after =
+      cursor === null
+        ? ordered
+        : ordered.filter((t) => isDeliveryAfterCursor(t, cursor));
+    const hasMore = after.length > limit;
+    const deliveries = after.slice(0, limit);
+    const last = deliveries[deliveries.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
+    return { deliveries, nextCursor };
   }
 
   async countByStatus(): Promise<DeliveryCountsByStatus> {

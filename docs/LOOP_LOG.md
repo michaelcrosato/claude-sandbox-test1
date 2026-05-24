@@ -4,6 +4,97 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 39: `GET /v1/endpoints/:id/deliveries`
+
+**Repo truth at start:** clean main @ `d8e8db9` (iter-38, `?eventType=` filter on `GET /v1/messages`).
+Baseline verified: `tsc --noEmit` clean, vitest **868/868** (38 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Add `GET /v1/endpoints/:id/deliveries` — the
+endpoint-centric delivery history. Reasoning: the existing `GET /v1/messages/:id` answers "for a
+given message, what did each endpoint do?" — but the complement was missing: "for a given endpoint,
+what messages were sent to it?" This is the primary debugging view when you have a misbehaving
+*receiver* (not a specific message): "show me everything this endpoint has seen, newest first." Every
+incumbent exposes this view (Svix's "endpoint messages", Convoy's "endpoint deliveries"). It also
+closes the fan-out observability gap — `listByMessage` shows per-message delivery rows, but there was
+no indexed path from endpoint to its tasks. The implementation is fully self-contained in the
+established queue → HTTP → SDK chain, adds no new runtime dependencies, and follows the exact pattern
+of every prior list route (keyset cursor, dual-backend + one-shared-conformance-suite, partial index).
+
+**Built this tick:**
+
+- **`src/queue/delivery-queue.ts`** — `DeliveryQueue` interface gains `listByEndpoint(endpointId,
+  options?)` returning `DeliveryPage`; new exported types `ListDeliveriesOptions`, `DeliveryPage`,
+  `DeliveryCursor`; helpers `encodeDeliveryCursor`/`decodeDeliveryCursor`/`resolveListDeliveriesQuery`/
+  `isDeliveryAfterCursor`; constants `DEFAULT_LIST_DELIVERIES_LIMIT = 50`,
+  `MAX_LIST_DELIVERIES_LIMIT = 200`.
+
+- **`src/queue/in-memory-queue.ts`** — `listByEndpoint`: filters by `endpointId`, sorts newest-first
+  (`createdAt DESC, id DESC`), applies cursor, returns `DeliveryPage` with `hasMore`-based `nextCursor`.
+
+- **`src/queue/sqlite-queue.ts`** — `listByEndpoint`: two prepared statements (first-page + cursor
+  continuation, fetches `limit + 1` to detect `hasMore`); partial index
+  `idx_delivery_tasks_endpoint_created ON delivery_tasks (endpoint_id, created_at, id) WHERE endpoint_id
+  IS NOT NULL` (idempotent `IF NOT EXISTS`; the planner skips orphan rows from tasks without an endpoint
+  id, keeping the index tight).
+
+- **`src/queue/conformance.ts`** — 7 new shared conformance cases (× 2 backends): empty-page for unknown
+  endpoint; newest-first ordering + cross-endpoint isolation; state-after-transition; cursor pagination
+  (first + second page); invalid-limit `RangeError`; malformed-cursor `TypeError`; exact-multiple page
+  boundary (`nextCursor: null` + empty continuation).
+
+- **`src/http/api.ts`** — `"GET /v1/endpoints/:id/deliveries"` added to the compile-checked
+  `API_ROUTE_KEYS` (compile error if no handler); `endpointDeliveryView` (like `deliveryView` but adds
+  `messageId` — in endpoint context the message id is not implied); `getEndpointDeliveries` handler:
+  verifies endpoint ownership (cross-tenant → 404), calls `listByEndpoint`, maps through
+  `endpointDeliveryView`.
+
+- **`src/http/openapi.ts`** — `"/v1/endpoints/{id}/deliveries"` path + `listEndpointDeliveries` GET
+  operation; `EndpointDelivery` schema (`allOf: [ref("Delivery"), {required: ["messageId"], properties:
+  {messageId: string}}]`); `EndpointDeliveryList` schema (`data: EndpointDelivery[], nextCursor:
+  string | null`). The bidirectional drift test *forced* all three.
+
+- **`src/sdk/client.ts`** — `ListEndpointDeliveriesParams`, `EndpointDeliveryView` (adds `messageId`),
+  `EndpointDeliveryListPage`; `client.listEndpointDeliveries(id, params?)` appends `?limit=&cursor=` and
+  returns `EndpointDeliveryListPage`.
+
+- **`src/index.ts`** — new public exports: `DEFAULT_LIST_DELIVERIES_LIMIT`, `MAX_LIST_DELIVERIES_LIMIT`,
+  `encodeDeliveryCursor`, `decodeDeliveryCursor`, `ListDeliveriesOptions`, `DeliveryPage`,
+  `DeliveryCursor`.
+
+- **`src/worker/delivery-worker.test.ts`** — added `listByEndpoint` stub to two hand-built queue mock
+  objects (required by the updated `DeliveryQueue` interface).
+
+- **`src/http/api.test.ts`** — 6 handler tests: 401 unauthenticated; 404 unknown endpoint; empty page;
+  lists with `messageId` present (both ids found via `toContain`); cursor pagination; 404 cross-tenant;
+  400 invalid limit.
+
+- **`src/sdk/client.test.ts`** — 2 injected-fetch unit tests: `limit`+`cursor` appear in query string;
+  no query string when no params given.
+
+**Fixes applied mid-tick:**
+
+- `delivery-worker.test.ts` — two stub `DeliveryQueue` objects were missing `listByEndpoint`: added stub
+  returning `{ deliveries: [], nextCursor: null }`.
+
+- `api.test.ts` "lists deliveries newest-first" — both messages were ingested in sub-millisecond
+  succession so `createdAt` collided; tiebreak `id DESC` is non-deterministic for random IDs. Fixed by
+  asserting `toContain` for each id rather than positional order.
+
+- `api.test.ts` "paginates correctly via cursor" — `?limit=2` was embedded in the path string; the
+  router's `toSegments` would parse `deliveries?limit=2` as one segment (no match). Fixed by moving the
+  param to `query: { limit: "2" }`.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**891/891, 38 files** (+23 over baseline: +14 conformance × 2 backends, +6 handler, +2 SDK, +1
+cross-tenant handler). `npm run build` clean. **compiled-`dist` smoke** (4/4 checks through production
+ESM on `:memory:`): endpoint with no deliveries → empty page; two deliveries present → both ids visible;
+cursor paginates; cross-tenant → 404.
+
+**State:** GREEN → committed to main @ iter-39.
+
+---
+
 ## 2026-05-24 — Iteration 38: `?eventType=` filter on `GET /v1/messages`
 
 **Repo truth at start:** clean main @ `bea0e5b` (iter-37, README rewrite + npm publish prep,
