@@ -37,7 +37,7 @@ import {
   type EnqueueInput,
   type FailInput,
   type ListByAppOptions,
-  type ListDeliveriesOptions,
+  type ListByEndpointOptions,
 } from "./delivery-queue.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -310,23 +310,41 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
     return rows.map(rowToTask);
   }
 
-  async listByEndpoint(endpointId: string, options?: ListDeliveriesOptions): Promise<DeliveryPage> {
+  async listByEndpoint(endpointId: string, options?: ListByEndpointOptions): Promise<DeliveryPage> {
     const { limit, cursor } = resolveListDeliveriesQuery(options);
+    const status = options?.status ?? null;
     const fetchLimit = limit + 1;
     let rows: TaskRow[];
-    if (cursor === null) {
-      ({ rows } = await this.#pool.query<TaskRow>(
-        "SELECT * FROM delivery_tasks WHERE endpoint_id = $1" +
-          " ORDER BY created_at DESC, id DESC LIMIT $2",
-        [endpointId, fetchLimit],
-      ));
+    if (status === null) {
+      if (cursor === null) {
+        ({ rows } = await this.#pool.query<TaskRow>(
+          "SELECT * FROM delivery_tasks WHERE endpoint_id = $1" +
+            " ORDER BY created_at DESC, id DESC LIMIT $2",
+          [endpointId, fetchLimit],
+        ));
+      } else {
+        ({ rows } = await this.#pool.query<TaskRow>(
+          "SELECT * FROM delivery_tasks WHERE endpoint_id = $1" +
+            " AND (created_at < $2 OR (created_at = $3 AND id < $4))" +
+            " ORDER BY created_at DESC, id DESC LIMIT $5",
+          [endpointId, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
+        ));
+      }
     } else {
-      ({ rows } = await this.#pool.query<TaskRow>(
-        "SELECT * FROM delivery_tasks WHERE endpoint_id = $1" +
-          " AND (created_at < $2 OR (created_at = $3 AND id < $4))" +
-          " ORDER BY created_at DESC, id DESC LIMIT $5",
-        [endpointId, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
-      ));
+      if (cursor === null) {
+        ({ rows } = await this.#pool.query<TaskRow>(
+          "SELECT * FROM delivery_tasks WHERE endpoint_id = $1 AND status = $2" +
+            " ORDER BY created_at DESC, id DESC LIMIT $3",
+          [endpointId, status, fetchLimit],
+        ));
+      } else {
+        ({ rows } = await this.#pool.query<TaskRow>(
+          "SELECT * FROM delivery_tasks WHERE endpoint_id = $1 AND status = $2" +
+            " AND (created_at < $3 OR (created_at = $4 AND id < $5))" +
+            " ORDER BY created_at DESC, id DESC LIMIT $6",
+          [endpointId, status, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
+        ));
+      }
     }
     const hasMore = rows.length > limit;
     const deliveries = rows.slice(0, limit).map(rowToTask);

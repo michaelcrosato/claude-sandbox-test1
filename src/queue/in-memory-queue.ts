@@ -42,7 +42,7 @@ import {
   type EnqueueInput,
   type FailInput,
   type ListByAppOptions,
-  type ListDeliveriesOptions,
+  type ListByEndpointOptions,
 } from "./delivery-queue.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -215,12 +215,14 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
 
   async listByEndpoint(
     endpointId: string,
-    options?: ListDeliveriesOptions,
+    options?: ListByEndpointOptions,
   ): Promise<DeliveryPage> {
     const { limit, cursor } = resolveListDeliveriesQuery(options);
+    const status = options?.status ?? null;
     // Sort newest-first (createdAt DESC, id DESC) — mirrors the SQLite ORDER BY.
     const ordered = [...this.#tasks.values()]
       .filter((t) => t.endpointId === endpointId)
+      .filter((t) => status === null || t.status === status)
       .sort((a, b) => {
         if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
         return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;

@@ -823,6 +823,18 @@ export class PosthornClient {
     return this.#transport.request<BulkRetryResponse>("POST", "/v1/deliveries/retry");
   }
 
+  /**
+   * Bulk-retry dead-lettered deliveries for one endpoint — the per-endpoint
+   * recovery path once a specific failing receiver is fixed. Returns the count
+   * retried and `hasMore` (re-invoke until `false` to drain a large backlog).
+   */
+  async retryEndpointDeliveries(endpointId: string): Promise<BulkRetryResponse> {
+    return this.#transport.request<BulkRetryResponse>(
+      "POST",
+      `/v1/endpoints/${encodeURIComponent(endpointId)}/deliveries/retry`,
+    );
+  }
+
   /** List the tenant's endpoints — `GET /v1/endpoints`. */
   async listEndpoints(): Promise<readonly EndpointView[]> {
     const res = await this.#transport.request<{ data: readonly EndpointView[] }>(

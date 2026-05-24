@@ -510,6 +510,28 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/endpoints/{id}/deliveries/retry": {
+        post: {
+          operationId: "retryEndpointDeliveries",
+          tags: ["Endpoints"],
+          summary: "Bulk-retry an endpoint's dead-lettered deliveries",
+          description:
+            "Re-drive up to " + MAX_LIST_DELIVERIES_LIMIT + " of an endpoint's dead-lettered deliveries — the " +
+            "per-endpoint recovery path once a specific failing receiver is fixed. Only `dead_letter` " +
+            "tasks are targeted; healthy deliveries (pending/in-flight/succeeded) are untouched. " +
+            "Revived tasks become `pending` with a fresh attempt budget, deliverable immediately. " +
+            "When `hasMore` is `true` there are further dead-lettered deliveries for this endpoint " +
+            "not addressed this call; re-invoke until `hasMore` is `false` to fully drain. " +
+            "Another tenant's (or an unknown) endpoint is `404`.",
+          security: [{ BearerAuth: [] }],
+          parameters: [idParam("The endpoint id.")],
+          responses: {
+            "200": jsonResponse("The bulk-retry tally.", ref("BulkRetryResult")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
       "/v1/endpoints/{id}/stats": {
         get: {
           operationId: "getEndpointStats",

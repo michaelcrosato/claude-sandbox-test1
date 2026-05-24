@@ -2857,6 +2857,82 @@ describe("createApi — POST /v1/deliveries/retry (bulk dead-letter retry)", () 
   });
 });
 
+describe("createApi — POST /v1/endpoints/:id/deliveries/retry (per-endpoint bulk retry)", () => {
+  async function setupNoRetry() {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
+  }
+
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api, endpoints, secret } = await setupNoRetry();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(request({ method: "POST", path: `/v1/endpoints/${epId}/deliveries/retry` }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown endpoint id", async () => {
+    const { api, secret } = await setupNoRetry();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/endpoints/ep_unknown/deliveries/retry",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns { retried: 0, hasMore: false } when no deliveries are dead-lettered", async () => {
+    const { api, secret } = await setupNoRetry();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${epId}/deliveries/retry`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ retried: 0, hasMore: false });
+  });
+
+  it("revives dead-lettered deliveries for the endpoint and returns the count", async () => {
+    const { api, secret, endpoints, messages, queue } = await setupNoRetry();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: 500 }),
+    });
+    await worker.processOnce();
+
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${epId}/deliveries/retry`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).retried).toBe(1);
+    expect(body(res).hasMore).toBe(false);
+  });
+});
+
 describe("createApi — POST /v1/portal/sessions (portal session minting)", () => {
   async function portalSetup() {
     const apps = new InMemoryAppStore();

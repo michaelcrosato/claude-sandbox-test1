@@ -96,6 +96,7 @@ export {
   type FailInput,
   type ListDeliveriesOptions,
   type ListByAppOptions,
+  type ListByEndpointOptions,
   type DeliveryPage,
   type DeliveryCursor,
 } from "./queue/delivery-queue.js";
@@ -108,6 +109,7 @@ export {
 
 export {
   retryAppDeliveries,
+  retryEndpointDeliveries,
   DEFAULT_BULK_RETRY_LIMIT,
   type BulkRetryResult,
   type RetryAppDeps,

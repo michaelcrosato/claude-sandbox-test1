@@ -160,7 +160,7 @@ export const DEFAULT_LIST_DELIVERIES_LIMIT = 50;
  */
 export const MAX_LIST_DELIVERIES_LIMIT = 200;
 
-/** Options for {@link DeliveryQueue.listByEndpoint}. */
+/** Base pagination options shared by all delivery-list methods. */
 export interface ListDeliveriesOptions {
   /**
    * Page size, an integer in `[1, {@link MAX_LIST_DELIVERIES_LIMIT}]`. Defaults
@@ -172,6 +172,18 @@ export interface ListDeliveriesOptions {
    * `null`) for the first page. A malformed cursor throws {@link TypeError}.
    */
   readonly cursor?: string | null;
+}
+
+/**
+ * Options for {@link DeliveryQueue.listByEndpoint} — extends the base pagination
+ * options with an optional status filter, mirroring {@link ListByAppOptions}.
+ */
+export interface ListByEndpointOptions extends ListDeliveriesOptions {
+  /**
+   * When set, only return deliveries with this status. Omit (or `null`) to
+   * return deliveries in all statuses (the default).
+   */
+  readonly status?: DeliveryStatus | null;
 }
 
 /**
@@ -364,7 +376,7 @@ export interface DeliveryQueue {
    */
   listByEndpoint(
     endpointId: string,
-    options?: ListDeliveriesOptions,
+    options?: ListByEndpointOptions,
   ): Promise<DeliveryPage>;
   /**
    * List delivery tasks for `appId`, newest-first (enqueue-time descending),

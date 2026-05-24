@@ -22,6 +22,55 @@ import {
 } from "./delivery-queue.js";
 
 /**
+ * Re-drive up to `limit` **dead-lettered** deliveries for `endpointId` — the
+ * per-endpoint recovery path once a specific failing receiver is fixed.
+ *
+ * Complements {@link retryAppDeliveries} (tenant-wide) and
+ * `retryMessageDeliveries` (per-message): an operator whose Stripe endpoint
+ * was down for hours now targets exactly those dead-lettered deliveries without
+ * touching healthy endpoints.
+ *
+ * Like {@link retryAppDeliveries}, revived tasks are no longer `dead_letter` on
+ * the next call, so re-invocation naturally fetches the next batch. Concurrent
+ * revives and unknown ids are absorbed silently.
+ */
+export async function retryEndpointDeliveries(
+  endpointId: string,
+  deps: RetryAppDeps,
+  options: { readonly limit?: number } = {},
+): Promise<BulkRetryResult> {
+  const limit = options.limit ?? DEFAULT_BULK_RETRY_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_DELIVERIES_LIMIT) {
+    throw new RangeError(
+      `limit must be an integer in [1, ${MAX_LIST_DELIVERIES_LIMIT}]`,
+    );
+  }
+
+  const page = await deps.queue.listByEndpoint(endpointId, {
+    status: "dead_letter",
+    limit,
+  });
+
+  let retried = 0;
+  for (const task of page.deliveries) {
+    try {
+      await deps.queue.retry(task.id);
+      retried += 1;
+    } catch (err) {
+      if (
+        err instanceof DeliveryStateError ||
+        err instanceof UnknownDeliveryTaskError
+      ) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return { retried, hasMore: page.nextCursor !== null };
+}
+
+/**
  * Maximum tasks {@link retryAppDeliveries} can revive per call — equal to the
  * queue's max page size so one list + N retries is the worst case per call.
  * Operators drain a large backlog by calling the route repeatedly until

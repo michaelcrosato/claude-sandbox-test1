@@ -110,7 +110,11 @@ import {
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import { cancelMessageDeliveries } from "../queue/cancel-message.js";
-import { retryAppDeliveries, type BulkRetryResult } from "../queue/retry-app.js";
+import {
+  retryAppDeliveries,
+  retryEndpointDeliveries,
+  type BulkRetryResult,
+} from "../queue/retry-app.js";
 import {
   DEFAULT_STATS_DAYS,
   MAX_LIST_ATTEMPTS_LIMIT,
@@ -815,6 +819,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/endpoints/:id/rotate-secret",
   "POST /v1/endpoints/:id/test",
   "GET /v1/endpoints/:id/deliveries",
+  "POST /v1/endpoints/:id/deliveries/retry",
   "GET /v1/endpoints/:id/stats",
   "GET /v1/deliveries",
   "POST /v1/deliveries/retry",
@@ -1380,6 +1385,15 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const retryEndpointAllDeliveries: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    await loadOwnedEndpoint(ctx.app.id, id);
+    const result: BulkRetryResult = await retryEndpointDeliveries(id, {
+      queue: deps.queue,
+    });
+    return json(200, result);
+  };
+
   const getEndpointStats: AuthedHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     // Ownership check — another tenant's (or absent) endpoint is 404, same as every
@@ -1719,6 +1733,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
     "POST /v1/endpoints/:id/test": authed(testEndpoint),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
+    "POST /v1/endpoints/:id/deliveries/retry": authed(retryEndpointAllDeliveries),
     "GET /v1/endpoints/:id/stats": authed(getEndpointStats),
     "GET /v1/deliveries": authed(getAppDeliveries),
     "POST /v1/deliveries/retry": authed(retryAllDeliveries),

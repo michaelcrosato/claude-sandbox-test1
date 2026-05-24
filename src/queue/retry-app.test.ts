@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryDeliveryQueue } from "./in-memory-queue.js";
 import {
   retryAppDeliveries,
+  retryEndpointDeliveries,
   DEFAULT_BULK_RETRY_LIMIT,
 } from "./retry-app.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
@@ -148,5 +149,88 @@ describe("retryAppDeliveries", () => {
 
   it("exports DEFAULT_BULK_RETRY_LIMIT equal to MAX_LIST_DELIVERIES_LIMIT", () => {
     expect(DEFAULT_BULK_RETRY_LIMIT).toBe(MAX_LIST_DELIVERIES_LIMIT);
+  });
+});
+
+describe("retryEndpointDeliveries", () => {
+  it("returns { retried: 0, hasMore: false } when there are no dead-lettered tasks", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    const result = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result).toEqual({ retried: 0, hasMore: false });
+  });
+
+  it("returns { retried: 0, hasMore: false } when the endpoint has only pending tasks", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    await queue.enqueue({ messageId: "m1", endpointId: "ep_1", appId: "app_1" });
+    const result = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result).toEqual({ retried: 0, hasMore: false });
+  });
+
+  it("revives dead-lettered tasks for the endpoint and returns the correct count", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    await deadLetter(queue, clock, "m1", "app_1", "ep_1");
+    await deadLetter(queue, clock, "m2", "app_1", "ep_1");
+
+    const result = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result.retried).toBe(2);
+    expect(result.hasMore).toBe(false);
+
+    // Both tasks are now pending.
+    const page = await queue.listByEndpoint("ep_1", { status: "pending" });
+    expect(page.deliveries).toHaveLength(2);
+  });
+
+  it("does not touch dead-lettered tasks for a different endpoint", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    await deadLetter(queue, clock, "m1", "app_1", "ep_1");
+    await deadLetter(queue, clock, "m2", "app_1", "ep_2");
+
+    const result = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result.retried).toBe(1);
+
+    // ep_2's task is still dead_letter.
+    const ep2Page = await queue.listByEndpoint("ep_2", { status: "dead_letter" });
+    expect(ep2Page.deliveries).toHaveLength(1);
+  });
+
+  it("signals hasMore: true when the dead-letter backlog exceeds limit", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    await deadLetter(queue, clock, "m1", "app_1", "ep_1");
+    await deadLetter(queue, clock, "m2", "app_1", "ep_1");
+    await deadLetter(queue, clock, "m3", "app_1", "ep_1");
+
+    const result = await retryEndpointDeliveries("ep_1", { queue }, { limit: 2 });
+    expect(result.retried).toBe(2);
+    expect(result.hasMore).toBe(true);
+
+    // Second call drains the remaining task.
+    const result2 = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result2.retried).toBe(1);
+    expect(result2.hasMore).toBe(false);
+  });
+
+  it("absorbs a concurrent revive silently", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    const t = await deadLetter(queue, clock, "m1", "app_1", "ep_1");
+    await queue.retry(t.id);
+    const result = await retryEndpointDeliveries("ep_1", { queue });
+    expect(result.retried).toBe(0);
+  });
+
+  it("rejects a limit outside [1, MAX_LIST_DELIVERIES_LIMIT]", async () => {
+    const clock = makeClock();
+    const queue = makeQueue(clock);
+    await expect(
+      retryEndpointDeliveries("ep_1", { queue }, { limit: 0 }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      retryEndpointDeliveries("ep_1", { queue }, { limit: MAX_LIST_DELIVERIES_LIMIT + 1 }),
+    ).rejects.toBeInstanceOf(RangeError);
   });
 });

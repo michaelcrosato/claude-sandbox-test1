@@ -723,6 +723,57 @@ export function describeDeliveryQueueContract(
         expect(second.deliveries).toEqual([]);
         expect(second.nextCursor).toBeNull();
       });
+
+      it("filters by status when provided — dead_letter only", async () => {
+        // Enqueue two tasks for ep_1: complete one, dead-letter the other.
+        const tOk = await queue.enqueue({ messageId: "m-ok", endpointId: "ep_1" });
+        clock.advance(1_000);
+        const tBad = await queue.enqueue({ messageId: "m-bad", endpointId: "ep_1" });
+        // Succeed tOk.
+        const [claimedOk] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.complete(claimedOk!.id, claimedOk!.leaseToken!);
+        // Dead-letter tBad (exhaust conformance policy: 2 retries = 3 fails).
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "x", nowMs: clock.now() });
+        }
+
+        // Filter by dead_letter → only tBad.
+        const deadOnly = await queue.listByEndpoint("ep_1", { status: "dead_letter" });
+        expect(deadOnly.deliveries).toHaveLength(1);
+        expect(deadOnly.deliveries[0]!.id).toBe(tBad.id);
+        expect(deadOnly.nextCursor).toBeNull();
+
+        // Filter by succeeded → only tOk.
+        const okOnly = await queue.listByEndpoint("ep_1", { status: "succeeded" });
+        expect(okOnly.deliveries).toHaveLength(1);
+        expect(okOnly.deliveries[0]!.id).toBe(tOk.id);
+        expect(okOnly.nextCursor).toBeNull();
+      });
+
+      it("status filter paginates correctly across pages", async () => {
+        // 3 dead-lettered tasks for ep_1, using zero-retry override for speed.
+        for (let i = 0; i < 3; i++) {
+          await queue.enqueue({ messageId: `m-dl-${i}`, endpointId: "ep_1" });
+          clock.advance(1_000);
+          const [c] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.fail(c!.id, c!.leaseToken!, {
+            error: "x",
+            nowMs: clock.now(),
+            retryPolicy: fixedSchedule([]),
+          });
+        }
+
+        const opts = { status: "dead_letter" as const, limit: 2 };
+        const first = await queue.listByEndpoint("ep_1", opts);
+        expect(first.deliveries).toHaveLength(2);
+        expect(first.nextCursor).not.toBeNull();
+
+        const second = await queue.listByEndpoint("ep_1", { ...opts, cursor: first.nextCursor! });
+        expect(second.deliveries).toHaveLength(1);
+        expect(second.nextCursor).toBeNull();
+      });
     });
 
     describe("listByApp", () => {

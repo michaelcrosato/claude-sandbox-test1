@@ -46,7 +46,7 @@ import {
   type EnqueueInput,
   type FailInput,
   type ListByAppOptions,
-  type ListDeliveriesOptions,
+  type ListByEndpointOptions,
 } from "./delivery-queue.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -136,6 +136,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   readonly #selectByMessage: StatementSync;
   readonly #selectByEndpoint: StatementSync;
   readonly #selectByEndpointAfter: StatementSync;
+  readonly #selectByEndpointFiltered: StatementSync;
+  readonly #selectByEndpointFilteredAfter: StatementSync;
   readonly #selectByApp: StatementSync;
   readonly #selectByAppAfter: StatementSync;
   readonly #selectByAppFiltered: StatementSync;
@@ -194,6 +196,20 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#selectByEndpointAfter = this.#db.prepare(
       `SELECT * FROM delivery_tasks
        WHERE endpoint_id = ?
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    // Status-filtered endpoint listing — backed by idx_delivery_tasks_endpoint_status_created.
+    this.#selectByEndpointFiltered = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE endpoint_id = ? AND status = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    this.#selectByEndpointFilteredAfter = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE endpoint_id = ? AND status = ?
          AND (created_at < ? OR (created_at = ? AND id < ?))
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
@@ -430,24 +446,39 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
 
   async listByEndpoint(
     endpointId: string,
-    options?: ListDeliveriesOptions,
+    options?: ListByEndpointOptions,
   ): Promise<DeliveryPage> {
     const { limit, cursor } = resolveListDeliveriesQuery(options);
+    const status = options?.status ?? null;
     // Fetch one extra to detect whether a further page exists.
     const fetchLimit = limit + 1;
-    const rows = (
-      cursor === null
-        ? this.#selectByEndpoint.all(endpointId, fetchLimit)
-        : this.#selectByEndpointAfter.all(
-            endpointId,
-            cursor.createdAt,
-            cursor.createdAt,
-            cursor.id,
-            fetchLimit,
-          )
-    ) as unknown as TaskRow[];
+    let rows: unknown[];
+    if (status === null) {
+      rows =
+        cursor === null
+          ? this.#selectByEndpoint.all(endpointId, fetchLimit)
+          : this.#selectByEndpointAfter.all(
+              endpointId,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            );
+    } else {
+      rows =
+        cursor === null
+          ? this.#selectByEndpointFiltered.all(endpointId, status, fetchLimit)
+          : this.#selectByEndpointFilteredAfter.all(
+              endpointId,
+              status,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            );
+    }
     const hasMore = rows.length > limit;
-    const deliveries = rows.slice(0, limit).map(rowToTask);
+    const deliveries = (rows as unknown as TaskRow[]).slice(0, limit).map(rowToTask);
     const last = deliveries[deliveries.length - 1];
     const nextCursor =
       hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
@@ -601,5 +632,10 @@ CREATE INDEX IF NOT EXISTS idx_delivery_tasks_message
 -- Partial index (WHERE endpoint_id IS NOT NULL) keeps it focused on fan-out tasks.
 CREATE INDEX IF NOT EXISTS idx_delivery_tasks_endpoint_created
   ON delivery_tasks (endpoint_id, created_at, id)
+  WHERE endpoint_id IS NOT NULL;
+
+-- Backs listByEndpoint with a status filter (e.g. dead_letter bulk-retry).
+CREATE INDEX IF NOT EXISTS idx_delivery_tasks_endpoint_status_created
+  ON delivery_tasks (endpoint_id, status, created_at, id)
   WHERE endpoint_id IS NOT NULL;
 `;
