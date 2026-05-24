@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { verify, HEADERS } from "../signing/webhook-signature.js";
 import {
   emitEndpointDisabledEvent,
+  emitMessageDeadLetteredEvent,
   type SystemWebhookConfig,
   type SystemEventTransport,
 } from "./index.js";
@@ -140,6 +141,7 @@ describe("emitEndpointDisabledEvent", () => {
   });
 
   it("produces a verifiable signature with an sws_-prefixed secret (standard format)", async () => {
+
     // Generate a deterministic sws_ secret: sws_ + base64url of known bytes.
     // "testsecret" → base64url (URL-safe, no padding) = "dGVzdHNlY3JldA"
     const swsSecret = "sws_dGVzdHNlY3JldA";
@@ -177,5 +179,98 @@ describe("emitEndpointDisabledEvent", () => {
         { now: nowSec },
       ),
     ).not.toThrow();
+  });
+});
+
+describe("emitMessageDeadLetteredEvent", () => {
+  const INFO = {
+    messageId: "msg_test_1",
+    endpointId: "ep_test_1",
+    appId: "app_test_1",
+  } as const;
+
+  it("calls the transport with POST to the configured URL", async () => {
+    const transport: SystemEventTransport = vi.fn().mockResolvedValue({ status: 200 });
+    await emitMessageDeadLetteredEvent(CONFIG, INFO, {
+      transport,
+      now: () => 1_700_100_000_000,
+    });
+    expect(transport).toHaveBeenCalledOnce();
+    const [url, init] = (transport as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { method: string },
+    ];
+    expect(url).toBe(CONFIG.url);
+    expect(init.method).toBe("POST");
+  });
+
+  it("sends a JSON body with event = message.dead_lettered and correct data", async () => {
+    let capturedBody = "";
+    const transport: SystemEventTransport = vi.fn().mockImplementation((_url, init) => {
+      capturedBody = init.body;
+      return Promise.resolve({ status: 200 });
+    });
+    const nowMs = 1_700_100_000_000;
+    await emitMessageDeadLetteredEvent(CONFIG, INFO, {
+      transport,
+      now: () => nowMs,
+    });
+
+    const payload = JSON.parse(capturedBody) as {
+      event: string;
+      data: { messageId: string; endpointId: string | null; appId: string | null; deadLetteredAt: number };
+    };
+    expect(payload.event).toBe("message.dead_lettered");
+    expect(payload.data.messageId).toBe(INFO.messageId);
+    expect(payload.data.endpointId).toBe(INFO.endpointId);
+    expect(payload.data.appId).toBe(INFO.appId);
+    expect(payload.data.deadLetteredAt).toBe(nowMs);
+  });
+
+  it("accepts null endpointId and null appId", async () => {
+    let capturedBody = "";
+    const transport: SystemEventTransport = vi.fn().mockImplementation((_url, init) => {
+      capturedBody = init.body;
+      return Promise.resolve({ status: 200 });
+    });
+    await emitMessageDeadLetteredEvent(
+      CONFIG,
+      { messageId: "msg_x", endpointId: null, appId: null },
+      { transport, now: () => 1_700_100_000_000 },
+    );
+    const payload = JSON.parse(capturedBody) as { data: { endpointId: null; appId: null } };
+    expect(payload.data.endpointId).toBeNull();
+    expect(payload.data.appId).toBeNull();
+  });
+
+  it("includes Standard Webhooks headers and a verifiable signature", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody = "";
+    const nowMs = 1_700_100_000_000;
+    const nowSec = Math.floor(nowMs / 1000);
+    const transport: SystemEventTransport = vi.fn().mockImplementation((_url, init) => {
+      capturedHeaders = init.headers;
+      capturedBody = init.body;
+      return Promise.resolve({ status: 200 });
+    });
+    await emitMessageDeadLetteredEvent(CONFIG, INFO, { transport, now: () => nowMs });
+
+    expect(capturedHeaders[HEADERS.id]!.startsWith("sys_")).toBe(true);
+    expect(capturedHeaders[HEADERS.timestamp]).toBeDefined();
+    expect(capturedHeaders[HEADERS.signature]!.startsWith("v1,")).toBe(true);
+    expect(() =>
+      verify(CONFIG.secret, {
+        id: capturedHeaders[HEADERS.id]!,
+        timestamp: capturedHeaders[HEADERS.timestamp]!,
+        signature: capturedHeaders[HEADERS.signature]!,
+      }, capturedBody, { now: nowSec }),
+    ).not.toThrow();
+  });
+
+  it("does not swallow transport errors (rejects on failure)", async () => {
+    const transport: SystemEventTransport = vi.fn().mockRejectedValue(new Error("net fail"));
+    await expect(
+      emitMessageDeadLetteredEvent(CONFIG, INFO, { transport, now: () => 1_700_100_000_000 }),
+    ).rejects.toThrow("net fail");
   });
 });

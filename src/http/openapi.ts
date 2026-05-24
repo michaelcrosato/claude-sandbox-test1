@@ -1458,10 +1458,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["string", "null"],
               format: "uri",
               description:
-                "The URL Posthorn POSTs system events (e.g. `endpoint.disabled`) to, or null " +
-                "if system webhooks are not configured. The signing secret is never included " +
-                "in the app snapshot; use `POST /v1/admin/apps/{id}/rotate-system-secret` to " +
-                "obtain or rotate it.",
+                "The URL Posthorn POSTs signed system events to, or null if system webhooks " +
+                "are not configured. Events fired: `endpoint.disabled` (an endpoint was " +
+                "auto-disabled after sustained failures) and `message.dead_lettered` (a " +
+                "delivery exhausted all retry attempts). Both payloads are Standard Webhooks " +
+                "signed with the app's system webhook secret. The secret is never included " +
+                "in the app snapshot; use `POST /v1/admin/apps/{id}/rotate-system-secret` " +
+                "to obtain or rotate it.",
             },
             createdAt: epochMs("Creation time, epoch ms."),
             updatedAt: epochMs("Last mutation time, epoch ms."),
@@ -1503,8 +1506,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["string", "null"],
               format: "uri",
               description:
-                "URL to receive system events (e.g. `endpoint.disabled`). Must be http/https. " +
-                "When set, a signing secret is auto-generated and returned once in the response.",
+                "URL to receive signed system events (`endpoint.disabled`, " +
+                "`message.dead_lettered`). Must be http/https. When set, a signing secret " +
+                "is auto-generated and returned once in the response.",
             },
           },
         },

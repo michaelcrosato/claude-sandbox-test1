@@ -304,6 +304,21 @@ export interface DeliveryWorkerOptions {
     outcome: "succeeded" | "failed",
     nowMs: number,
   ) => void | Promise<void>;
+  /**
+   * Dead-letter seam: called once when a delivery exhausts all retry attempts
+   * and permanently moves to `dead_letter`. Receives the full task identity
+   * so the gateway can emit a `message.dead_lettered` system webhook event.
+   * Best-effort, exactly like {@link recordAttempt}: a thrown/rejected call is
+   * routed to `onError` and never blocks or changes the delivery outcome.
+   * Omit to receive no notification (the default).
+   */
+  readonly onDeadLettered?: (
+    taskId: string,
+    messageId: string,
+    endpointId: string | null,
+    appId: string | null,
+    nowMs: number,
+  ) => void | Promise<void>;
 }
 
 function describeError(error: unknown): string {
@@ -341,6 +356,15 @@ export class DeliveryWorker {
     | ((
         endpointId: string,
         outcome: "succeeded" | "failed",
+        nowMs: number,
+      ) => void | Promise<void>)
+    | undefined;
+  readonly #onDeadLettered:
+    | ((
+        taskId: string,
+        messageId: string,
+        endpointId: string | null,
+        appId: string | null,
         nowMs: number,
       ) => void | Promise<void>)
     | undefined;
@@ -387,6 +411,7 @@ export class DeliveryWorker {
     this.#onTick = options.onTick;
     this.#recordAttempt = options.recordAttempt;
     this.#onDeliveryOutcome = options.onDeliveryOutcome;
+    this.#onDeadLettered = options.onDeadLettered;
   }
 
   /** Whether {@link run} is currently looping. */
@@ -592,6 +617,10 @@ export class DeliveryWorker {
         );
     // Report the terminal verdict to endpoint-health tracking (best-effort).
     await this.#reportEndpointOutcome(task, outcome, nowMs);
+    // Notify the dead-letter seam so the gateway can emit the system event (best-effort).
+    if (outcome === "deadLettered") {
+      await this.#reportDeadLettered(task, nowMs);
+    }
     return outcome;
   }
 
@@ -624,6 +653,21 @@ export class DeliveryWorker {
         outcome === "succeeded" ? "succeeded" : "failed",
         nowMs,
       );
+    } catch (err) {
+      this.#onError?.(err);
+    }
+  }
+
+  /**
+   * Notify the dead-letter seam, if wired, that a delivery just exhausted all
+   * retries. Best-effort, exactly like {@link #reportEndpointOutcome}: a thrown/
+   * rejected call is routed to `onError` and never changes the delivery outcome.
+   */
+  async #reportDeadLettered(task: DeliveryTask, nowMs: number): Promise<void> {
+    const report = this.#onDeadLettered;
+    if (report === undefined) return;
+    try {
+      await report(task.id, task.messageId, task.endpointId, task.appId, nowMs);
     } catch (err) {
       this.#onError?.(err);
     }

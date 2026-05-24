@@ -1,22 +1,34 @@
 /**
  * System webhook events — Posthorn's operator notification surface.
  *
- * When Posthorn auto-disables an endpoint (after continuous failures exceeding
- * the configured window), it POSTs a signed `endpoint.disabled` event to the
- * app's configured system webhook URL. This gives operators/admins an
- * observable signal to investigate and re-enable the endpoint.
+ * Posthorn fires signed system events to the app's configured system webhook URL:
  *
- * The payload is signed with Standard Webhooks (the same algorithm used for
+ * - `endpoint.disabled` — an endpoint was auto-disabled after continuous failures
+ *   exceeding the configured window. Named for parity with Svix's system event.
+ * - `message.dead_lettered` — a delivery exhausted all retry attempts and
+ *   permanently moved to `dead_letter`. Lets operators react (alert, page, etc.)
+ *   without polling `/v1/deliveries?status=dead_letter`.
+ *
+ * All payloads are signed with Standard Webhooks (the same algorithm used for
  * tenant webhooks), so the receiver can verify authenticity with the app's
  * system webhook secret.
- *
- * Named for parity with Svix's `endpoint.disabled` system event.
  */
 
 import { randomBytes } from "node:crypto";
 import { sign, HEADERS } from "../signing/webhook-signature.js";
 import { SYSTEM_WEBHOOK_SECRET_PREFIX } from "../apps/app.js";
 import type { Endpoint } from "../endpoints/endpoint.js";
+
+/** The wire payload for a `message.dead_lettered` system event. */
+export interface MessageDeadLetteredPayload {
+  readonly event: "message.dead_lettered";
+  readonly data: {
+    readonly messageId: string;
+    readonly endpointId: string | null;
+    readonly appId: string | null;
+    readonly deadLetteredAt: number;
+  };
+}
 
 /** Prefix for system event ids. */
 const SYSTEM_EVENT_ID_PREFIX = "sys_";
@@ -131,6 +143,41 @@ export async function emitEndpointDisabledEvent(
       consecutiveFailures: endpoint.consecutiveFailures,
       firstFailureAt: endpoint.firstFailureAt,
       disabledAt: nowMs,
+    },
+  };
+  const req = buildSystemEventRequest(config, payload, nowMs);
+  await opts.transport(req.url, {
+    method: req.method,
+    headers: req.headers,
+    body: req.body,
+  });
+}
+
+/**
+ * Fire-and-forget the `message.dead_lettered` system event to the configured
+ * system webhook URL. Emitted when a delivery exhausts all retry attempts and
+ * permanently moves to `dead_letter`, giving operators an observable push signal
+ * without requiring them to poll `/v1/deliveries?status=dead_letter`.
+ *
+ * Signed with Standard Webhooks so the receiver can verify authenticity.
+ *
+ * @param config  The system webhook URL and plaintext signing secret.
+ * @param info    The dead-lettered task's identifiers.
+ * @param opts    Clock and transport injection (for testability).
+ */
+export async function emitMessageDeadLetteredEvent(
+  config: SystemWebhookConfig,
+  info: { readonly messageId: string; readonly endpointId: string | null; readonly appId: string | null },
+  opts: { transport: SystemEventTransport; now: () => number },
+): Promise<void> {
+  const nowMs = opts.now();
+  const payload: MessageDeadLetteredPayload = {
+    event: "message.dead_lettered",
+    data: {
+      messageId: info.messageId,
+      endpointId: info.endpointId,
+      appId: info.appId,
+      deadLetteredAt: nowMs,
     },
   };
   const req = buildSystemEventRequest(config, payload, nowMs);

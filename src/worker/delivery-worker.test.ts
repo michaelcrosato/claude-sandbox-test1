@@ -1088,6 +1088,85 @@ describe("DeliveryWorker — onDeliveryOutcome (endpoint health)", () => {
   });
 });
 
+describe("DeliveryWorker — onDeadLettered seam", () => {
+  /** Enqueue a fresh message for an optional endpointId; returns the message id. */
+  async function enqueueMsg(
+    env: ReturnType<typeof setup>,
+    endpointId: string | null = null,
+    appId = "app_1",
+  ): Promise<string> {
+    const { message } = await env.store.create({ appId, eventType: "e", payload: "{}" });
+    await env.queue.enqueue({ messageId: message.id, endpointId, appId });
+    return message.id;
+  }
+
+  it("is called with taskId/messageId/endpointId/appId/nowMs on dead-letter", async () => {
+    const env = setup({ startMs: 5_000, retryPolicy: fixedSchedule([]) }); // 1 attempt → dead-letter
+    const messageId = await enqueueMsg(env, "ep_1", "app_abc");
+
+    const calls: unknown[] = [];
+    const result = await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      onDeadLettered: (taskId, mid, eid, aid, nowMs) => {
+        calls.push({ taskId, mid, eid, aid, nowMs });
+      },
+    }).processOnce();
+
+    expect(result).toMatchObject({ deadLettered: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      mid: messageId,
+      eid: "ep_1",
+      aid: "app_abc",
+      nowMs: 5_000,
+    });
+    expect(typeof (calls[0] as { taskId: string }).taskId).toBe("string");
+  });
+
+  it("is NOT called on a successful delivery", async () => {
+    const env = setup();
+    await enqueueMsg(env, "ep_1");
+
+    const calls: unknown[] = [];
+    await makeWorker(env, {
+      transport: recordingTransport(200).transport,
+      onDeadLettered: (...args) => { calls.push(args); },
+    }).processOnce();
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is NOT called for a retryable failed attempt (not yet terminal)", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) }); // a retry is scheduled
+    await enqueueMsg(env, "ep_1");
+
+    const calls: unknown[] = [];
+    const result = await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      onDeadLettered: (...args) => { calls.push(args); },
+    }).processOnce();
+
+    expect(result).toMatchObject({ failed: 1, deadLettered: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is best-effort: a thrown call never breaks the delivery", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([]) }); // 1 attempt → dead-letter
+    await enqueueMsg(env, "ep_1");
+    const errors: unknown[] = [];
+    const boom = new Error("system event transport down");
+
+    const result = await makeWorker(env, {
+      transport: recordingTransport(503).transport,
+      onDeadLettered: () => { throw boom; },
+      onError: (e) => errors.push(e),
+    }).processOnce();
+
+    expect(result).toMatchObject({ deadLettered: 1 });
+    expect(errors).toEqual([boom]);
+  });
+});
+
 describe("DeliveryWorker.run", () => {
   it("drains pending work back-to-back, then stops on the first idle poll", async () => {
     const env = setup();

@@ -45,7 +45,11 @@ import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { DeliveryAttemptStore } from "../attempts/delivery-attempt.js";
 import type { EventTypeStore } from "../event-types/event-type.js";
 import { MEMORY_DATA_DIR, type GatewayConfig } from "./config.js";
-import { emitEndpointDisabledEvent, type SystemEventTransport } from "../system-events/index.js";
+import {
+  emitEndpointDisabledEvent,
+  emitMessageDeadLetteredEvent,
+  type SystemEventTransport,
+} from "../system-events/index.js";
 
 /** The address the gateway's HTTP server actually bound to (after `start`). */
 export interface GatewayAddress {
@@ -213,6 +217,20 @@ export function createGateway(config: GatewayConfig): Gateway {
             now: () => nowMs,
           });
         }
+      }
+    },
+    // Emit a `message.dead_lettered` system webhook event when a delivery exhausts
+    // all retry attempts. Best-effort: a failed emit is routed to the worker's
+    // onError and never blocks or changes the delivery outcome.
+    onDeadLettered: async (_taskId, messageId, endpointId, appId, nowMs) => {
+      if (appId === null) return;
+      const webhookConfig = await apps.getSystemWebhookConfig(appId);
+      if (webhookConfig !== null) {
+        await emitMessageDeadLetteredEvent(
+          webhookConfig,
+          { messageId, endpointId, appId },
+          { transport: systemEventTransport, now: () => nowMs },
+        );
       }
     },
   });
