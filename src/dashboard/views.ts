@@ -172,6 +172,7 @@ export function appDetailPage(
   app: App,
   keys: readonly ApiKey[],
   newKeySecret?: string,
+  usage?: number,
 ): string {
   const nav = `<a href="/dashboard/apps" style="color:#94a3b8;font-size:13px">← Apps</a>
   <form method="POST" action="/dashboard/logout" style="display:inline;margin-left:12px">
@@ -213,6 +214,7 @@ export function appDetailPage(
     <tr><td style="color:#6b7280;padding-right:24px">ID</td><td class="mono">${esc(app.id)}</td></tr>
     <tr><td style="color:#6b7280">Created</td><td class="meta">${new Date(app.createdAt).toISOString().slice(0, 19).replace("T", " ")} UTC</td></tr>
     <tr><td style="color:#6b7280">Monthly quota</td><td>${app.monthlyMessageQuota !== null ? app.monthlyMessageQuota.toLocaleString() + " messages" : '<span class="meta">Unlimited</span>'}</td></tr>
+    ${usage !== undefined ? `<tr><td style="color:#6b7280">This-month usage</td><td>${usage.toLocaleString()} messages</td></tr>` : ""}
   </table>
 </div>
 ${newKeyBanner}

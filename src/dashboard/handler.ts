@@ -210,8 +210,14 @@ export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
       const appId = s1;
       const app = await apps.get(appId);
       if (app === null) return NOT_FOUND;
-      const keys = await apps.listApiKeys(appId);
-      return html(200, appDetailPage(app, keys));
+      const [keys, usageSummary] = await Promise.all([
+        apps.listApiKeys(appId),
+        messages !== undefined
+          ? messages.summarizeUsageByApp(appId, utcMonthRange(clock()))
+          : Promise.resolve(undefined),
+      ]);
+      const usage = usageSummary?.total;
+      return html(200, appDetailPage(app, keys, undefined, usage));
     }
 
     // ── POST /dashboard/apps/:appId/keys (create key) ─────────────────────────

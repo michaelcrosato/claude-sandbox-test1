@@ -231,6 +231,41 @@ describe("createDashboardHandler — unknown routes", () => {
   });
 });
 
+describe("createDashboardHandler — app-detail usage", () => {
+  it("app detail without messages store omits the usage row", async () => {
+    const { handler, apps } = setup();
+    const app = await apps.create({ name: "NoUsage" });
+    const res = await authed(handler, "GET", `/dashboard/apps/${app.id}`);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("NoUsage");
+    expect(html).not.toContain("This-month usage");
+  });
+
+  it("app detail with messages store and no traffic shows 0 messages", async () => {
+    const { handler, apps } = setupWithMessages();
+    const app = await apps.create({ name: "ZeroUsage" });
+    const res = await authed(handler, "GET", `/dashboard/apps/${app.id}`);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("This-month usage");
+    expect(html).toContain("0 messages");
+  });
+
+  it("app detail with messages store shows the correct this-month count", async () => {
+    const { handler, apps, messages } = setupWithMessages();
+    const app = await apps.create({ name: "BusyApp" });
+    for (let i = 0; i < 5; i++) {
+      await messages.create({ appId: app.id, eventType: "order.placed", payload: "{}" });
+    }
+    const res = await authed(handler, "GET", `/dashboard/apps/${app.id}`);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("This-month usage");
+    expect(html).toContain("5 messages");
+  });
+});
+
 describe("createDashboardHandler — per-app usage column", () => {
   it("apps list without messages store shows '—' in usage column", async () => {
     const { handler, apps } = setup();
