@@ -591,6 +591,26 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/deliveries/retry": {
+        post: {
+          operationId: "retryAllDeliveries",
+          tags: ["Deliveries"],
+          summary: "Bulk-retry dead-lettered deliveries",
+          description:
+            "Re-drive up to " + MAX_LIST_DELIVERIES_LIMIT + " of the tenant's dead-lettered deliveries — the " +
+            "tenant-wide recovery path once a failing receiver is fixed. Only `dead_letter` " +
+            "tasks are targeted (pending/in-flight/succeeded are left untouched). Each revived " +
+            "delivery is reset to a fresh `pending` state with its attempt budget reset, so the " +
+            "worker re-attempts it under the full retry schedule. When `hasMore` is `true` there " +
+            "are further dead-lettered deliveries not addressed this call; re-invoke until " +
+            "`hasMore` is `false` to fully drain the backlog.",
+          security: [{ BearerAuth: [] }],
+          responses: {
+            "200": jsonResponse("The bulk-retry tally.", ref("BulkRetryResult")),
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+      },
       "/v1/usage": {
         get: {
           operationId: "getUsage",
@@ -1437,6 +1457,24 @@ export function buildOpenApiDocument(): OpenApiDocument {
             id: { type: "string" },
             retried: { type: "integer", minimum: 0, description: "How many dead-lettered deliveries were revived." },
             deliveries: { type: "array", items: ref("Delivery") },
+          },
+        },
+        BulkRetryResult: {
+          type: "object",
+          description: "The result of a bulk dead-letter retry for the tenant.",
+          required: ["retried", "hasMore"],
+          properties: {
+            retried: {
+              type: "integer",
+              minimum: 0,
+              description: "Dead-lettered deliveries reset to `pending` this call.",
+            },
+            hasMore: {
+              type: "boolean",
+              description:
+                "`true` when further dead-lettered deliveries remain beyond this call's limit. " +
+                "Re-invoke `POST /v1/deliveries/retry` until `false` to fully drain the backlog.",
+            },
           },
         },
         App: {

@@ -306,6 +306,17 @@ export interface MessageListPage {
   readonly nextCursor: string | null;
 }
 
+/** The result of {@link PosthornClient.retryAllDeliveries}. */
+export interface BulkRetryResponse {
+  /** Dead-lettered deliveries reset to `pending` this call. */
+  readonly retried: number;
+  /**
+   * `true` when more dead-lettered deliveries remain. Re-invoke
+   * {@link PosthornClient.retryAllDeliveries} until `false` to fully drain.
+   */
+  readonly hasMore: boolean;
+}
+
 /** The result of {@link PosthornClient.retryMessage}. */
 export interface RetryMessageResponse {
   /** The message whose deliveries were replayed. */
@@ -703,6 +714,17 @@ export class PosthornClient {
       "POST",
       `/v1/messages/${encodeURIComponent(id)}/retry`,
     );
+  }
+
+  /**
+   * Bulk-retry the tenant's dead-lettered deliveries — `POST /v1/deliveries/retry`.
+   * Re-drives up to 200 dead-lettered deliveries back to `pending` in one call.
+   * When `hasMore` is `true` in the response, re-invoke until `false` to fully
+   * drain the backlog (each call retries the next batch of dead-letter tasks).
+   * Use this after fixing a broken receiver that caused widespread failures.
+   */
+  async retryAllDeliveries(): Promise<BulkRetryResponse> {
+    return this.#transport.request<BulkRetryResponse>("POST", "/v1/deliveries/retry");
   }
 
   /** List the tenant's endpoints — `GET /v1/endpoints`. */

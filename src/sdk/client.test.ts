@@ -514,6 +514,23 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(res.retried).toBe(2);
   });
 
+  it("retryAllDeliveries POSTs to /v1/deliveries/retry and returns the tally", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ retried: 5, hasMore: false })),
+      );
+    });
+    const res = await client.retryAllDeliveries();
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toBe("http://example.test/v1/deliveries/retry");
+    expect(res.retried).toBe(5);
+    expect(res.hasMore).toBe(false);
+  });
+
   it("raises PosthornTimeoutError when a request exceeds the timeout", async () => {
     // A fetch that never settles until its abort signal fires.
     const hanging: PosthornFetch = (_url, init) =>

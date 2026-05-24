@@ -102,6 +102,13 @@ export {
 } from "./queue/retry-message.js";
 
 export {
+  retryAppDeliveries,
+  DEFAULT_BULK_RETRY_LIMIT,
+  type BulkRetryResult,
+  type RetryAppDeps,
+} from "./queue/retry-app.js";
+
+export {
   InMemoryDeliveryQueue,
   type InMemoryQueueOptions,
 } from "./queue/in-memory-queue.js";

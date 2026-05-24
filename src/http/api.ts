@@ -29,6 +29,8 @@
  * | DELETE | /v1/endpoints/:id    | Bearer | Delete an endpoint (204, tenant-scoped). |
  * | POST   | /v1/endpoints/:id/rotate-secret | Bearer | Rotate signing secret, zero-downtime (secret once). |
  * | POST   | /v1/endpoints/:id/test | Bearer | Send a one-shot test delivery; returns result synchronously. |
+ * | GET    | /v1/deliveries       | Bearer | List the tenant's deliveries (paginated, status filter). |
+ * | POST   | /v1/deliveries/retry | Bearer | Bulk-retry the tenant's dead-lettered deliveries.       |
  * | GET    | /v1/usage            | Bearer | The tenant's own message + delivery usage and quota status. |
  * | POST   | /v1/admin/apps       | Admin  | Create a tenant (app).                   |
  * | GET    | /v1/admin/apps       | Admin  | List all tenants.                        |
@@ -106,6 +108,7 @@ import {
 } from "../queue/delivery-queue.js";
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
+import { retryAppDeliveries, type BulkRetryResult } from "../queue/retry-app.js";
 import {
   MAX_LIST_ATTEMPTS_LIMIT,
   type AttemptUsageSummary,
@@ -804,6 +807,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/endpoints/:id/test",
   "GET /v1/endpoints/:id/deliveries",
   "GET /v1/deliveries",
+  "POST /v1/deliveries/retry",
   "GET /v1/usage",
   "POST /v1/portal/sessions",
   "GET /v1/event-types",
@@ -1357,6 +1361,13 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const retryAllDeliveries: AuthedHandler = async (ctx) => {
+    const result: BulkRetryResult = await retryAppDeliveries(ctx.app.id, {
+      queue: deps.queue,
+    });
+    return json(200, result);
+  };
+
   const getUsage: AuthedHandler = async (ctx) => {
     // The tenant's *own* usage + live quota status — the self-service counterpart to
     // the admin metering route (`GET /v1/admin/apps/:id/usage`), scoped to the key's
@@ -1652,6 +1663,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/endpoints/:id/test": authed(testEndpoint),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
     "GET /v1/deliveries": authed(getAppDeliveries),
+    "POST /v1/deliveries/retry": authed(retryAllDeliveries),
     "GET /v1/usage": authed(getUsage),
     "POST /v1/portal/sessions": authed(createPortalSession),
     "GET /v1/event-types": authed(listEventTypes),

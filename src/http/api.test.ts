@@ -2497,6 +2497,95 @@ describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
   });
 });
 
+describe("createApi — POST /v1/deliveries/retry (bulk dead-letter retry)", () => {
+  /** Queue that dead-letters on the first failure (no automatic retries). */
+  async function setupNoRetry() {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
+  }
+
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setupNoRetry();
+    const res = await api(request({ method: "POST", path: "/v1/deliveries/retry" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns { retried: 0, hasMore: false } when no deliveries are dead-lettered", async () => {
+    const { api, secret } = await setupNoRetry();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/deliveries/retry",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ retried: 0, hasMore: false });
+  });
+
+  it("revives dead-lettered deliveries and returns the count", async () => {
+    const { api, secret, endpoints, messages, queue } = await setupNoRetry();
+    // Register two endpoints.
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep1" }, secret));
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep2" }, secret));
+    // Send a message — fans out to both endpoints.
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+
+    // Drive both deliveries to dead_letter (receiver always 500, no retries).
+    const worker = new DeliveryWorker({
+      queue,
+      store: messages,
+      resolveEndpoint: storeBackedResolver(endpoints),
+      transport: async () => ({ status: 500 }),
+    });
+    await worker.processOnce(); // both fail → dead_letter
+
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/deliveries/retry",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).retried).toBe(2);
+    expect(body(res).hasMore).toBe(false);
+  });
+
+  it("does not touch another tenant's deliveries", async () => {
+    const { api: apiA, apps, endpoints, messages, queue, attempts } = await setupNoRetry();
+    const eventTypes = new InMemoryEventTypeStore();
+    // Provision tenant B using the same underlying stores.
+    const appB = await apps.create({ name: "B" });
+    const bKey = (await apps.createApiKey(appB.id)).secret;
+    const apiB = createApi({ apps, endpoints, messages, queue, attempts, eventTypes });
+
+    // Tenant A sends a message with an endpoint.
+    const { secret: aKey } = await apps.createApiKey((await apps.create({ name: "A" })).id);
+    await apiA(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, aKey));
+    await apiA(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, aKey));
+
+    // No dead-letter tasks for tenant B yet.
+    const res = await apiB(
+      request({
+        method: "POST",
+        path: "/v1/deliveries/retry",
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).retried).toBe(0);
+  });
+});
+
 describe("createApi — POST /v1/portal/sessions (portal session minting)", () => {
   async function portalSetup() {
     const apps = new InMemoryAppStore();
