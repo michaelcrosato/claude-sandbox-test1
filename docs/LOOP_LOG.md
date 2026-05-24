@@ -4,6 +4,60 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 66: Message Priority (`high`/`normal`/`low` delivery ordering)
+
+**Repo truth at start:** dirty main @ `554d007` (iter-65 docs). Five files modified
+(message-store, in-memory-store, sqlite-store, postgres-store, delivery-queue) with
+priority scaffolding but the feature incomplete: `normalizeEnqueueInput` returned
+without `priority`, all three queue backends ignored it, and no conformance tests existed.
+Classic interrupted-tick — validated and landed without a rebuild from scratch.
+
+**High-leverage move chosen:** Complete message priority end-to-end. Priority is a
+differentiation feature (Svix supports it) and a clean additive seam: it touches the
+storage intake layer (already wired) and the queue claim ordering (not wired). Completing
+it adds a marketable capability and proves the architecture can carry cross-cutting
+fields from intake to delivery cleanly.
+
+**What the feature does:** `NewMessage.priority` accepts `"high" | "normal" | "low"`.
+Stored as `TEXT` in the message tables (already done in prior tick). Mapped to numeric
+`1 / 0 / -1` in the delivery queue for SQL `ORDER BY priority DESC` claim ordering.
+When multiple tasks are due simultaneously, higher-priority ones are claimed first.
+Within the same priority level, oldest-first ordering is preserved.
+
+**Built this tick:**
+- `message-store.ts` — `MessagePriority` type, `VALID_PRIORITIES`, validation in
+  `normalizeNewMessage` (done in prior tick, already committed via dirty tree).
+- `in-memory-store.ts`, `sqlite-store.ts`, `postgres-store.ts` — store + read
+  `priority` column with additive migrations (done in prior tick).
+- `delivery-queue.ts` — fixed `normalizeEnqueueInput` to extract and validate
+  `priority ∈ {-1, 0, 1}` (RangeError on out-of-range); added to `NormalizedEnqueue`.
+- `in-memory-queue.ts` — `enqueue` stores priority; `claimDue` now collects all
+  claimable candidates, sorts `priority DESC, createdAt ASC, id ASC`, claims up to
+  `limit` (matching SQL ordering).
+- `sqlite-queue.ts` — `TaskRow.priority`, `rowToTask`, `#migratePriorityColumn`,
+  `SCHEMA` updated; `#insertTask` includes priority; `#selectClaimable` ORDER BY
+  changed to `priority DESC, rowid ASC`.
+- `postgres-queue.ts` — same treatment: `TaskRow`, `rowToTask`, schema, additive
+  `ALTER TABLE … ADD COLUMN IF NOT EXISTS` in `initialize()`, enqueue INSERT,
+  `claimDue` ORDER BY `priority DESC, created_at ASC, id ASC`.
+- `conformance.ts` — 2 new tests in `enqueue` ("stores priority, default 0",
+  "rejects out-of-range") + 1 new test in `claimDue` ("higher-priority claimed first,
+  within same priority oldest-first preserved").
+- Fixture fixes: 5 inline literal `Message`/`DeliveryTask` objects in test files and
+  production code (`api.ts`, `portal-handler.ts`) updated with `priority` field.
+
+**Validation:** `tsc --noEmit` clean. vitest **1367/1367** (was 1350; +17: 3 new
+conformance × 3 backends + message-store normalizeNewMessage priority test already
+counted in store tests). `npm run build` clean. local-gate + integrity gate: exit 0.
+
+**State:** GREEN → committed to main @ `afb0bf2`. Next highest-leverage move: wire
+priority through the HTTP API intake (`POST /v1/messages`) so callers can set it,
+and expose it on the `GET /v1/messages/:id` response; or advance toward a richer
+roadmap feature (e.g. rate-limiting, HTTP delivery worker integration, or SDK
+priority support).
+
+---
+
 ## 2026-05-24 — Iteration 65: Message Expiry (`expiresAt`)
 
 **Repo truth at start:** clean main @ `1832282` (iter-64, stored deliverAt). Baseline
