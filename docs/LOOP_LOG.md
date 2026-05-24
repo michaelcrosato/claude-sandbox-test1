@@ -4,6 +4,56 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 42: Portal delivery detail + manual retry
+
+**Repo truth at start:** clean main @ `07a96b5` (iter-41, Consumer App Portal).
+Baseline verified: `tsc --noEmit` clean, vitest **953/953** (40 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** The Consumer App Portal (iter-41) surfaced a delivery
+list per endpoint but left the user at a dead end: clicking a failed delivery did nothing, and
+dead-lettered deliveries had no recovery path from the portal. This is the single biggest UX gap
+versus Svix's portal (Svix customers can click into any delivery to see the last error and retry it).
+Self-contained — the `DeliveryQueue.get` and `queue.retry` primitives already existed; only HTML
+views and handler routes were missing.
+
+**Built this tick:**
+
+- **`src/portal/portal-views.ts`** — Delivery rows in `portalEndpointDetailPage` changed from plain
+  text to `<a href="/portal/endpoints/:id/deliveries/:taskId">…</a>` links. Added new export
+  `portalDeliveryDetailPage(endpoint, task, retried?)`: shows a table of message ID, status pill,
+  attempt count, last error (or "—"), enqueue time, and updated-at time; includes a "Retry delivery"
+  `<form method="POST">` button when `task.status === "dead_letter"`; shows a green success banner
+  when `retried=true`. XSS-safe via `esc()` throughout.
+
+- **`src/portal/portal-handler.ts`** — Added `import { DeliveryStateError }` from delivery-state;
+  added `portalDeliveryDetailPage` to portal-views import. Extended segment destructuring to
+  `[s0, s1, s2, s3, s4]`. Two new dispatch branches:
+  - `GET /portal/endpoints/:id/deliveries/:deliveryId` (segs.length === 4): validates session,
+    fetches endpoint (appId === session.appId), fetches task (`queue.get`), 404s if task is null or
+    `task.endpointId !== s1` (cross-endpoint guard); passes `req.query["retried"] === "1"` to view.
+  - `POST /portal/endpoints/:id/deliveries/:deliveryId/retry`: same ownership checks; calls
+    `queue.retry(s3)`; catches `DeliveryStateError` (non-terminal — already re-queued) → redirect to
+    detail page (no `?retried`); on success → redirect with `?retried=1`.
+
+**Tests (`src/portal/portal-handler.test.ts`, +9):** GET detail 200 with delivery info; GET with
+`?retried=1` shows success banner; GET 404 for unknown delivery id; GET 404 when delivery's
+`endpointId` ≠ URL endpoint (cross-endpoint guard); GET 404 for cross-tenant endpoint; GET shows
+Retry button only for `dead_letter` status (uses `fixedSchedule([])` queue to produce dead_letter
+in one fail); POST retry re-queues dead-lettered delivery and task flips to `pending`; POST retry
+on non-terminal delivery redirects gracefully (no crash); POST retry 404 for unknown delivery.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**962/962, 40 files** (+9 over baseline). `npm run build` clean. **compiled-`dist` smoke**
+(`scripts/smoke-portal-delivery.mjs`, 12/12 checks through production ESM on `:memory:`): portal
+session minted; token exchanged; endpoint created; message ingested; endpoint detail shows delivery
+rows as clickable links; delivery detail page 200 with messageId + status; cross-endpoint delivery
+returns 404; `?retried=1` shows success banner.
+
+**State:** GREEN → committed to main @ iter-42 (`4a0c1e2`).
+
+---
+
 ## 2026-05-23 — Iteration 41: Consumer App Portal
 
 **Repo truth at start:** clean main @ `0aa6540` (iter-40, `GET /v1/deliveries?status=`).
