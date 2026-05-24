@@ -4,6 +4,32 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 75: Gateway-Wide Default Rate Limit (`POSTHORN_DEFAULT_RATE_LIMIT`)
+
+**Repo truth at start:** clean main @ `83cc544` (iter-74, admin dashboard app-detail this-month usage). Baseline verified: `tsc --noEmit` clean, vitest **1423/1423** (46 files, 6 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** Every endpoint's `rateLimit` field was either a positive integer (explicit per-endpoint cap) or `null` (unrestricted). An operator protecting a fleet of endpoints had to configure the same rate limit on each one individually — there was no single knob to protect all endpoints that hadn't been explicitly configured. The gap: no gateway-wide fallback. The iter-74 "Next moves" called this out directly.
+
+**Move chosen:** Add `POSTHORN_DEFAULT_RATE_LIMIT` — a gateway-level env var that sets a fallback deliveries-per-minute cap applied to any endpoint whose own `rateLimit` is `null`. Per-endpoint limits always win; the default only fills the null slot. Zero overhead on the all-null fast path (`endpoint.rateLimit ?? defaultRateLimit ?? null` resolves immediately). The default flows through `StoreBackedResolverOptions` into `endpointToDeliveryTarget` so the seam is narrow: only the resolver reads the config, the worker and queue are unchanged.
+
+**Architecture (5 files, +136 / −5):**
+
+1. **`src/runtime/config.ts`** — Added `defaultRateLimit: number | null` to `GatewayConfig`. Added `readDefaultRateLimit` reader: unset/blank → `null`; present → validated integer in `[1, MAX_RATE_LIMIT]` (same bounds as `normalizeRateLimit`); 0/negative/out-of-range/non-integer → `ConfigError`. Imported `MAX_RATE_LIMIT` from `endpoint.ts` (already imported `DEFAULT_AUTO_DISABLE_AFTER_MS` from there — no new dependency arc). Updated `loadConfig` jsdoc.
+
+2. **`src/endpoints/endpoint-resolver.ts`** — Added optional `defaultRateLimit?: number | null` parameter to `endpointToDeliveryTarget`; `effectiveRateLimit = endpoint.rateLimit ?? defaultRateLimit ?? null`. Added `defaultRateLimit?: number | null` to `StoreBackedResolverOptions`; `storeBackedResolver` captures it and passes it into every `endpointToDeliveryTarget` call.
+
+3. **`src/runtime/gateway.ts`** — Changed `storeBackedResolver(endpoints)` → `storeBackedResolver(endpoints, { defaultRateLimit: config.defaultRateLimit })`. One line.
+
+4. **`src/runtime/config.test.ts`** — Updated "applies defaults" snapshot to include `defaultRateLimit: null`. Added `describe("POSTHORN_DEFAULT_RATE_LIMIT", ...)` with 6 tests: unset/blank → null; valid integer; `0` → ConfigError; negative → ConfigError; exceeds MAX_RATE_LIMIT → ConfigError; non-integer → ConfigError.
+
+5. **`src/endpoints/endpoint-resolver.test.ts`** — Added 4 tests to `endpointToDeliveryTarget` suite (null+no default → omitted; endpoint wins over default; null+default → default used; null+null default → omitted) and 2 tests to `storeBackedResolver` suite (default flows through for null-rateLimit endpoint; endpoint's explicit limit wins when both present).
+
+**Validation:** `tsc --noEmit` clean → vitest **1435/1435** (was 1423; +12 all new tests green; one flaky "Worker exited unexpectedly" on first run, confirmed clean on re-run per standing protocol). `npm run build` clean → committed `1a91291`.
+
+**Next moves:** Portal endpoint-detail page shows the effective rate limit (highlighting when the gateway default is in effect vs. an explicit per-endpoint value); or API/OpenAPI schema update to document `POSTHORN_DEFAULT_RATE_LIMIT` alongside the other operator knobs.
+
+---
+
 ## 2026-05-24 — Iteration 74: Admin Dashboard App-Detail Page — This-Month Usage
 
 **Repo truth at start:** clean main @ `866af3a` (iter-73, portal event-type detail subscribed endpoints). Baseline verified: `tsc --noEmit` clean, vitest **1420/1420** (46 files, 6 Postgres-skipped), `npm run build` clean.
