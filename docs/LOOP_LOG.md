@@ -4,6 +4,73 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 38: `?eventType=` filter on `GET /v1/messages`
+
+**Repo truth at start:** clean main @ `bea0e5b` (iter-37, README rewrite + npm publish prep,
+P0–P5 otherwise complete). Baseline verified: `tsc --noEmit` clean, vitest **856/856** (38
+files), `npm run build` clean, integrity gate exit 0. No [[interrupted-tick-reconcile-pattern]]
+trigger.
+
+**High-leverage move chosen (checklist #3):** Add `?eventType=` filtering to `GET /v1/messages`.
+Reasoning: iter-37 declared the autonomous build phase complete, but Axiom 6 (Never Stop
+Looping) + Axiom 4 (Own the Next Move) require continued execution. The product gap that
+maximizes systemic benefit in one bounded tick: event-type filtering on the message list.
+Every incumbent (Svix, Convoy, Hookdeck) exposes it; the #1 developer debugging workflow is
+"show me all `payment.failed` events"; the tenant dashboard's message list is essentially
+unusable without a filter for apps with mixed event traffic. The implementation is fully
+engageable here (pure store → HTTP → SDK chain), produces no new runtime dependencies, and
+composes cleanly with the existing keyset pagination (a filtered page returns its own cursor
+scoped to the same event type).
+
+**Built this tick:**
+
+- **`src/storage/message-store.ts`** — `ListMessagesOptions` gains `eventType?: string | null`
+  (null/omitted = no filter); `resolveListMessagesQuery` threads it through, normalising an
+  empty string to `null` so the backends get a clean binary: `null` ↔ unfiltered, non-null
+  string ↔ filter on that type.
+
+- **`src/storage/in-memory-store.ts`** — `listByApp` adds a one-liner `.filter(…)` predicate
+  before the sort/cursor step: `m.eventType === eventType` when `eventType !== null`.
+
+- **`src/storage/sqlite-store.ts`** — Two new prepared statements (`#listByAppFiltered`,
+  `#listByAppAfterFiltered`) add `AND event_type = ?` to the existing keyset predicates; the
+  `listByApp` dispatch selects the right pair (filtered vs unfiltered × first vs subsequent
+  page). New index `idx_messages_app_event_created (app_id, event_type, created_at, id)` added
+  to `INDEXES` via `IF NOT EXISTS` — the planner uses it to narrow straight to the requested
+  event type before the keyset scan; an existing DB gains it on next open with no migration
+  (pure read optimization, identical to the prior message + delivery indexes).
+
+- **`src/storage/conformance.ts`** — 4 new conformance cases (× 2 backends): filters by event
+  type (only matching ids), returns empty for unknown type, pages correctly through a filtered
+  result with a cursor, and null/omitted `eventType` returns all messages.
+
+- **`src/http/api.ts`** — `parseListMessagesParams` parses the new `?eventType=` query param
+  (non-empty string passes through to the store; absent/empty is left out so the store's
+  default `null` applies) and passes it in `ListMessagesOptions`.
+
+- **`src/http/openapi.ts`** — Added `eventType` query parameter to the `listMessages` operation
+  (the bidirectional drift test already covered all operations; this is an `in: "query"` param,
+  not a route, so the drift test was unaffected).
+
+- **`src/sdk/client.ts`** — `ListMessagesParams` gains `eventType?: string | null`; `listMessages`
+  appends `?eventType=` to the query string when provided and non-null.
+
+- **`src/http/api.test.ts`** — 2 new handler tests: filter returns only matching ids (user.created
+  not order.placed), empty page when no match.
+
+- **`src/sdk/client.test.ts`** — 2 new injected-fetch unit tests: `eventType` appears in the query
+  string when set; omitted from the query string when null.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**868/868, 38 files** (+12 over baseline: +8 conformance × 2 backends, +2 handler, +2 SDK).
+`npm run build` clean. Integrity gate exit 0. **compiled-`dist` smoke** (9/9 checks through
+production ESM on `:memory:`): all-5 unfiltered, user.created-3 filtered + no order.placed
+leak + all expected ids present, empty for unknown type, 2+1 paged cursor across the filter.
+
+**State:** GREEN → committed to main @ `d8e8db9` as Iteration 38.
+
+---
+
 ## 2026-05-23 — Iteration 37: README product-page rewrite + npm publish prep
 
 **Repo truth at start:** clean main @ `a44ca24` (iter-36, `endpoint.disabled` webhook event,
