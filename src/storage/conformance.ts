@@ -763,6 +763,33 @@ export function describeMessageStoreContract(
           store.create({ appId: APP, eventType: "e", payload: "{}", deliverAt: -1 }),
         ).rejects.toThrow(TypeError);
       });
+
+      it("stores and retrieves expiresAt when provided", async () => {
+        const expiresAt = clock.now() + 300_000;
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+          expiresAt,
+        });
+        expect(message.expiresAt).toBe(expiresAt);
+        expect((await store.get(message.id))!.expiresAt).toBe(expiresAt);
+      });
+
+      it("defaults expiresAt to null when omitted", async () => {
+        const { message } = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        expect(message.expiresAt).toBeNull();
+        expect((await store.get(message.id))!.expiresAt).toBeNull();
+      });
+
+      it("rejects a non-integer or negative expiresAt", async () => {
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", expiresAt: 1.5 }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", expiresAt: -1 }),
+        ).rejects.toThrow(TypeError);
+      });
     });
 
     describe("summarizeUsageByApp — per-tenant usage", () => {

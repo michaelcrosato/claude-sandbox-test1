@@ -119,6 +119,7 @@ describe("buildSignedRequest", () => {
     payload: "BODY",
     channel: null,
     deliverAt: null,
+    expiresAt: null,
     createdAt: 1_000,
   };
 
@@ -416,6 +417,44 @@ describe("DeliveryWorker.processOnce", () => {
     expect(result.failed).toBe(1);
     const task = await env.queue.get("dtask_0");
     expect(task?.lastError).toContain("no endpoint");
+  });
+
+  it("dead-letters immediately (no HTTP call) when the message has expired", async () => {
+    // expiresAt is in the past (1_000ms), worker tick is at 2_000ms.
+    const env = setup({ startMs: 2_000, retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+      expiresAt: 1_000,
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    const { transport, requests } = recordingTransport(200);
+    const result = await makeWorker(env, { transport }).processOnce();
+
+    expect(requests).toHaveLength(0); // no HTTP call
+    expect(result.deadLettered).toBe(1); // dead-lettered without retry
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("dead_letter");
+    expect(task?.lastError).toContain("expired");
+  });
+
+  it("delivers normally when expiresAt is in the future", async () => {
+    const env = setup({ startMs: 1_000, retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+      expiresAt: 9_000, // expires well in the future
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    const { transport, requests } = recordingTransport(200);
+    const result = await makeWorker(env, { transport }).processOnce();
+
+    expect(requests).toHaveLength(1); // HTTP call was made
+    expect(result.succeeded).toBe(1);
   });
 
   it("supports an async endpoint resolver", async () => {

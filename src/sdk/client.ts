@@ -89,6 +89,12 @@ export interface SendMessageInput {
    */
   readonly sendAt?: string | null;
   /**
+   * ISO 8601 timestamp after which the message must not be delivered. Omit or
+   * pass `null` for no expiry. If the delivery worker picks up a task past this
+   * time, it dead-letters the delivery immediately without retrying.
+   */
+  readonly expiresAt?: string | null;
+  /**
    * Channel tag for scoped delivery. An endpoint with a matching channel
    * receives this message; a global endpoint (channel `null`) always receives it.
    * Omit or pass `null` for an untagged message (only global endpoints receive it).
@@ -109,6 +115,8 @@ export interface MessageRef {
    * delivery. Mirrors the `sendAt` field from the create request.
    */
   readonly deliverAt: number | null;
+  /** Epoch-ms after which the message must not be delivered, or `null` for no expiry. */
+  readonly expiresAt: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -452,6 +460,8 @@ export interface MessageWithDeliveries {
    * delivery. Mirrors the `sendAt` field from the create request.
    */
   readonly deliverAt: number | null;
+  /** Epoch-ms after which the message must not be delivered, or `null` for no expiry. */
+  readonly expiresAt: number | null;
   readonly createdAt: number;
   readonly deliveries: readonly DeliveryView[];
 }
@@ -813,6 +823,7 @@ export class PosthornClient {
     };
     if (input.idempotencyKey !== undefined) body["idempotencyKey"] = input.idempotencyKey;
     if (input.sendAt !== undefined) body["sendAt"] = input.sendAt;
+    if (input.expiresAt !== undefined) body["expiresAt"] = input.expiresAt;
     if (input.channel !== undefined) body["channel"] = input.channel;
     return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
   }
@@ -827,6 +838,7 @@ export class PosthornClient {
       const item: Record<string, unknown> = { eventType: m.eventType, payload: m.payload };
       if (m.idempotencyKey !== undefined) item["idempotencyKey"] = m.idempotencyKey;
       if (m.sendAt !== undefined) item["sendAt"] = m.sendAt;
+      if (m.expiresAt !== undefined) item["expiresAt"] = m.expiresAt;
       if (m.channel !== undefined) item["channel"] = m.channel;
       return item;
     });

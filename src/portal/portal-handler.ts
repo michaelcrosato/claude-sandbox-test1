@@ -372,6 +372,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         idempotencyKey: null,
         channel: null,
         deliverAt: null,
+        expiresAt: null,
         createdAt: now,
         fanoutPending: false,
       };

@@ -209,7 +209,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://d.test/h", disabled: true }); // disabled
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
 
@@ -234,7 +234,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ disabled: true });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(0);
@@ -250,7 +250,7 @@ describe("fanOut", () => {
     await env.endpoints.create({ appId: "app_2", url: "https://other.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(1);
@@ -264,7 +264,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://b.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: null },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: null, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
       { availableAt: 5_000 },
     );
@@ -277,7 +277,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://a.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000 },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.tasks).toHaveLength(1);
@@ -289,7 +289,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://a.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000 },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000, expiresAt: null },
       { endpoints: env.endpoints, queue: env.queue },
       { availableAt: 1_000 },
     );

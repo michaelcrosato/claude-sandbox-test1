@@ -155,7 +155,7 @@ export interface FanoutResult {
  * source of a re-fan-out (a producer's idempotent retry).
  */
 export async function fanOut(
-  message: Pick<Message, "id" | "appId" | "eventType" | "payload" | "channel" | "deliverAt">,
+  message: Pick<Message, "id" | "appId" | "eventType" | "payload" | "channel" | "deliverAt" | "expiresAt">,
   deps: FanoutDeps,
   options: FanoutOptions = {},
 ): Promise<FanoutResult> {

@@ -1239,7 +1239,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         MessageSummary: {
           type: "object",
           description: "A message without its payload or per-endpoint deliveries (list/accept view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "createdAt"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "expiresAt", "createdAt"],
           properties: {
             id: { type: "string", examples: ["msg_2Yx9..."] },
             appId: { type: "string" },
@@ -1260,13 +1260,20 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Epoch-ms before which no delivery is attempted, or `null` for immediate delivery. " +
                 "Mirrors the `sendAt` field from the create request.",
             },
+            expiresAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description:
+                "Epoch-ms after which the message must not be delivered, or `null` for no expiry. " +
+                "When the delivery worker picks up a task past this time, the delivery is dead-lettered immediately without retrying.",
+            },
             createdAt: epochMs("Creation time, epoch ms."),
           },
         },
         Message: {
           type: "object",
           description: "A message plus its per-endpoint delivery statuses (detail view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "payload", "createdAt", "deliveries"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "expiresAt", "payload", "createdAt", "deliveries"],
           properties: {
             id: { type: "string" },
             appId: { type: "string" },
@@ -1278,6 +1285,12 @@ export function buildOpenApiDocument(): OpenApiDocument {
               format: "int64",
               description:
                 "Epoch-ms before which no delivery is attempted, or `null` for immediate delivery.",
+            },
+            expiresAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description:
+                "Epoch-ms after which the message must not be delivered, or `null` for no expiry.",
             },
             payload: {
               type: "string",
@@ -1576,6 +1589,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "ISO 8601 timestamp before which no delivery attempt is made. Omit or pass `null` for immediate delivery. " +
                 "Past timestamps are treated as immediate. Each endpoint in the fan-out inherits the same delay.",
               examples: ["2026-06-01T09:00:00Z"],
+            },
+            expiresAt: {
+              type: ["string", "null"],
+              format: "date-time",
+              description:
+                "ISO 8601 timestamp after which the message must not be delivered. Omit or pass `null` for no expiry. " +
+                "If the delivery worker picks up a task after this time, the delivery is dead-lettered immediately " +
+                "without retrying — preventing stale events from being delivered after their window has closed.",
+              examples: ["2026-06-01T09:05:00Z"],
             },
             channel: {
               type: ["string", "null"],

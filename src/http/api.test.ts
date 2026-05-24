@@ -384,6 +384,32 @@ describe("createApi — POST /v1/messages (ingest)", () => {
     );
     expect(body(nowRes).message.deliverAt).toBeNull();
   });
+
+  it("stores expiresAt and returns it in the response", async () => {
+    let nowMs = 1_700_000_000_000;
+    const apps = new InMemoryAppStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue({ now: () => nowMs });
+    const endpoints = new InMemoryEndpointStore();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, now: () => nowMs });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+
+    const futureMs = nowMs + 300_000;
+    const expiresAt = new Date(futureMs).toISOString();
+    const createRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, expiresAt }, secret),
+    );
+    expect(createRes.status).toBe(202);
+    expect(body(createRes).message.expiresAt).toBe(futureMs);
+    // expiresAt: null for a message created without expiresAt.
+    const nowRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    expect(body(nowRes).message.expiresAt).toBeNull();
+  });
 });
 
 describe("createApi — POST /v1/messages monthly quota enforcement", () => {

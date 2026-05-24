@@ -633,6 +633,7 @@ export class DeliveryWorker {
 
     let response: HttpDeliveryResponse | null = null;
     let failure: string | null = null;
+    let messageExpired = false;
     let durationMs = 0;
     // The tenant the attempt is made on behalf of, denormalized onto the audit record
     // (the basis for per-tenant delivery-usage metering). Null until the message loads;
@@ -650,23 +651,29 @@ export class DeliveryWorker {
         failure = `message "${task.messageId}" not found`;
       } else {
         appId = message.appId;
-        const target = await this.#resolveEndpoint(task, message);
-        resolvedTarget = target;
-        if (target === null) {
-          failure = `no endpoint resolved for task "${task.id}"`;
+        // Dead-letter immediately without retrying when the message has expired.
+        if (message.expiresAt !== null && nowMs > message.expiresAt) {
+          failure = `message "${message.id}" expired at ${new Date(message.expiresAt).toISOString()}`;
+          messageExpired = true;
         } else {
-          const sentAt = this.#now();
-          try {
-            const signedRequest = buildSignedRequest(message, target, nowMs);
-            requestBody =
-              signedRequest.body.length > MAX_CAPTURED_BODY_BYTES
-                ? signedRequest.body.slice(0, MAX_CAPTURED_BODY_BYTES)
-                : signedRequest.body;
-            response = await this.#send(signedRequest);
-          } finally {
-            // Capture latency even when #send throws — a timeout's duration is the
-            // most useful number there is. Math.max guards a non-monotonic clock.
-            durationMs = Math.max(0, this.#now() - sentAt);
+          const target = await this.#resolveEndpoint(task, message);
+          resolvedTarget = target;
+          if (target === null) {
+            failure = `no endpoint resolved for task "${task.id}"`;
+          } else {
+            const sentAt = this.#now();
+            try {
+              const signedRequest = buildSignedRequest(message, target, nowMs);
+              requestBody =
+                signedRequest.body.length > MAX_CAPTURED_BODY_BYTES
+                  ? signedRequest.body.slice(0, MAX_CAPTURED_BODY_BYTES)
+                  : signedRequest.body;
+              response = await this.#send(signedRequest);
+            } finally {
+              // Capture latency even when #send throws — a timeout's duration is the
+              // most useful number there is. Math.max guards a non-monotonic clock.
+              durationMs = Math.max(0, this.#now() - sentAt);
+            }
           }
         }
       }
@@ -705,12 +712,14 @@ export class DeliveryWorker {
     // When the endpoint's policy marks this status as non-retryable, force an
     // immediate dead-letter by passing an empty-delay policy ({ delaysMs: [] })
     // so planNextAttempt returns { retry: false } on the first failure.
+    // Expired messages also use this path — retrying a past-expiry message is pointless.
     const effectivePolicy = resolvedTarget?.retryPolicy;
     const nonRetryable =
-      response !== null &&
-      !isSuccessStatus(response.status) &&
-      effectivePolicy !== undefined &&
-      isNonRetryableStatus(effectivePolicy, response.status);
+      messageExpired ||
+      (response !== null &&
+        !isSuccessStatus(response.status) &&
+        effectivePolicy !== undefined &&
+        isNonRetryableStatus(effectivePolicy, response.status));
 
     const outcome = succeeded
       ? await this.#settleSuccess(task, leaseToken)

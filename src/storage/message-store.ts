@@ -48,6 +48,16 @@ export interface Message {
    * message accept and fan-out.
    */
   readonly deliverAt: number | null;
+  /**
+   * Epoch-ms after which the message must not be delivered, or `null` for no
+   * expiry. When the delivery worker picks up a task and finds
+   * `now > expiresAt`, it dead-letters the delivery immediately (no retries)
+   * with an "expired" error rather than attempting an already-stale send.
+   * Stored from the producer's `expiresAt` field (ISO 8601 on the wire;
+   * epoch-ms here). Applies to every task in the fan-out so the expiry
+   * survives crashes just like `deliverAt`.
+   */
+  readonly expiresAt: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -78,6 +88,12 @@ export interface NewMessage {
    * message so the fan-out dispatcher honours it even after a crash.
    */
   readonly deliverAt?: number | null;
+  /**
+   * Epoch-ms after which the message must not be delivered. Omit or pass `null`
+   * for no expiry. Stored on the message so expiry survives crashes just like
+   * `deliverAt`. Must be a non-negative integer when provided.
+   */
+  readonly expiresAt?: number | null;
 }
 
 /** The outcome of {@link MessageStore.create}. */
@@ -296,6 +312,7 @@ export interface NormalizedNewMessage {
   readonly idempotencyKey: string | null;
   readonly channel: string | null;
   readonly deliverAt: number | null;
+  readonly expiresAt: number | null;
 }
 
 /**
@@ -329,7 +346,11 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
   if (deliverAt !== null && (!Number.isInteger(deliverAt) || deliverAt < 0)) {
     throw new TypeError("deliverAt must be a non-negative integer");
   }
-  return { appId, eventType, payload, idempotencyKey, channel, deliverAt };
+  const expiresAt = input.expiresAt ?? null;
+  if (expiresAt !== null && (!Number.isInteger(expiresAt) || expiresAt < 0)) {
+    throw new TypeError("expiresAt must be a non-negative integer");
+  }
+  return { appId, eventType, payload, idempotencyKey, channel, deliverAt, expiresAt };
 }
 
 /**

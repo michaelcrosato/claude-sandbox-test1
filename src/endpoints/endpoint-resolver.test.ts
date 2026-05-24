@@ -40,6 +40,7 @@ const FAKE_MESSAGE = {
   payload: "{}",
   channel: null,
   deliverAt: null,
+  expiresAt: null,
   createdAt: 0,
 } as const;
 

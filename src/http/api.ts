@@ -374,6 +374,19 @@ function parseSendAt(v: unknown): number | null {
   return t;
 }
 
+/**
+ * Parse an optional `expiresAt` field from a request body. Accepts an ISO 8601
+ * string and converts it to epoch-ms. Missing / null → `null` (no expiry).
+ * Throws `TypeError` on bad input so the global error handler renders it as 400.
+ */
+function parseExpiresAt(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string") throw new TypeError("expiresAt must be a string");
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) throw new TypeError("expiresAt must be a valid ISO 8601 date string");
+  return t;
+}
+
 /** A required path parameter; absent only on a routing bug, surfaced as 500. */
 function requireParam(params: RouteParams, name: string): string {
   const value = params[name];
@@ -655,6 +668,7 @@ function messageListItemView(message: Message): Record<string, unknown> {
     idempotencyKey: message.idempotencyKey,
     channel: message.channel,
     deliverAt: message.deliverAt,
+    expiresAt: message.expiresAt,
     createdAt: message.createdAt,
   };
 }
@@ -673,6 +687,7 @@ function messageView(
     payload: message.payload,
     channel: message.channel,
     deliverAt: message.deliverAt,
+    expiresAt: message.expiresAt,
     createdAt: message.createdAt,
     deliveries: deliveries.map(deliveryView),
   };
@@ -1005,6 +1020,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     // the store's `normalizeNewMessage` (TypeError → 400). `appId` is the
     // authenticated tenant — never read from the body.
     const sendAtMs = parseSendAt("sendAt" in body ? body["sendAt"] : undefined);
+    const expiresAtMs = parseExpiresAt("expiresAt" in body ? body["expiresAt"] : undefined);
     const input: NewMessage = {
       appId: ctx.app.id,
       eventType: body["eventType"] as string,
@@ -1014,6 +1030,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         : {}),
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
       ...(sendAtMs !== null ? { deliverAt: sendAtMs } : {}),
+      ...(expiresAtMs !== null ? { expiresAt: expiresAtMs } : {}),
     };
     const result = await ingest(input, {
       messages: deps.messages,
@@ -1029,6 +1046,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         idempotencyKey: result.message.idempotencyKey,
         channel: result.message.channel,
         deliverAt: result.message.deliverAt,
+        expiresAt: result.message.expiresAt,
         createdAt: result.message.createdAt,
       },
       deduplicated: result.deduplicated,
@@ -1112,6 +1130,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
 
       try {
         const itemSendAtMs = parseSendAt("sendAt" in msg ? msg["sendAt"] : undefined);
+        const itemExpiresAtMs = parseExpiresAt("expiresAt" in msg ? msg["expiresAt"] : undefined);
         const input: NewMessage = {
           appId: ctx.app.id,
           eventType: msg["eventType"] as string,
@@ -1121,6 +1140,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             : {}),
           ...("channel" in msg ? { channel: msg["channel"] as string | null } : {}),
           ...(itemSendAtMs !== null ? { deliverAt: itemSendAtMs } : {}),
+          ...(itemExpiresAtMs !== null ? { expiresAt: itemExpiresAtMs } : {}),
         };
         const result = await ingest(input, {
           messages: deps.messages,
@@ -1140,6 +1160,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             idempotencyKey: result.message.idempotencyKey,
             channel: result.message.channel,
             deliverAt: result.message.deliverAt,
+            expiresAt: result.message.expiresAt,
             createdAt: result.message.createdAt,
           },
           deduplicated: result.deduplicated,
@@ -1375,6 +1396,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       idempotencyKey: null,
       channel: null,
       deliverAt: null,
+      expiresAt: null,
       createdAt: now,
       fanoutPending: false,
     };
