@@ -4,6 +4,77 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 69: Webhook Signature Verification Widget
+
+**Repo truth at start:** clean main @ `092e3df` (iter-68, per-endpoint delivery rate
+limiting). Baseline verified: `tsc --noEmit` clean, vitest **1329/1329** (1395 total,
+66 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** Posthorn's portal gave receivers tools to *manage* endpoints (create,
+edit, rotate secret, test delivery) but nothing to help them verify that their
+server-side signature implementation was actually correct. Misconfigured signature
+verification is one of the most common webhook integration errors (raw body
+re-serialized through `JSON.parse`, headers extracted case-sensitively, wrong secret
+env var). Svix charges for equivalent diagnostic tooling; we ship it as a standard
+portal card visible to every consumer app user.
+
+**Move chosen:** Add an interactive "Verify signature" card to the portal endpoint
+detail page. The developer pastes the three Standard Webhooks headers (`webhook-id`,
+`webhook-timestamp`, `webhook-signature`) and the exact raw request body from a webhook
+their server received, presses Verify, and the portal checks the signature server-side
+against the endpoint's active secrets — returning an explicit success or an exact error
+message. Form inputs are echoed back in the response so the developer sees their
+submitted values alongside the result without re-typing. A collapsible Node.js code
+example shows the SDK snippet for correct receiver-side implementation.
+
+**Architecture (3 files, +237 / −0):**
+
+1. **`src/portal/portal-views.ts`** — Added `VerifyWidgetResult` interface (`success`,
+   `error?`, and five echoed form fields for state preservation). Added `verifyResult?`
+   as a 6th optional parameter to `portalEndpointDetailPage`. Added the verify card
+   HTML: a four-field form (webhook-id, webhook-timestamp, webhook-signature, rawBody)
+   with inputs pre-filled from `verifyResult` echo fields, a success/failure alert
+   banner, and a `<details>` code-snippet section for the Node.js SDK example. Card
+   inserted between the test-delivery card and the rotate-secret card.
+
+2. **`src/portal/portal-handler.ts`** — Imported `activeSigningSecrets` from
+   `endpoint.js` and `verify as verifySignature` from `signing/webhook-signature.js`.
+   Added `POST /portal/endpoints/:id/verify` route (segs length 3): validates auth and
+   tenant ownership; requires all three header fields (returns failure with "required"
+   message when any is blank); calls `activeSigningSecrets(ep, nowMs)` to get the
+   primary secret plus any non-expired rotated ones; iterates secrets trying each with
+   `verifySignature(..., { toleranceInSeconds: 7 * 24 * 3600, now: Math.floor(nowMs / 1000) })` —
+   7-day tolerance (a debug tool, not a security gate), using the portal clock so tests
+   with fixed epoch times don't fail. First match wins; all-fail bubbles the last error
+   message. Returns the endpoint detail page with the `verifyResult` populated.
+
+3. **`src/portal/portal-handler.test.ts`** — Imported `sign` from signing module. Added
+   6 new test cases under "Signature verification widget":
+   - Unauthenticated → redirect to login
+   - Cross-tenant endpoint → 404
+   - Valid signature (built with `sign(ep.secret, ...)`) → 200, "verified/authentic" text, form inputs echoed
+   - Wrong signature (injected `v1,AAAA...` token) → 200, "failed/no matching" text
+   - Missing headers (all blank) → 200, "required" text
+   - Signature against a rotated (previous) secret within the 24h overlap window → 200, verified
+
+**Initial failure + fix:** The first run failed two tests with "webhook timestamp is too
+old" because the portal handler called `verifySignature` without a `now` override, so
+it defaulted to real `Date.now()` — but tests use `clock.t = 1_000_000` ms (year 1970),
+making the test timestamp 56 years stale. Fix: derive `nowMs = clock()` once and pass
+`now: Math.floor(nowMs / 1000)` to `verifySignature`.
+
+**Validation:** `tsc --noEmit` clean → vitest **1401/1401** (was 1329; +6: all new
+portal-handler tests green; Postgres skipped count unchanged). `npm run build` clean.
+
+**Commit:** `a058171` — iter-69 — 3 files changed, 237 insertions.
+
+**Next moves:** Rate-limit field exposed in portal create/edit forms (currently
+`rateLimit` lives in the model and API but the portal never shows it); global
+rate-limit config for all endpoints; tenant-level usage/quota display in the admin
+dashboard.
+
+---
+
 ## 2026-05-24 — Iteration 68: Per-endpoint delivery rate limiting
 
 **Repo truth at start:** clean main @ `8b6c610` (iter-67, priority wired through HTTP
