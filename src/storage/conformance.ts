@@ -636,6 +636,65 @@ export function describeMessageStoreContract(
         });
         expect(second.messages.map((m) => m.id)).toEqual([ids[1]]);
       });
+
+      it("filters by eventType, returning only matching messages newest-first", async () => {
+        const a1 = await store.create({ appId: APP, eventType: "user.created", payload: "{}" });
+        clock.advance(1);
+        const _b = await store.create({ appId: APP, eventType: "order.placed", payload: "{}" });
+        clock.advance(1);
+        const a2 = await store.create({ appId: APP, eventType: "user.created", payload: "{}" });
+
+        const page = await store.listByApp(APP, { eventType: "user.created" });
+        expect(page.messages.map((m) => m.id)).toEqual([a2.message.id, a1.message.id]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("returns an empty page when no messages match the eventType filter", async () => {
+        await seed(3); // all have eventType "e"
+        const page = await store.listByApp(APP, { eventType: "does.not.exist" });
+        expect(page.messages).toEqual([]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("pages through a filtered result with a cursor", async () => {
+        // 3 "user.created" interleaved with 2 "order.placed"
+        const ucIds: string[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          const { message } = await store.create({ appId: APP, eventType: "user.created", payload: `{"i":${i}}` });
+          ucIds.push(message.id);
+          clock.advance(1);
+          await store.create({ appId: APP, eventType: "order.placed", payload: "{}" });
+          clock.advance(1);
+        }
+        // Newest-first within the filter: ucIds[2], ucIds[1], ucIds[0]
+        const expected = [...ucIds].reverse();
+
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        do {
+          const page = await store.listByApp(APP, {
+            eventType: "user.created",
+            limit: 2,
+            ...(cursor !== null ? { cursor } : {}),
+          });
+          seen.push(...page.messages.map((m) => m.id));
+          cursor = page.nextCursor;
+        } while (cursor !== null);
+
+        expect(seen).toEqual(expected);
+      });
+
+      it("null or omitted eventType returns all messages (no filter)", async () => {
+        const a = await store.create({ appId: APP, eventType: "a", payload: "{}" });
+        clock.advance(1);
+        const b = await store.create({ appId: APP, eventType: "b", payload: "{}" });
+
+        const pageOmitted = await store.listByApp(APP);
+        expect(pageOmitted.messages.map((m) => m.id)).toEqual([b.message.id, a.message.id]);
+
+        const pageNull = await store.listByApp(APP, { eventType: null });
+        expect(pageNull.messages.map((m) => m.id)).toEqual([b.message.id, a.message.id]);
+      });
     });
 
     describe("summarizeUsageByApp — per-tenant usage", () => {

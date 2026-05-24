@@ -184,12 +184,12 @@ export class InMemoryMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType } = resolveListMessagesQuery(options);
     // Sort by the shared newest-first comparator (not insertion order) so this
     // matches the SQLite backend exactly, including the id tiebreak when several
     // messages share a createdAt. #messages is never pruned, so this is total.
     const ordered = [...this.#messages.values()]
-      .filter((m) => m.appId === appId)
+      .filter((m) => m.appId === appId && (eventType === null || m.eventType === eventType))
       .sort(compareMessagesNewestFirst);
     const after =
       cursor === null

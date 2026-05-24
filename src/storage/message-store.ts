@@ -332,6 +332,11 @@ export interface ListMessagesOptions {
    * `null`) for the first page. A malformed cursor throws {@link TypeError}.
    */
   readonly cursor?: string | null;
+  /**
+   * When set, only messages whose `eventType` equals this value are returned.
+   * `null` or omitting the field means no filter — all event types are included.
+   */
+  readonly eventType?: string | null;
 }
 
 /** One page of {@link MessageStore.listByApp}, newest-first, plus the next cursor. */
@@ -386,15 +391,15 @@ export function decodeMessageCursor(cursor: string): MessageCursor {
 }
 
 /**
- * Resolve {@link ListMessagesOptions} into a concrete `(limit, cursor)`, shared by
- * every backend so they page identically. `limit` defaults to
+ * Resolve {@link ListMessagesOptions} into a concrete `(limit, cursor, eventType)`,
+ * shared by every backend so they page identically. `limit` defaults to
  * {@link DEFAULT_LIST_MESSAGES_LIMIT} and must be an integer in
  * `[1, {@link MAX_LIST_MESSAGES_LIMIT}]` (RangeError otherwise); a malformed
  * `cursor` throws TypeError via {@link decodeMessageCursor}.
  */
 export function resolveListMessagesQuery(
   options: ListMessagesOptions = {},
-): { limit: number; cursor: MessageCursor | null } {
+): { limit: number; cursor: MessageCursor | null; eventType: string | null } {
   const limit = options.limit ?? DEFAULT_LIST_MESSAGES_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_MESSAGES_LIMIT) {
     throw new RangeError(
@@ -405,7 +410,11 @@ export function resolveListMessagesQuery(
     options.cursor === undefined || options.cursor === null
       ? null
       : decodeMessageCursor(options.cursor);
-  return { limit, cursor };
+  const eventType =
+    options.eventType === undefined || options.eventType === null || options.eventType === ""
+      ? null
+      : options.eventType;
+  return { limit, cursor, eventType };
 }
 
 /**

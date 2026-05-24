@@ -119,6 +119,8 @@ export class SqliteMessageStore implements MessageStore {
   readonly #listPendingFanout: StatementSync;
   readonly #listByApp: StatementSync;
   readonly #listByAppAfter: StatementSync;
+  readonly #listByAppFiltered: StatementSync;
+  readonly #listByAppAfterFiltered: StatementSync;
   readonly #summarizeUsage: StatementSync;
 
   constructor(options: SqliteStoreOptions = {}) {
@@ -187,6 +189,20 @@ export class SqliteMessageStore implements MessageStore {
     this.#listByAppAfter = this.#db.prepare(
       "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ?" +
+        " AND (created_at < ? OR (created_at = ? AND id < ?))" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    // Filtered variants: same as above but with an additional event_type = ? predicate.
+    // The idx_messages_app_event_created (app_id, event_type, created_at, id) index lets
+    // the planner narrow straight to the matching event type before scanning.
+    this.#listByAppFiltered = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ? AND event_type = ?" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    this.#listByAppAfterFiltered = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ? AND event_type = ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
@@ -367,20 +383,31 @@ export class SqliteMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType } = resolveListMessagesQuery(options);
     // Fetch one extra row: its presence is exactly the signal that a further page
     // exists, without a second COUNT query.
     const fetchLimit = limit + 1;
     const rows = (
-      cursor === null
-        ? this.#listByApp.all(appId, fetchLimit)
-        : this.#listByAppAfter.all(
-            appId,
-            cursor.createdAt,
-            cursor.createdAt,
-            cursor.id,
-            fetchLimit,
-          )
+      eventType === null
+        ? cursor === null
+          ? this.#listByApp.all(appId, fetchLimit)
+          : this.#listByAppAfter.all(
+              appId,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            )
+        : cursor === null
+          ? this.#listByAppFiltered.all(appId, eventType, fetchLimit)
+          : this.#listByAppAfterFiltered.all(
+              appId,
+              eventType,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            )
     ) as unknown as MessageRow[];
     const hasMore = rows.length > limit;
     const messages = (hasMore ? rows.slice(0, limit) : rows).map(rowToMessage);
@@ -455,9 +482,10 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
  * `fanned_out_at` column is guaranteed to exist. A **partial** index over only
  * the unfanned rows keeps `listPendingFanout` (and the outbox sweep) an indexed
  * lookup over a near-empty set, even though `messages` itself grows unbounded.
- * `idx_messages_app_created` covers the keyset {@link SqliteMessageStore.listByApp}
- * scan — `(app_id, created_at, id)`, walked backwards for newest-first paging. Both
- * use `IF NOT EXISTS`, so a database from an earlier build gains them on next open
+ * `idx_messages_app_created` covers the unfiltered keyset scan; the narrower
+ * `idx_messages_app_event_created` covers the `?eventType=` filtered scan —
+ * `(app_id, event_type, created_at, id)`, letting the planner skip straight to the
+ * matching type. All use `IF NOT EXISTS`, so an existing DB gains them on next open
  * with no migration (they are pure read optimizations over existing rows).
  */
 const INDEXES = `
@@ -466,4 +494,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_pending_fanout
 
 CREATE INDEX IF NOT EXISTS idx_messages_app_created
   ON messages (app_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_app_event_created
+  ON messages (app_id, event_type, created_at, id);
 `;

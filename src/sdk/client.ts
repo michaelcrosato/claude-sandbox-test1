@@ -178,6 +178,11 @@ export interface ListMessagesParams {
    * (or `null`) for the first page.
    */
   readonly cursor?: string | null;
+  /**
+   * Filter to messages whose `eventType` exactly matches this value. Omit (or
+   * pass `null`) to return all event types.
+   */
+  readonly eventType?: string | null;
 }
 
 /**
@@ -422,6 +427,9 @@ export class PosthornClient {
     }
     if (params.cursor !== undefined && params.cursor !== null) {
       query.set("cursor", params.cursor);
+    }
+    if (params.eventType !== undefined && params.eventType !== null) {
+      query.set("eventType", params.eventType);
     }
     const qs = query.toString();
     return this.#transport.request<MessageListPage>(

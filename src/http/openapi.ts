@@ -236,6 +236,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               schema: { type: "string" },
               description: "Opaque cursor from a prior page's `nextCursor`.",
             },
+            {
+              name: "eventType",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description: "Filter to messages whose `eventType` exactly matches this value. Omit for all event types.",
+            },
           ],
           responses: {
             "200": jsonResponse("A page of messages.", ref("MessageList")),

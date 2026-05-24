@@ -1380,6 +1380,32 @@ describe("createApi — GET /v1/messages (list)", () => {
       aRefs.map((r) => r.id).sort(),
     );
   });
+
+  it("filters by ?eventType= returning only matching messages", async () => {
+    const { api, secret } = await setup();
+    const ucRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "user.created", payload: {} }, secret),
+    );
+    const opRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "order.placed", payload: {} }, secret),
+    );
+    const ucId: string = body(ucRes).message.id;
+    const opId: string = body(opRes).message.id;
+
+    const filtered = await authedGet(api, secret, { eventType: "user.created" });
+    expect(filtered.status).toBe(200);
+    const ids = body(filtered).data.map((m: any) => m.id);
+    expect(ids).toContain(ucId);
+    expect(ids).not.toContain(opId);
+  });
+
+  it("returns an empty page when no messages match the ?eventType= filter", async () => {
+    const { api, secret } = await setup();
+    await send(api, secret, 2); // all have eventType "e"
+    const res = await authedGet(api, secret, { eventType: "does.not.exist" });
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ data: [], nextCursor: null });
+  });
 });
 
 describe("createApi — end-to-end with the delivery worker", () => {

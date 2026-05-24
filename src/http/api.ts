@@ -304,16 +304,16 @@ function requireParam(params: RouteParams, name: string): string {
 }
 
 /**
- * Parse the `?limit=&cursor=` query of the message-list route into store options.
- * A present-but-invalid `limit` (non-integer or outside `[1, MAX]`) is a client
- * error → `400`; the cursor is passed through opaquely (the store validates its
+ * Parse the `?limit=&cursor=&eventType=` query of the message-list route into store
+ * options. A present-but-invalid `limit` (non-integer or outside `[1, MAX]`) is a
+ * client error → `400`; the cursor is passed through opaquely (the store validates its
  * shape, surfacing a malformed one as a `TypeError` → `400`). An absent param is
  * simply omitted so the store applies its own default.
  */
 function parseListMessagesParams(
   query: Readonly<Record<string, string | undefined>>,
 ): ListMessagesOptions {
-  const options: { limit?: number; cursor?: string } = {};
+  const options: { limit?: number; cursor?: string; eventType?: string } = {};
   const rawLimit = query["limit"];
   if (rawLimit !== undefined) {
     const limit = Number(rawLimit);
@@ -329,6 +329,10 @@ function parseListMessagesParams(
   const rawCursor = query["cursor"];
   if (rawCursor !== undefined && rawCursor.length > 0) {
     options.cursor = rawCursor;
+  }
+  const rawEventType = query["eventType"];
+  if (rawEventType !== undefined && rawEventType.length > 0) {
+    options.eventType = rawEventType;
   }
   return options;
 }

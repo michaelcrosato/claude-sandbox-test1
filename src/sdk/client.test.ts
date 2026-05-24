@@ -440,6 +440,30 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(seenUrl).toContain("cursor=c2%3D"); // '=' is percent-encoded
   });
 
+  it("includes eventType in the list query string when provided", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages({ eventType: "user.created" });
+    expect(seenUrl).toContain("eventType=user.created");
+  });
+
+  it("omits eventType from the query string when null or absent", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages({ eventType: null });
+    expect(seenUrl.endsWith("/v1/messages")).toBe(true);
+  });
+
   it("omits the query string when listMessages gets no params", async () => {
     let seenUrl = "";
     const client = fakeClient((url) => {
