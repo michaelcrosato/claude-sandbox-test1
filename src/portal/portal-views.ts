@@ -15,6 +15,7 @@
 
 import type { Endpoint } from "../endpoints/endpoint.js";
 import type { DeliveryTask } from "../queue/delivery-queue.js";
+import type { EventType } from "../event-types/event-type.js";
 
 /** Escape HTML entities to prevent XSS. */
 export function esc(s: string): string {
@@ -101,7 +102,13 @@ function base(title: string, body: string, backLink = ""): string {
 </head>
 <body>
 <header>
-  <div class="brand">Webhooks</div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="brand">Webhooks</div>
+    <nav style="display:flex;gap:12px">
+      <a href="/portal/endpoints" style="color:#64748b;font-size:13px;font-weight:500">Endpoints</a>
+      <a href="/portal/event-types" style="color:#64748b;font-size:13px;font-weight:500">Event Types</a>
+    </nav>
+  </div>
   <div style="display:flex;align-items:center;gap:8px">
     ${backLink}
     <form method="POST" action="/portal/logout" style="display:inline">
@@ -499,6 +506,146 @@ ${retriedBanner}
     `Delivery ${task.id.slice(0, 12)}`,
     body,
     `<a href="/portal/endpoints/${esc(endpoint.id)}" style="color:#64748b;font-size:13px">← Endpoint</a>`,
+  );
+}
+
+/** Event-types list page with inline create form. `created` is set right after creation. */
+export function portalEventTypesPage(
+  eventTypes: readonly EventType[],
+  error?: string,
+  created?: EventType,
+): string {
+  const errorBanner = error
+    ? `<div class="alert alert-err">${esc(error)}</div>`
+    : "";
+
+  const createdBanner = created
+    ? `<div class="alert alert-ok">Event type <strong>${esc(created.id)}</strong> created.</div>`
+    : "";
+
+  const rows =
+    eventTypes.length === 0
+      ? `<tr><td colspan="4" class="empty">No event types yet. Create one below.</td></tr>`
+      : eventTypes
+          .map(
+            (et) => `<tr>
+  <td class="mono"><a href="/portal/event-types/${esc(et.id)}">${esc(et.id)}</a></td>
+  <td>${esc(et.name)}</td>
+  <td class="meta">${et.description ? esc(et.description) : '<span class="meta">—</span>'}</td>
+  <td>${et.archived ? '<span class="pill pill-gray">archived</span>' : '<span class="pill pill-green">active</span>'}</td>
+</tr>`,
+          )
+          .join("");
+
+  const createForm = `<div class="card">
+  <h2 style="margin-bottom:16px">Add event type</h2>
+  ${errorBanner}
+  <form method="POST" action="/portal/event-types">
+    <div class="form-row">
+      <label for="etId">ID <span style="color:#ef4444">*</span></label>
+      <input id="etId" type="text" name="id" placeholder="user.created" required autocomplete="off">
+      <div class="meta" style="margin-top:4px">Start with a letter or digit; may contain letters, digits, dots, underscores, hyphens.</div>
+    </div>
+    <div class="form-row">
+      <label for="etName">Name <span style="color:#ef4444">*</span></label>
+      <input id="etName" type="text" name="name" placeholder="User created" required>
+    </div>
+    <div class="form-row">
+      <label for="etDesc">Description <span class="meta">(optional)</span></label>
+      <input id="etDesc" type="text" name="description" placeholder="Fired when a new user account is created">
+    </div>
+    <div class="form-row">
+      <label for="etSchema">Example payload <span class="meta">(optional — must be valid JSON)</span></label>
+      <textarea id="etSchema" name="schemaExample" rows="4" class="mono" placeholder='{"id": 1, "email": "user@example.com"}'></textarea>
+    </div>
+    <button type="submit" class="btn btn-blue">Create event type</button>
+  </form>
+</div>`;
+
+  const body = `${createdBanner}<div class="section-head">
+  <h2>Event types</h2>
+</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Name</th><th>Description</th><th>Status</th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>
+${createForm}`;
+
+  return base("Event types", body);
+}
+
+/** Event-type detail page — config summary + edit form + archive action. */
+export function portalEventTypeDetailPage(
+  eventType: EventType,
+  error?: string,
+  saved = false,
+): string {
+  const errorBanner = error
+    ? `<div class="alert alert-err">${esc(error)}</div>`
+    : "";
+
+  const savedBanner = saved
+    ? `<div class="alert alert-ok">Changes saved.</div>`
+    : "";
+
+  const editForm = `<div class="card">
+  <h2 style="margin-bottom:16px">Edit event type</h2>
+  ${savedBanner}
+  ${errorBanner}
+  <form method="POST" action="/portal/event-types/${esc(eventType.id)}/update">
+    <div class="form-row">
+      <label for="etName">Name <span style="color:#ef4444">*</span></label>
+      <input id="etName" type="text" name="name" value="${esc(eventType.name)}" required>
+    </div>
+    <div class="form-row">
+      <label for="etDesc">Description <span class="meta">(optional)</span></label>
+      <input id="etDesc" type="text" name="description" value="${esc(eventType.description ?? "")}">
+    </div>
+    <div class="form-row">
+      <label for="etSchema">Example payload <span class="meta">(optional — must be valid JSON)</span></label>
+      <textarea id="etSchema" name="schemaExample" rows="4" class="mono">${esc(eventType.schemaExample ?? "")}</textarea>
+    </div>
+    <button type="submit" class="btn btn-blue">Save changes</button>
+  </form>
+</div>`;
+
+  const archiveSection = eventType.archived
+    ? `<div class="card">
+  <p class="meta"><span class="pill pill-gray">archived</span> This event type is archived and hidden from subscription suggestions. Existing subscriptions continue to work.</p>
+</div>`
+    : `<div class="card">
+  <h2 style="margin-bottom:8px">Archive event type</h2>
+  <p class="meta" style="margin-bottom:12px">Archived event types are hidden from subscription suggestions. Existing subscriptions that reference this type continue to work.</p>
+  <form method="POST" action="/portal/event-types/${esc(eventType.id)}/archive" onsubmit="return confirm('Archive this event type?')">
+    <button type="submit" class="btn btn-gray">Archive</button>
+  </form>
+</div>`;
+
+  const body = `<h2 style="margin-bottom:4px">
+  <a href="/portal/event-types" style="color:#64748b;font-weight:400;font-size:13px">← Event types</a>
+</h2>
+<div class="card" style="margin-top:12px">
+  <table style="width:auto">
+    <tr><td style="color:#64748b;padding-right:24px;white-space:nowrap">ID</td><td class="mono">${esc(eventType.id)}</td></tr>
+    <tr><td style="color:#64748b">Name</td><td>${esc(eventType.name)}</td></tr>
+    <tr><td style="color:#64748b">Description</td><td>${eventType.description ? esc(eventType.description) : '<span class="meta">—</span>'}</td></tr>
+    <tr><td style="color:#64748b;vertical-align:top">Example payload</td><td>${eventType.schemaExample ? `<pre class="mono" style="font-size:12px;white-space:pre-wrap;word-break:break-all">${esc(eventType.schemaExample)}</pre>` : '<span class="meta">—</span>'}</td></tr>
+    <tr><td style="color:#64748b">Status</td><td>${eventType.archived ? '<span class="pill pill-gray">archived</span>' : '<span class="pill pill-green">active</span>'}</td></tr>
+    <tr><td style="color:#64748b">Created</td><td class="meta">${fmtTime(eventType.createdAt)}</td></tr>
+  </table>
+</div>
+
+${editForm}
+${archiveSection}`;
+
+  return base(
+    `Event type ${eventType.id}`,
+    body,
+    `<a href="/portal/event-types" style="color:#64748b;font-size:13px">← Event types</a>`,
   );
 }
 

@@ -3,6 +3,7 @@ import { createPortalHandler } from "./portal-handler.js";
 import { InMemoryPortalSessionStore } from "./portal-session.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
 import { sign } from "../signing/webhook-signature.js";
 import type { ApiRequest } from "../http/api.js";
@@ -486,6 +487,155 @@ describe("createPortalHandler", () => {
     expect(updated!.rateLimit).toBeNull();
     // Detail page shows "No limit"
     expect(String(res.body)).toContain("No limit");
+  });
+
+  // ── Event type catalog management ─────────────────────────────────────────────
+
+  function setupWithEventTypes(nowMs = 1_000_000) {
+    const endpoints = new InMemoryEndpointStore();
+    const queue = new InMemoryDeliveryQueue();
+    const sessions = new InMemoryPortalSessionStore();
+    const eventTypes = new InMemoryEventTypeStore({ now: () => clock.t });
+    const clock = { t: nowMs };
+    const handler = createPortalHandler({
+      endpoints,
+      queue,
+      sessions,
+      eventTypes,
+      now: () => clock.t,
+    });
+    return { endpoints, queue, sessions, eventTypes, handler, clock };
+  }
+
+  it("GET /portal/event-types without event-type store returns 404", async () => {
+    const { sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types" }), COOKIE, token),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /portal/event-types unauthenticated redirects to login", async () => {
+    const { handler } = setupWithEventTypes();
+    const res = await handler(req({ path: "/portal/event-types" }));
+    expect(res.status).toBe(302);
+    expect(res.headers?.["location"]).toBe("/portal/login");
+  });
+
+  it("GET /portal/event-types with valid session returns 200 with event type list", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created" });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types" }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toContain("user.created");
+    expect(String(res.body)).toContain("User created");
+  });
+
+  it("POST /portal/event-types creates an event type and shows confirmation", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const body = new URLSearchParams({ id: "order.shipped", name: "Order shipped" }).toString();
+    const res = await handler(
+      withCookie(
+        req({ method: "POST", path: "/portal/event-types", rawBody: body }),
+        COOKIE,
+        token,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toContain("order.shipped");
+    const list = await eventTypes.list("app_1");
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe("order.shipped");
+  });
+
+  it("POST /portal/event-types with invalid id shows error banner", async () => {
+    const { sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const body = new URLSearchParams({ id: "!!bad id!!", name: "Bad" }).toString();
+    const res = await handler(
+      withCookie(
+        req({ method: "POST", path: "/portal/event-types", rawBody: body }),
+        COOKIE,
+        token,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/alert-err|error/i);
+  });
+
+  it("GET /portal/event-types/:id returns detail page", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created", description: "When a user signs up" });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/user.created" }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("user.created");
+    expect(html).toContain("When a user signs up");
+  });
+
+  it("GET /portal/event-types/:id for unknown id returns 404", async () => {
+    const { sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/no.such.type" }), COOKIE, token),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /portal/event-types/:id for a different tenant's type returns 404", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_2", id: "other.event", name: "Other" });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/other.event" }), COOKIE, token),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /portal/event-types/:id/update saves changes and shows saved banner", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created" });
+    const body = new URLSearchParams({ name: "User registered", description: "New description" }).toString();
+    const res = await handler(
+      withCookie(
+        req({ method: "POST", path: "/portal/event-types/user.created/update", rawBody: body }),
+        COOKIE,
+        token,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("User registered");
+    expect(html).toContain("New description");
+    expect(html).toMatch(/saved|changes/i);
+    const et = await eventTypes.get("app_1", "user.created");
+    expect(et!.name).toBe("User registered");
+  });
+
+  it("POST /portal/event-types/:id/archive archives and redirects to list", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created" });
+    const res = await handler(
+      withCookie(
+        req({ method: "POST", path: "/portal/event-types/user.created/archive" }),
+        COOKIE,
+        token,
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers?.["location"]).toBe("/portal/event-types");
+    const et = await eventTypes.get("app_1", "user.created");
+    expect(et!.archived).toBe(true);
   });
 
   // ── Unknown routes ────────────────────────────────────────────────────────────

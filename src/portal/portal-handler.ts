@@ -34,7 +34,7 @@ import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/en
 import { activeSigningSecrets } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { PortalSessionStore } from "./portal-session.js";
-import type { EventTypeStore } from "../event-types/event-type.js";
+import type { EventTypeStore, EventType } from "../event-types/event-type.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
   buildSignedRequest,
@@ -51,6 +51,8 @@ import {
   portalEndpointDetailPage,
   portalDeliveryDetailPage,
   portalRotatedSecretPage,
+  portalEventTypesPage,
+  portalEventTypeDetailPage,
   type DeliveryRow,
   type PortalTestResult,
   type VerifyWidgetResult,
@@ -526,6 +528,83 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         throw err;
       }
       return redirect(`/portal/endpoints/${s1}/deliveries/${s3}?retried=1`);
+    }
+
+    // ── GET /portal/event-types ────────────────────────────────────────────────
+    if (method === "GET" && s0 === "event-types" && segs.length === 1) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const etList = await eventTypesStore.list(auth.appId, { includeArchived: true });
+      return html(200, portalEventTypesPage(etList));
+    }
+
+    // ── POST /portal/event-types ───────────────────────────────────────────────
+    if (method === "POST" && s0 === "event-types" && segs.length === 1) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const { appId } = auth;
+      const form = parseForm(req.rawBody);
+      let created: EventType;
+      try {
+        created = await eventTypesStore.create({
+          appId,
+          id: (form["id"] ?? "").trim(),
+          name: (form["name"] ?? "").trim(),
+          description: (form["description"] ?? "").trim() || null,
+          schemaExample: (form["schemaExample"] ?? "").trim() || null,
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Invalid input.";
+        const etList = await eventTypesStore.list(appId, { includeArchived: true });
+        return html(200, portalEventTypesPage(etList, errMsg));
+      }
+      const etList = await eventTypesStore.list(appId, { includeArchived: true });
+      return html(200, portalEventTypesPage(etList, undefined, created));
+    }
+
+    // ── GET /portal/event-types/:id ───────────────────────────────────────────
+    if (method === "GET" && s0 === "event-types" && s1 !== undefined && s2 === undefined) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const et = await eventTypesStore.get(auth.appId, s1);
+      if (et === null) return NOT_FOUND;
+      return html(200, portalEventTypeDetailPage(et));
+    }
+
+    // ── POST /portal/event-types/:id/update ───────────────────────────────────
+    if (method === "POST" && s0 === "event-types" && s1 !== undefined && s2 === "update") {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const et = await eventTypesStore.get(auth.appId, s1);
+      if (et === null) return NOT_FOUND;
+      const form = parseForm(req.rawBody);
+      let updated: typeof et;
+      try {
+        updated = await eventTypesStore.update(auth.appId, s1, {
+          name: form["name"] ?? "",
+          description: (form["description"] ?? "").trim() || null,
+          schemaExample: (form["schemaExample"] ?? "").trim() || null,
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Invalid input.";
+        return html(200, portalEventTypeDetailPage(et, errMsg));
+      }
+      return html(200, portalEventTypeDetailPage(updated, undefined, true));
+    }
+
+    // ── POST /portal/event-types/:id/archive ──────────────────────────────────
+    if (method === "POST" && s0 === "event-types" && s1 !== undefined && s2 === "archive") {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const et = await eventTypesStore.get(auth.appId, s1);
+      if (et === null) return NOT_FOUND;
+      await eventTypesStore.archive(auth.appId, s1);
+      return redirect("/portal/event-types");
     }
 
     return NOT_FOUND;
