@@ -237,6 +237,27 @@ describe("PosthornClient (against the in-process HTTP server)", () => {
     expect(fetched.headers).toBeNull();
   });
 
+  it("creates and updates a payload filter on an endpoint", async () => {
+    const { client } = await startServer();
+    // Defaults to null.
+    const created = await client.createEndpoint({ url: "https://acme.example/hook" });
+    expect(created.filter).toBeNull();
+    // Set a filter.
+    const filter = { op: "eq" as const, path: "env", value: "prod" };
+    const withFilter = await client.createEndpoint({
+      url: "https://acme.example/hook",
+      filter,
+    });
+    expect(withFilter.filter).toEqual(filter);
+    // Update to a different filter.
+    const updFilter = { op: "neq" as const, path: "env", value: "staging" };
+    const patched = await client.updateEndpoint(withFilter.id, { filter: updFilter });
+    expect(patched.filter).toEqual(updFilter);
+    // Clear.
+    const cleared = await client.updateEndpoint(patched.id, { filter: null });
+    expect(cleared.filter).toBeNull();
+  });
+
   it("rotates an endpoint's secret, returning the new one once", async () => {
     const { client } = await startServer();
     const created = await client.createEndpoint({ url: "https://acme.example/hook" });

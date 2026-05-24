@@ -30,6 +30,8 @@ import {
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import {
+  MAX_FILTER_DEPTH,
+  MAX_FILTER_NODES,
   MAX_NON_RETRYABLE_STATUSES,
   MAX_RETRY_POLICY_DELAY_MS,
   MAX_RETRY_POLICY_RETRIES,
@@ -1243,6 +1245,70 @@ export function buildOpenApiDocument(): OpenApiDocument {
             attemptedAt: epochMs("When the attempt started, epoch ms."),
           },
         },
+        FieldFilter: {
+          type: "object",
+          description:
+            "A comparison filter: extracts a value at `path` from the message payload and " +
+            "compares it to `value` using `op`. Returns false when the path is absent or " +
+            "types are incompatible for ordered operators.",
+          required: ["op", "path", "value"],
+          properties: {
+            op: {
+              type: "string",
+              enum: ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "startsWith"],
+              description:
+                "`eq`/`neq` equality; `gt`/`gte`/`lt`/`lte` numeric ordered comparison; " +
+                "`contains` substring (strings) or element membership (arrays); " +
+                "`startsWith` string prefix.",
+            },
+            path: {
+              type: "string",
+              description: "Dot-separated key path into the parsed message payload.",
+              examples: ["data.status", "amount", "user.id"],
+            },
+            value: {
+              oneOf: [
+                { type: "string" },
+                { type: "number" },
+                { type: "boolean" },
+                { type: "null" },
+              ],
+              description: "Scalar to compare the extracted value against.",
+            },
+          },
+        },
+        LogicalFilter: {
+          type: "object",
+          description: "Logical AND or OR combinator over a list of sub-filters.",
+          required: ["op", "filters"],
+          properties: {
+            op: { type: "string", enum: ["and", "or"] },
+            filters: {
+              type: "array",
+              items: ref("EndpointFilter"),
+              minItems: 1,
+              maxItems: 10,
+              description: "Child filters. All must match for `and`; at least one for `or`.",
+            },
+          },
+        },
+        NotFilter: {
+          type: "object",
+          description: "Logical NOT — inverts the result of the child filter.",
+          required: ["op", "filter"],
+          properties: {
+            op: { type: "string", enum: ["not"] },
+            filter: ref("EndpointFilter"),
+          },
+        },
+        EndpointFilter: {
+          oneOf: [ref("FieldFilter"), ref("LogicalFilter"), ref("NotFilter")],
+          description:
+            "A filter expression that gates delivery based on the message payload. " +
+            "Field filters compare a dot-path value against a scalar; logical combinators " +
+            "(`and`/`or`/`not`) compose them into arbitrarily complex expressions. " +
+            `Maximum ${MAX_FILTER_NODES} total nodes and ${MAX_FILTER_DEPTH} levels of nesting.`,
+        },
         RetryPolicyConfig: {
           type: "object",
           description:
@@ -1275,7 +1341,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
           required: [
-            "id", "appId", "url", "description", "eventTypes", "headers", "retryPolicy",
+            "id", "appId", "url", "description", "eventTypes", "headers", "retryPolicy", "filter",
             "disabled", "consecutiveFailures", "firstFailureAt", "lastFailureAt",
             "createdAt", "updatedAt",
           ],
@@ -1302,6 +1368,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "Per-endpoint retry schedule. `null` means the system-wide default policy applies. " +
                 "When set, `delaysMs` replaces the global schedule for deliveries to this endpoint.",
+            },
+            filter: {
+              oneOf: [ref("EndpointFilter"), { type: "null" }],
+              description:
+                "Payload filter. `null` means no filter — deliver all matching event types. " +
+                "When set, a delivery is only enqueued when the message payload matches this " +
+                "expression. Evaluated at fan-out time against the parsed JSON payload.",
             },
             disabled: {
               type: "boolean",
@@ -1390,6 +1463,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "Custom retry schedule. Omit or pass `null` to use the system-wide default policy.",
             },
+            filter: {
+              oneOf: [ref("EndpointFilter"), { type: "null" }],
+              description:
+                "Payload filter. Omit or pass `null` for no filter — deliver all matching event types.",
+            },
           },
         },
         EndpointUpdate: {
@@ -1412,6 +1490,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
               oneOf: [ref("RetryPolicyConfig"), { type: "null" }],
               description:
                 "Replace the retry schedule. Pass `null` to revert to the system-wide default.",
+            },
+            filter: {
+              oneOf: [ref("EndpointFilter"), { type: "null" }],
+              description:
+                "Replace the payload filter. Pass `null` to remove the filter (deliver all matching event types).",
             },
           },
         },
@@ -1477,7 +1560,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         FanoutSummary: {
           type: "object",
           description: "How many endpoints a message fanned out to, and why others were skipped.",
-          required: ["matched", "skippedDisabled", "skippedUnsubscribed"],
+          required: ["matched", "skippedDisabled", "skippedUnsubscribed", "skippedFiltered"],
           properties: {
             matched: { type: "integer", minimum: 0, description: "Endpoints a delivery was enqueued for." },
             skippedDisabled: { type: "integer", minimum: 0, description: "Endpoints skipped as disabled." },
@@ -1485,6 +1568,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: "integer",
               minimum: 0,
               description: "Endpoints skipped as not subscribed to the event type.",
+            },
+            skippedFiltered: {
+              type: "integer",
+              minimum: 0,
+              description: "Enabled, subscribed endpoints skipped because their payload filter did not match.",
             },
           },
         },

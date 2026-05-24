@@ -26,6 +26,7 @@ import {
   UnknownEndpointError,
   type DeliveryHealthOutcome,
   type Endpoint,
+  type EndpointFilter,
   type EndpointOutcomeResult,
   type EndpointStore,
   type EndpointUpdate,
@@ -70,6 +71,7 @@ interface EndpointRow {
   readonly event_types: string | null;
   readonly headers: string | null;
   readonly retry_policy: string | null;
+  readonly filter: string | null;
   readonly disabled: number;
   readonly consecutive_failures: number;
   readonly first_failure_at: number | null;
@@ -100,6 +102,10 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
       row.retry_policy === null
         ? null
         : (JSON.parse(row.retry_policy) as RetryPolicy),
+    filter:
+      row.filter === null
+        ? null
+        : (JSON.parse(row.filter) as EndpointFilter),
     disabled: row.disabled !== 0,
     consecutiveFailures: Number(row.consecutive_failures),
     firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
@@ -122,6 +128,11 @@ function eventTypesToColumn(eventTypes: readonly string[] | null): string | null
 /** Serialize a retry policy for the `retry_policy` column. */
 function retryPolicyToColumn(policy: RetryPolicy | null): string | null {
   return policy === null ? null : JSON.stringify(policy);
+}
+
+/** Serialize a payload filter for the `filter` column. */
+function filterToColumn(filter: EndpointFilter | null): string | null {
+  return filter === null ? null : JSON.stringify(filter);
 }
 
 export class SqliteEndpointStore implements EndpointStore {
@@ -169,6 +180,9 @@ export class SqliteEndpointStore implements EndpointStore {
     // Likewise for the retry-policy column. Existing rows default to NULL (use system
     // default), which is the correct semantic for an endpoint without a custom policy.
     this.#migrateRetryPolicyColumn();
+    // Likewise for the filter column. Existing rows default to NULL (no filter = deliver
+    // all), which is the correct semantic and preserves existing behaviour.
+    this.#migrateFilterColumn();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -180,15 +194,15 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
          (id, app_id, url, secret, previous_secrets, description, event_types, headers,
-          retry_policy, disabled, consecutive_failures, first_failure_at, last_failure_at,
+          retry_policy, filter, disabled, consecutive_failures, first_failure_at, last_failure_at,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
          SET url = ?, secret = ?, description = ?, event_types = ?, headers = ?,
-             retry_policy = ?, disabled = ?, consecutive_failures = ?, first_failure_at = ?,
-             last_failure_at = ?, updated_at = ?
+             retry_policy = ?, filter = ?, disabled = ?, consecutive_failures = ?,
+             first_failure_at = ?, last_failure_at = ?, updated_at = ?
        WHERE id = ?`,
     );
     // Rotation is the only path that writes previous_secrets after creation; it is
@@ -283,6 +297,22 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#db.exec("ALTER TABLE endpoints ADD COLUMN retry_policy TEXT");
   }
 
+  /**
+   * Add the `filter` column to a database created before payload filters existed.
+   * Existing rows default to `NULL` (no filter = deliver all), which is the correct
+   * semantic and preserves existing behaviour. For a fresh database the column is in
+   * {@link SCHEMA} and this is a no-op.
+   */
+  #migrateFilterColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "filter")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN filter TEXT");
+  }
+
   /** Number of endpoints currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countEndpoints.get() as { n: number }).n);
@@ -302,6 +332,7 @@ export class SqliteEndpointStore implements EndpointStore {
       eventTypes: normalized.eventTypes,
       headers: normalized.headers,
       retryPolicy: normalized.retryPolicy,
+      filter: normalized.filter,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,
@@ -320,6 +351,7 @@ export class SqliteEndpointStore implements EndpointStore {
       eventTypesToColumn(endpoint.eventTypes),
       headersToColumn(endpoint.headers),
       retryPolicyToColumn(endpoint.retryPolicy),
+      filterToColumn(endpoint.filter),
       endpoint.disabled ? 1 : 0,
       endpoint.consecutiveFailures,
       endpoint.firstFailureAt,
@@ -354,6 +386,7 @@ export class SqliteEndpointStore implements EndpointStore {
         eventTypesToColumn(next.eventTypes),
         headersToColumn(next.headers),
         retryPolicyToColumn(next.retryPolicy),
+        filterToColumn(next.filter),
         next.disabled ? 1 : 0,
         next.consecutiveFailures,
         next.firstFailureAt,
@@ -493,6 +526,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   event_types      TEXT,
   headers          TEXT,
   retry_policy     TEXT,
+  filter           TEXT,
   disabled         INTEGER NOT NULL,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   first_failure_at     INTEGER,

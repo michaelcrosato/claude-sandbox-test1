@@ -87,6 +87,7 @@ import {
 import {
   UnknownEndpointError,
   type Endpoint,
+  type EndpointFilter,
   type EndpointStore,
   type EndpointUpdate,
   type NewEndpoint,
@@ -555,6 +556,7 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     eventTypes: endpoint.eventTypes,
     headers: endpoint.headers,
     retryPolicy: endpoint.retryPolicy,
+    filter: endpoint.filter ?? null,
     disabled: endpoint.disabled,
     // Endpoint health (observability): a tenant can see how/why an endpoint became
     // unhealthy, and whether it was auto-disabled after sustained failure.
@@ -1019,6 +1021,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
               matched: result.fanout.matched,
               skippedDisabled: result.fanout.skippedDisabled,
               skippedUnsubscribed: result.fanout.skippedUnsubscribed,
+              skippedFiltered: result.fanout.skippedFiltered,
             },
     });
   };
@@ -1126,6 +1129,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
                   matched: result.fanout.matched,
                   skippedDisabled: result.fanout.skippedDisabled,
                   skippedUnsubscribed: result.fanout.skippedUnsubscribed,
+                  skippedFiltered: result.fanout.skippedFiltered,
                 },
         });
       } catch (err) {
@@ -1246,6 +1250,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("retryPolicy" in body
         ? { retryPolicy: body["retryPolicy"] as RetryPolicy | null }
         : {}),
+      ...("filter" in body
+        ? { filter: body["filter"] as EndpointFilter | null }
+        : {}),
     };
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
@@ -1277,6 +1284,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
         : {}),
       ...("retryPolicy" in body
         ? { retryPolicy: body["retryPolicy"] as RetryPolicy | null }
+        : {}),
+      ...("filter" in body
+        ? { filter: body["filter"] as EndpointFilter | null }
         : {}),
     };
     const updated = await deps.endpoints.update(id, patch);

@@ -18,6 +18,7 @@ import {
   UnknownEndpointError,
   type DeliveryHealthOutcome,
   type Endpoint,
+  type EndpointFilter,
   type EndpointOutcomeResult,
   type EndpointStore,
   type EndpointUpdate,
@@ -43,6 +44,7 @@ interface EndpointRow {
   readonly event_types: string | null;
   readonly headers: string | null;
   readonly retry_policy: string | null;
+  readonly filter: string | null;
   readonly disabled: boolean;
   readonly consecutive_failures: string; // BIGINT as string
   readonly first_failure_at: string | null;
@@ -62,6 +64,7 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
     eventTypes: row.event_types === null ? null : (JSON.parse(row.event_types) as string[]),
     headers: row.headers === null ? null : (JSON.parse(row.headers) as Record<string, string>),
     retryPolicy: row.retry_policy === null ? null : (JSON.parse(row.retry_policy) as RetryPolicy),
+    filter: row.filter === null ? null : (JSON.parse(row.filter) as EndpointFilter),
     disabled: row.disabled,
     consecutiveFailures: Number(row.consecutive_failures),
     firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
@@ -115,6 +118,7 @@ export class PostgresEndpointStore implements EndpointStore {
       eventTypes: normalized.eventTypes,
       headers: normalized.headers,
       retryPolicy: normalized.retryPolicy,
+      filter: normalized.filter,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,
@@ -124,15 +128,16 @@ export class PostgresEndpointStore implements EndpointStore {
     };
     await this.#pool.query(
       "INSERT INTO endpoints (id, app_id, url, secret, previous_secrets, description," +
-        " event_types, headers, retry_policy, disabled, consecutive_failures," +
+        " event_types, headers, retry_policy, filter, disabled, consecutive_failures," +
         " first_failure_at, last_failure_at, created_at, updated_at)" +
-        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
       [
         endpoint.id, endpoint.appId, endpoint.url, endpoint.secret,
         JSON.stringify(endpoint.previousSecrets), endpoint.description,
         endpoint.eventTypes !== null ? JSON.stringify(endpoint.eventTypes) : null,
         endpoint.headers !== null ? JSON.stringify(endpoint.headers) : null,
         endpoint.retryPolicy !== null ? JSON.stringify(endpoint.retryPolicy) : null,
+        endpoint.filter !== null ? JSON.stringify(endpoint.filter) : null,
         endpoint.disabled,
         endpoint.consecutiveFailures, endpoint.firstFailureAt, endpoint.lastFailureAt,
         endpoint.createdAt, endpoint.updatedAt,
@@ -166,13 +171,14 @@ export class PostgresEndpointStore implements EndpointStore {
       const next = applyEndpointUpdate(endpoint, patch, this.#now());
       await client.query(
         "UPDATE endpoints SET url=$1, secret=$2, description=$3, event_types=$4, headers=$5," +
-          " retry_policy=$6, disabled=$7, consecutive_failures=$8, first_failure_at=$9," +
-          " last_failure_at=$10, updated_at=$11 WHERE id=$12",
+          " retry_policy=$6, filter=$7, disabled=$8, consecutive_failures=$9," +
+          " first_failure_at=$10, last_failure_at=$11, updated_at=$12 WHERE id=$13",
         [
           next.url, next.secret, next.description,
           next.eventTypes !== null ? JSON.stringify(next.eventTypes) : null,
           next.headers !== null ? JSON.stringify(next.headers) : null,
           next.retryPolicy !== null ? JSON.stringify(next.retryPolicy) : null,
+          next.filter !== null ? JSON.stringify(next.filter) : null,
           next.disabled, next.consecutiveFailures, next.firstFailureAt, next.lastFailureAt,
           next.updatedAt, next.id,
         ],
@@ -304,6 +310,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   event_types          TEXT,
   headers              TEXT,
   retry_policy         TEXT,
+  filter               TEXT,
   disabled             BOOLEAN NOT NULL DEFAULT FALSE,
   consecutive_failures BIGINT  NOT NULL DEFAULT 0,
   first_failure_at     BIGINT,

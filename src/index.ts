@@ -186,6 +186,8 @@ export {
   UnknownEndpointError,
   createEndpointId,
   endpointSubscribesTo,
+  matchesFilter,
+  normalizeEndpointFilter,
   normalizeNewEndpoint,
   normalizeRetryPolicy,
   applyEndpointUpdate,
@@ -198,6 +200,8 @@ export {
   MAX_RETRY_POLICY_RETRIES,
   MAX_RETRY_POLICY_DELAY_MS,
   MAX_NON_RETRYABLE_STATUSES,
+  MAX_FILTER_NODES,
+  MAX_FILTER_DEPTH,
   type Endpoint,
   type ExpiringSecret,
   type NewEndpoint,
@@ -207,6 +211,11 @@ export {
   type NormalizedNewEndpoint,
   type DeliveryHealthOutcome,
   type EndpointHealthEvaluation,
+  type EndpointFilter,
+  type FieldFilter,
+  type AndFilter,
+  type OrFilter,
+  type NotFilter,
 } from "./endpoints/endpoint.js";
 
 export {
@@ -407,6 +416,8 @@ export {
   type DeliveryUsageDay,
   type QuotaStatus,
   type GetUsageParams,
+  type RetryPolicyView,
+  type EndpointFilterView,
   type EventTypeView,
   type CreateEventTypeInput,
   type UpdateEventTypeInput,

@@ -28,6 +28,52 @@ import {
   type RetryPolicy,
 } from "../delivery/retry-policy.js";
 
+// ---- Endpoint Filter DSL ----
+
+/**
+ * A comparison against a scalar value extracted from the message payload via a
+ * dot-path. If the path is absent or the types are incompatible for ordered
+ * operators, the filter evaluates to `false`. The `contains` op checks
+ * substring membership for string payloads and element membership for arrays.
+ */
+export interface FieldFilter {
+  readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "startsWith";
+  /** Dot-separated key path into the message payload, e.g. `"data.status"`. */
+  readonly path: string;
+  readonly value: string | number | boolean | null;
+}
+
+/** Logical AND: all child filters must match. */
+export interface AndFilter {
+  readonly op: "and";
+  readonly filters: readonly EndpointFilter[];
+}
+
+/** Logical OR: at least one child filter must match. */
+export interface OrFilter {
+  readonly op: "or";
+  readonly filters: readonly EndpointFilter[];
+}
+
+/** Logical NOT: inverts the child filter. */
+export interface NotFilter {
+  readonly op: "not";
+  readonly filter: EndpointFilter;
+}
+
+/**
+ * A filter expression that gates delivery based on the message payload.
+ * `null` on an endpoint means no filter — deliver all matching event types.
+ * When set, a delivery is only enqueued when the payload matches this
+ * expression. See {@link matchesFilter} and {@link normalizeEndpointFilter}.
+ */
+export type EndpointFilter = FieldFilter | AndFilter | OrFilter | NotFilter;
+
+/** Maximum total nodes in a single filter tree. Prevents runaway evaluation. */
+export const MAX_FILTER_NODES = 20;
+/** Maximum nesting depth of logical combinators. Prevents deeply nested trees. */
+export const MAX_FILTER_DEPTH = 5;
+
 /**
  * A signing secret that was retired by a rotation but is still used to sign
  * deliveries until {@link ExpiringSecret.expiresAt}. This is what makes secret
@@ -92,6 +138,14 @@ export interface Endpoint {
    */
   readonly retryPolicy: RetryPolicy | null;
   /**
+   * Payload filter — if set, a delivery is only enqueued when the message
+   * payload matches this expression. `null` means no filter (deliver all
+   * matching event types). Evaluated at fan-out time against the parsed payload
+   * so non-matching messages are dropped before any queue work is created.
+   * See {@link matchesFilter} and {@link normalizeEndpointFilter}.
+   */
+  readonly filter: EndpointFilter | null;
+  /**
    * When `true`, the endpoint is administratively paused. Fan-out skips it, and a
    * resolver declines to resolve it (so an in-flight task fails rather than
    * delivers — see `endpoint-resolver.ts`).
@@ -152,6 +206,12 @@ export interface NewEndpoint {
    * non-negative number.
    */
   readonly retryPolicy?: RetryPolicy | null;
+  /**
+   * Payload filter. Omit (or pass `null`) for no filter — deliver all matching
+   * event types. When set, only messages whose payload matches the expression
+   * trigger a delivery. See {@link EndpointFilter}.
+   */
+  readonly filter?: EndpointFilter | null;
 }
 
 /**
@@ -180,6 +240,12 @@ export interface EndpointUpdate {
    * Same shape and constraints as {@link NewEndpoint.retryPolicy}.
    */
   readonly retryPolicy?: RetryPolicy | null;
+  /**
+   * Replace the payload filter. Pass `null` to remove the filter (deliver all
+   * matching event types again). Same shape and constraints as
+   * {@link NewEndpoint.filter}.
+   */
+  readonly filter?: EndpointFilter | null;
 }
 
 /**
@@ -439,6 +505,7 @@ export interface NormalizedNewEndpoint {
   readonly disabled: boolean;
   readonly headers: Readonly<Record<string, string>> | null;
   readonly retryPolicy: RetryPolicy | null;
+  readonly filter: EndpointFilter | null;
 }
 
 /**
@@ -557,6 +624,170 @@ export function normalizeRetryPolicy(policy: unknown): RetryPolicy | null {
   return base;
 }
 
+const FIELD_FILTER_OPS = new Set<string>([
+  "eq", "neq", "gt", "gte", "lt", "lte", "contains", "startsWith",
+]);
+const LOGICAL_OPS = new Set<string>(["and", "or"]);
+
+function validateFilterNode(
+  raw: unknown,
+  depth: number,
+  counter: { count: number },
+): EndpointFilter {
+  if (depth >= MAX_FILTER_DEPTH) {
+    throw new TypeError(
+      `filter exceeds maximum nesting depth of ${MAX_FILTER_DEPTH}`,
+    );
+  }
+  if (++counter.count > MAX_FILTER_NODES) {
+    throw new TypeError(
+      `filter exceeds maximum of ${MAX_FILTER_NODES} nodes`,
+    );
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new TypeError("each filter node must be a plain object");
+  }
+  const node = raw as Record<string, unknown>;
+  const op = node["op"];
+  if (typeof op !== "string") {
+    throw new TypeError('each filter node must have an "op" string field');
+  }
+  if (LOGICAL_OPS.has(op)) {
+    const filters = node["filters"];
+    if (!Array.isArray(filters) || filters.length === 0) {
+      throw new TypeError(`"${op}" filter must have a non-empty "filters" array`);
+    }
+    if (filters.length > 10) {
+      throw new TypeError(
+        `"${op}" filter may not have more than 10 children`,
+      );
+    }
+    const validated = filters.map((f) => validateFilterNode(f, depth + 1, counter));
+    return { op: op as "and" | "or", filters: validated };
+  }
+  if (op === "not") {
+    const inner = node["filter"];
+    if (inner === undefined) {
+      throw new TypeError('"not" filter must have a "filter" field');
+    }
+    return { op: "not", filter: validateFilterNode(inner, depth + 1, counter) };
+  }
+  if (FIELD_FILTER_OPS.has(op)) {
+    const path = node["path"];
+    if (typeof path !== "string" || path.length === 0) {
+      throw new TypeError('field filter must have a non-empty "path" string');
+    }
+    if (path.length > 100) {
+      throw new TypeError("filter path must not exceed 100 characters");
+    }
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/.test(path)) {
+      throw new TypeError(
+        `filter path "${path}" is invalid: use dot-separated identifier segments (letters, digits, underscores)`,
+      );
+    }
+    const value = node["value"];
+    if (
+      value !== null &&
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      throw new TypeError('filter "value" must be a string, number, boolean, or null');
+    }
+    if (
+      (op === "contains" || op === "startsWith") &&
+      value !== null &&
+      typeof value !== "string"
+    ) {
+      throw new TypeError(`"${op}" filter "value" must be a string or null`);
+    }
+    return {
+      op: op as FieldFilter["op"],
+      path,
+      value: value as string | number | boolean | null,
+    };
+  }
+  throw new TypeError(`unknown filter op "${op}"`);
+}
+
+/**
+ * Validate and normalize a payload filter. Returns `null` for absent/`null`
+ * input (no filter). Throws {@link TypeError} on malformed structure, unknown
+ * ops, invalid paths, over-deep nesting ({@link MAX_FILTER_DEPTH}), or too
+ * many nodes ({@link MAX_FILTER_NODES}).
+ */
+export function normalizeEndpointFilter(raw: unknown): EndpointFilter | null {
+  if (raw === undefined || raw === null) return null;
+  return validateFilterNode(raw, 0, { count: 0 });
+}
+
+/** Extract a value at a dot-path from a parsed payload object. */
+function getPathValue(path: string, obj: unknown): unknown {
+  const parts = path.split(".");
+  let cur: unknown = obj;
+  for (const part of parts) {
+    if (cur === null || typeof cur !== "object" || Array.isArray(cur)) {
+      return undefined;
+    }
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+function evalFilter(filter: EndpointFilter, payload: unknown): boolean {
+  if (filter.op === "and") {
+    return filter.filters.every((f) => evalFilter(f, payload));
+  }
+  if (filter.op === "or") {
+    return filter.filters.some((f) => evalFilter(f, payload));
+  }
+  if (filter.op === "not") {
+    return !evalFilter(filter.filter, payload);
+  }
+  // FieldFilter
+  const actual = getPathValue(filter.path, payload);
+  const expected = filter.value;
+  switch (filter.op) {
+    case "eq":
+      return actual === expected;
+    case "neq":
+      return actual !== expected;
+    case "gt":
+      return typeof actual === "number" && typeof expected === "number" && actual > expected;
+    case "gte":
+      return typeof actual === "number" && typeof expected === "number" && actual >= expected;
+    case "lt":
+      return typeof actual === "number" && typeof expected === "number" && actual < expected;
+    case "lte":
+      return typeof actual === "number" && typeof expected === "number" && actual <= expected;
+    case "contains":
+      if (typeof actual === "string" && typeof expected === "string") {
+        return actual.includes(expected);
+      }
+      if (Array.isArray(actual)) {
+        return actual.includes(expected);
+      }
+      return false;
+    case "startsWith":
+      return (
+        typeof actual === "string" && typeof expected === "string" && actual.startsWith(expected)
+      );
+  }
+}
+
+/**
+ * Evaluate a filter expression against a parsed message payload. A `null` or
+ * `undefined` filter always returns `true` (no filter = deliver everything).
+ * Pure and shared so fan-out and any caller agree exactly.
+ */
+export function matchesFilter(
+  filter: EndpointFilter | null | undefined,
+  payload: unknown,
+): boolean {
+  if (filter == null) return true;
+  return evalFilter(filter, payload);
+}
+
 /**
  * Validate and normalize a create call, throwing {@link TypeError} on malformed
  * input. Shared by every backend so they enforce an identical intake contract. A
@@ -573,6 +804,7 @@ export function normalizeNewEndpoint(input: NewEndpoint): NormalizedNewEndpoint 
     disabled: normalizeDisabled(input.disabled),
     headers: normalizeHeaders(input.headers),
     retryPolicy: normalizeRetryPolicy(input.retryPolicy),
+    filter: normalizeEndpointFilter(input.filter),
   };
 }
 
@@ -615,6 +847,10 @@ export function applyEndpointUpdate(
       "retryPolicy" in patch
         ? normalizeRetryPolicy(patch.retryPolicy)
         : current.retryPolicy,
+    filter:
+      "filter" in patch
+        ? normalizeEndpointFilter(patch.filter)
+        : current.filter,
     disabled: nextDisabled,
     consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
     firstFailureAt: reEnabled ? null : current.firstFailureAt,

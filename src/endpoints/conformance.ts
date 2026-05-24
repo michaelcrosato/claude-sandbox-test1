@@ -17,6 +17,7 @@ import {
   activeSigningSecrets,
   DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   UnknownEndpointError,
+  type EndpointFilter,
   type EndpointStore,
   type NewEndpoint,
 } from "./endpoint.js";
@@ -525,6 +526,47 @@ export function describeEndpointStoreContract(
         expect(reEnabled.consecutiveFailures).toBe(0);
         expect(reEnabled.firstFailureAt).toBeNull();
         expect(reEnabled.lastFailureAt).toBeNull();
+      });
+    });
+
+    describe("filter", () => {
+      it("defaults filter to null when not provided on create", async () => {
+        const e = await store.create(NEW);
+        expect(e.filter).toBeNull();
+        expect((await store.get(e.id))!.filter).toBeNull();
+      });
+
+      it("stores a filter on create and round-trips it via get", async () => {
+        const filter: EndpointFilter = {
+          op: "and",
+          filters: [
+            { op: "eq", path: "env", value: "prod" },
+            { op: "gt", path: "amount", value: 0 },
+          ],
+        };
+        const e = await store.create({ ...NEW, filter });
+        expect(e.filter).toEqual(filter);
+        expect((await store.get(e.id))!.filter).toEqual(filter);
+      });
+
+      it("update can set, replace, and clear filter", async () => {
+        const f1: EndpointFilter = { op: "eq", path: "env", value: "prod" };
+        const e = await store.create({ ...NEW, filter: f1 });
+        // Replace.
+        const f2: EndpointFilter = { op: "eq", path: "env", value: "staging" };
+        const replaced = await store.update(e.id, { filter: f2 });
+        expect(replaced.filter).toEqual(f2);
+        // Clear.
+        const cleared = await store.update(e.id, { filter: null });
+        expect(cleared.filter).toBeNull();
+        expect((await store.get(e.id))!.filter).toBeNull();
+      });
+
+      it("update preserves filter when filter is not in the patch", async () => {
+        const filter: EndpointFilter = { op: "eq", path: "x", value: 1 };
+        const e = await store.create({ ...NEW, filter });
+        const updated = await store.update(e.id, { description: "changed" });
+        expect(updated.filter).toEqual(filter);
       });
     });
   });

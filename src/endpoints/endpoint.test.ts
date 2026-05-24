@@ -7,9 +7,13 @@ import {
   DEFAULT_SECRET_ROTATION_OVERLAP_MS,
   endpointSubscribesTo,
   evaluateEndpointHealth,
+  matchesFilter,
   MAX_CUSTOM_HEADERS,
+  MAX_FILTER_DEPTH,
+  MAX_FILTER_NODES,
   MAX_NON_RETRYABLE_STATUSES,
   MAX_PREVIOUS_SECRETS,
+  normalizeEndpointFilter,
   normalizeHeaders,
   normalizeNewEndpoint,
   normalizeRetryPolicy,
@@ -186,6 +190,7 @@ describe("applyEndpointUpdate", () => {
     eventTypes: ["a"],
     headers: null,
     retryPolicy: null,
+    filter: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -282,6 +287,7 @@ describe("evaluateEndpointHealth", () => {
     eventTypes: null,
     headers: null,
     retryPolicy: null,
+    filter: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -411,6 +417,7 @@ describe("rotateEndpointSecret", () => {
     eventTypes: null,
     headers: null,
     retryPolicy: null,
+    filter: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -485,5 +492,136 @@ describe("rotateEndpointSecret", () => {
     expect(() =>
       rotateEndpointSecret(base, "whsec_v2", 5_000, Number.POSITIVE_INFINITY),
     ).toThrow(TypeError);
+  });
+});
+
+describe("matchesFilter", () => {
+  it("a null filter always matches", () => {
+    expect(matchesFilter(null, { a: 1 })).toBe(true);
+    expect(matchesFilter(null, null)).toBe(true);
+    expect(matchesFilter(null, undefined)).toBe(true);
+  });
+
+  it("eq: matches when path value equals the operand", () => {
+    expect(matchesFilter({ op: "eq", path: "type", value: "order.paid" }, { type: "order.paid" })).toBe(true);
+    expect(matchesFilter({ op: "eq", path: "type", value: "order.paid" }, { type: "other" })).toBe(false);
+  });
+
+  it("neq: matches when path value differs from the operand", () => {
+    expect(matchesFilter({ op: "neq", path: "env", value: "prod" }, { env: "staging" })).toBe(true);
+    expect(matchesFilter({ op: "neq", path: "env", value: "prod" }, { env: "prod" })).toBe(false);
+  });
+
+  it("gt / gte / lt / lte: numeric comparisons on dot-path values", () => {
+    expect(matchesFilter({ op: "gt", path: "amount", value: 100 }, { amount: 200 })).toBe(true);
+    expect(matchesFilter({ op: "gt", path: "amount", value: 100 }, { amount: 100 })).toBe(false);
+    expect(matchesFilter({ op: "gte", path: "amount", value: 100 }, { amount: 100 })).toBe(true);
+    expect(matchesFilter({ op: "lt", path: "amount", value: 100 }, { amount: 50 })).toBe(true);
+    expect(matchesFilter({ op: "lte", path: "amount", value: 100 }, { amount: 100 })).toBe(true);
+  });
+
+  it("contains: substring check on string values", () => {
+    expect(matchesFilter({ op: "contains", path: "msg", value: "fail" }, { msg: "payment failed" })).toBe(true);
+    expect(matchesFilter({ op: "contains", path: "msg", value: "fail" }, { msg: "ok" })).toBe(false);
+  });
+
+  it("startsWith: prefix check on string values", () => {
+    expect(matchesFilter({ op: "startsWith", path: "id", value: "usr_" }, { id: "usr_42" })).toBe(true);
+    expect(matchesFilter({ op: "startsWith", path: "id", value: "usr_" }, { id: "org_42" })).toBe(false);
+  });
+
+  it("dot-path resolves nested object keys", () => {
+    expect(matchesFilter({ op: "eq", path: "user.role", value: "admin" }, { user: { role: "admin" } })).toBe(true);
+    expect(matchesFilter({ op: "eq", path: "user.role", value: "admin" }, { user: { role: "viewer" } })).toBe(false);
+    expect(matchesFilter({ op: "eq", path: "user.role", value: "admin" }, { user: null })).toBe(false);
+  });
+
+  it("returns false (no match) when path is absent in payload", () => {
+    expect(matchesFilter({ op: "eq", path: "missing", value: "x" }, { other: "x" })).toBe(false);
+  });
+
+  it("and: true only when all sub-filters match", () => {
+    const filter = {
+      op: "and" as const,
+      filters: [
+        { op: "eq" as const, path: "env", value: "prod" },
+        { op: "gt" as const, path: "amount", value: 0 },
+      ],
+    };
+    expect(matchesFilter(filter, { env: "prod", amount: 5 })).toBe(true);
+    expect(matchesFilter(filter, { env: "prod", amount: -1 })).toBe(false);
+    expect(matchesFilter(filter, { env: "staging", amount: 5 })).toBe(false);
+  });
+
+  it("or: true when any sub-filter matches", () => {
+    const filter = {
+      op: "or" as const,
+      filters: [
+        { op: "eq" as const, path: "type", value: "a" },
+        { op: "eq" as const, path: "type", value: "b" },
+      ],
+    };
+    expect(matchesFilter(filter, { type: "a" })).toBe(true);
+    expect(matchesFilter(filter, { type: "b" })).toBe(true);
+    expect(matchesFilter(filter, { type: "c" })).toBe(false);
+  });
+
+  it("not: inverts the sub-filter result", () => {
+    const filter = { op: "not" as const, filter: { op: "eq" as const, path: "deleted", value: true } };
+    expect(matchesFilter(filter, { deleted: false })).toBe(true);
+    expect(matchesFilter(filter, { deleted: true })).toBe(false);
+  });
+
+  it("returns false for any filter when payload is null or non-object", () => {
+    const f = { op: "eq" as const, path: "x", value: 1 };
+    expect(matchesFilter(f, null)).toBe(false);
+    expect(matchesFilter(f, "string")).toBe(false);
+    expect(matchesFilter(f, 42)).toBe(false);
+  });
+});
+
+describe("normalizeEndpointFilter", () => {
+  it("returns null for null / undefined input", () => {
+    expect(normalizeEndpointFilter(null)).toBeNull();
+    expect(normalizeEndpointFilter(undefined)).toBeNull();
+  });
+
+  it("round-trips a simple FieldFilter", () => {
+    const f = { op: "eq" as const, path: "type", value: "x" };
+    expect(normalizeEndpointFilter(f)).toEqual(f);
+  });
+
+  it("round-trips a nested logical filter", () => {
+    const f = {
+      op: "and" as const,
+      filters: [
+        { op: "eq" as const, path: "env", value: "prod" },
+        { op: "not" as const, filter: { op: "eq" as const, path: "deleted", value: true } },
+      ],
+    };
+    expect(normalizeEndpointFilter(f)).toEqual(f);
+  });
+
+  it(`rejects a filter that exceeds MAX_FILTER_DEPTH (${MAX_FILTER_DEPTH})`, () => {
+    // Build a chain of "not" wrappers one level deeper than allowed.
+    let f: object = { op: "eq", path: "x", value: 1 };
+    for (let i = 0; i < MAX_FILTER_DEPTH; i++) f = { op: "not", filter: f };
+    expect(() => normalizeEndpointFilter(f)).toThrow(TypeError);
+  });
+
+  it(`rejects a filter with more than MAX_FILTER_NODES (${MAX_FILTER_NODES}) nodes`, () => {
+    const filters = Array.from({ length: MAX_FILTER_NODES }, (_, i) => ({
+      op: "eq" as const, path: `f${i}`, value: i,
+    }));
+    expect(() => normalizeEndpointFilter({ op: "and", filters })).toThrow(TypeError);
+  });
+
+  it("rejects an unknown op string", () => {
+    expect(() => normalizeEndpointFilter({ op: "regex", path: "x", value: ".*" })).toThrow(TypeError);
+  });
+
+  it("rejects a non-object filter", () => {
+    expect(() => normalizeEndpointFilter("bad")).toThrow(TypeError);
+    expect(() => normalizeEndpointFilter(42)).toThrow(TypeError);
   });
 });

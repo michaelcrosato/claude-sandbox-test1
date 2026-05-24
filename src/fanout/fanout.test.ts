@@ -29,6 +29,7 @@ function endpoint(overrides: Partial<Endpoint>): Endpoint {
     eventTypes: null,
     headers: null,
     retryPolicy: null,
+    filter: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -90,7 +91,37 @@ describe("selectFanoutTargets", () => {
       matched: [],
       skippedDisabled: [],
       skippedUnsubscribed: [],
+      skippedFiltered: [],
     });
+  });
+
+  it("skips an enabled, subscribed endpoint whose payload filter does not match", () => {
+    const filtered = endpoint({
+      id: "ep_a",
+      filter: { op: "eq", path: "env", value: "prod" },
+    });
+    const unfiltered = endpoint({ id: "ep_b" });
+    const sel = selectFanoutTargets([filtered, unfiltered], "user.created", { env: "staging" });
+    expect(sel.matched.map((e) => e.id)).toEqual(["ep_b"]);
+    expect(sel.skippedFiltered.map((e) => e.id)).toEqual(["ep_a"]);
+    expect(sel.skippedDisabled).toEqual([]);
+    expect(sel.skippedUnsubscribed).toEqual([]);
+  });
+
+  it("matches an endpoint whose payload filter evaluates to true", () => {
+    const filtered = endpoint({
+      filter: { op: "eq", path: "env", value: "prod" },
+    });
+    const sel = selectFanoutTargets([filtered], "user.created", { env: "prod" });
+    expect(sel.matched).toEqual([filtered]);
+    expect(sel.skippedFiltered).toEqual([]);
+  });
+
+  it("disabled takes priority over filter mismatch", () => {
+    const ep = endpoint({ disabled: true, filter: { op: "eq", path: "env", value: "prod" } });
+    const sel = selectFanoutTargets([ep], "user.created", { env: "staging" });
+    expect(sel.skippedDisabled).toEqual([ep]);
+    expect(sel.skippedFiltered).toEqual([]);
   });
 });
 
@@ -124,7 +155,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://d.test/h", disabled: true }); // disabled
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
       { endpoints: env.endpoints, queue: env.queue },
     );
 
@@ -149,7 +180,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ disabled: true });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(0);
@@ -165,7 +196,7 @@ describe("fanOut", () => {
     await env.endpoints.create({ appId: "app_2", url: "https://other.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(1);
@@ -179,7 +210,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://b.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e" },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}" },
       { endpoints: env.endpoints, queue: env.queue },
       { availableAt: 5_000 },
     );

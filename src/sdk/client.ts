@@ -105,6 +105,7 @@ export interface FanoutSummary {
   readonly matched: number;
   readonly skippedDisabled: number;
   readonly skippedUnsubscribed: number;
+  readonly skippedFiltered: number;
 }
 
 /** The result of {@link PosthornClient.sendMessage}. */
@@ -398,7 +399,6 @@ export interface MessageWithDeliveries {
   readonly deliveries: readonly DeliveryView[];
 }
 
-/** The non-secret view of an endpoint (list / get / update / create). */
 /**
  * A custom retry schedule, as stored on an endpoint. `delaysMs[i]` is the wait
  * after the `(i+1)`-th attempt; the total attempts = `delaysMs.length + 1`.
@@ -413,6 +413,17 @@ export interface RetryPolicyView {
   readonly nonRetryableStatuses?: readonly number[];
 }
 
+/**
+ * A payload filter expression on an endpoint. Field filters compare a dot-path
+ * value against a scalar; logical combinators compose them. `null` means no
+ * filter — deliver all matching event types.
+ */
+export type EndpointFilterView =
+  | { readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "startsWith"; readonly path: string; readonly value: string | number | boolean | null }
+  | { readonly op: "and" | "or"; readonly filters: readonly EndpointFilterView[] }
+  | { readonly op: "not"; readonly filter: EndpointFilterView };
+
+/** The non-secret view of an endpoint (list / get / update / create). */
 export interface EndpointView {
   readonly id: string;
   readonly appId: string;
@@ -430,6 +441,12 @@ export interface EndpointView {
    * When set, `delaysMs` replaces the global schedule for deliveries to this endpoint.
    */
   readonly retryPolicy: RetryPolicyView | null;
+  /**
+   * Payload filter expression. When set, only messages whose parsed JSON payload
+   * matches the filter are delivered. `null` means no filter — all matching event
+   * types are delivered regardless of payload content.
+   */
+  readonly filter: EndpointFilterView | null;
   /**
    * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
    * automatically once it has been failing continuously (see
@@ -479,6 +496,11 @@ export interface CreateEndpointInput {
    * Custom retry schedule. Omit or pass `null` to use the system-wide default policy.
    */
   readonly retryPolicy?: RetryPolicyView | null;
+  /**
+   * Payload filter expression. Omit or pass `null` for no filter (deliver all
+   * matching event types regardless of payload content).
+   */
+  readonly filter?: EndpointFilterView | null;
 }
 
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
@@ -495,6 +517,11 @@ export interface UpdateEndpointInput {
    * Replace the retry schedule. Pass `null` to revert to the system-wide default policy.
    */
   readonly retryPolicy?: RetryPolicyView | null;
+  /**
+   * Replace the payload filter expression. Pass `null` to clear the filter (deliver
+   * all matching event types regardless of payload content).
+   */
+  readonly filter?: EndpointFilterView | null;
 }
 
 /** Optional body of {@link PosthornClient.testEndpoint}. */
@@ -856,6 +883,7 @@ export class PosthornClient {
     if (input.disabled !== undefined) body["disabled"] = input.disabled;
     if (input.headers !== undefined) body["headers"] = input.headers;
     if (input.retryPolicy !== undefined) body["retryPolicy"] = input.retryPolicy;
+    if (input.filter !== undefined) body["filter"] = input.filter;
     return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
@@ -877,6 +905,7 @@ export class PosthornClient {
     if (patch.disabled !== undefined) body["disabled"] = patch.disabled;
     if (patch.headers !== undefined) body["headers"] = patch.headers;
     if (patch.retryPolicy !== undefined) body["retryPolicy"] = patch.retryPolicy;
+    if (patch.filter !== undefined) body["filter"] = patch.filter;
     return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,

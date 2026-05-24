@@ -19,6 +19,7 @@
 
 import {
   endpointSubscribesTo,
+  matchesFilter,
   type Endpoint,
   type EndpointStore,
 } from "../endpoints/endpoint.js";
@@ -42,36 +43,42 @@ export interface FanoutSelection {
   readonly skippedDisabled: readonly Endpoint[];
   /** Enabled endpoints skipped because they do not subscribe to this event type. */
   readonly skippedUnsubscribed: readonly Endpoint[];
+  /** Enabled, subscribed endpoints skipped because their payload filter did not match. */
+  readonly skippedFiltered: readonly Endpoint[];
 }
 
 /**
- * Partition `endpoints` for delivery of `eventType`: an endpoint is `matched`
- * only when it is **enabled** *and* **subscribes** to the type (see
- * {@link endpointSubscribesTo}); otherwise it is skipped, with the reason
- * recorded. Pure and order-preserving (within each bucket, input order holds),
- * so fan-out routing is fully deterministic and unit-testable in isolation.
+ * Partition `endpoints` for delivery of `eventType` + `payload`: an endpoint
+ * is `matched` only when it is **enabled**, **subscribes** to the type (see
+ * {@link endpointSubscribesTo}), and its payload filter matches (see
+ * {@link matchesFilter}). Otherwise it is skipped, with the reason recorded.
+ * Pure and order-preserving (within each bucket, input order holds), so
+ * fan-out routing is fully deterministic and unit-testable in isolation.
  *
- * A disabled endpoint is reported as `skippedDisabled` regardless of its filter,
- * so "disabled" always wins over "subscribed" — fan-out never enqueues work for
- * a paused endpoint.
+ * Priority: disabled > unsubscribed > filter-mismatch > matched. A disabled
+ * endpoint is always `skippedDisabled` regardless of subscription or filter.
  */
 export function selectFanoutTargets(
   endpoints: readonly Endpoint[],
   eventType: string,
+  payload?: unknown,
 ): FanoutSelection {
   const matched: Endpoint[] = [];
   const skippedDisabled: Endpoint[] = [];
   const skippedUnsubscribed: Endpoint[] = [];
+  const skippedFiltered: Endpoint[] = [];
   for (const endpoint of endpoints) {
     if (endpoint.disabled) {
       skippedDisabled.push(endpoint);
     } else if (!endpointSubscribesTo(endpoint, eventType)) {
       skippedUnsubscribed.push(endpoint);
+    } else if (!matchesFilter(endpoint.filter, payload)) {
+      skippedFiltered.push(endpoint);
     } else {
       matched.push(endpoint);
     }
   }
-  return { matched, skippedDisabled, skippedUnsubscribed };
+  return { matched, skippedDisabled, skippedUnsubscribed, skippedFiltered };
 }
 
 /** The stores fan-out reads from and writes to. */
@@ -104,6 +111,8 @@ export interface FanoutResult {
   readonly skippedDisabled: number;
   /** Number of endpoints skipped because they do not subscribe to the event type. */
   readonly skippedUnsubscribed: number;
+  /** Number of enabled, subscribed endpoints skipped because their payload filter did not match. */
+  readonly skippedFiltered: number;
 }
 
 /**
@@ -125,12 +134,18 @@ export interface FanoutResult {
  * source of a re-fan-out (a producer's idempotent retry).
  */
 export async function fanOut(
-  message: Pick<Message, "id" | "appId" | "eventType">,
+  message: Pick<Message, "id" | "appId" | "eventType" | "payload">,
   deps: FanoutDeps,
   options: FanoutOptions = {},
 ): Promise<FanoutResult> {
   const all = await deps.endpoints.listByApp(message.appId);
-  const selection = selectFanoutTargets(all, message.eventType);
+  let parsedPayload: unknown;
+  try {
+    parsedPayload = JSON.parse(message.payload);
+  } catch {
+    parsedPayload = null;
+  }
+  const selection = selectFanoutTargets(all, message.eventType, parsedPayload);
 
   const availableAt = options.availableAt ?? null;
   const tasks: DeliveryTask[] = [];
@@ -151,6 +166,7 @@ export async function fanOut(
     matched: selection.matched.length,
     skippedDisabled: selection.skippedDisabled.length,
     skippedUnsubscribed: selection.skippedUnsubscribed.length,
+    skippedFiltered: selection.skippedFiltered.length,
   };
 }
 

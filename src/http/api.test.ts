@@ -857,6 +857,65 @@ describe("createApi — endpoints CRUD", () => {
     );
     expect(body(cleared).retryPolicy).toBeNull();
   });
+
+  it("creates an endpoint with a payload filter and round-trips it", async () => {
+    const { api, secret } = await setup();
+    const filter = { op: "eq", path: "env", value: "prod" };
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.test/h", filter }, secret),
+    );
+    expect(created.status).toBe(201);
+    expect(body(created).filter).toEqual(filter);
+    const id: string = body(created).id as string;
+    const fetched = await api(
+      jsonRequest("GET", `/v1/endpoints/${id}`, {}, secret),
+    );
+    expect(body(fetched).filter).toEqual(filter);
+  });
+
+  it("updates and clears a payload filter via PATCH", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://a.test/h" }, secret),
+    );
+    const id: string = body(created).id as string;
+    expect(body(created).filter).toBeNull();
+
+    const filter = { op: "and", filters: [{ op: "eq", path: "x", value: 1 }] };
+    const updated = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { filter }, secret),
+    );
+    expect(body(updated).filter).toEqual(filter);
+
+    const cleared = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { filter: null }, secret),
+    );
+    expect(body(cleared).filter).toBeNull();
+  });
+
+  it("fan-out skippedFiltered count appears in send response", async () => {
+    const { api, secret } = await setup();
+    // Endpoint subscribed to user.created but only wants env=prod payloads.
+    await api(
+      jsonRequest(
+        "POST",
+        "/v1/endpoints",
+        { url: "https://a.test/h", filter: { op: "eq", path: "env", value: "prod" } },
+        secret,
+      ),
+    );
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages",
+        { eventType: "user.created", payload: { env: "staging" } },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(202);
+    expect(body(res).fanout.matched).toBe(0);
+    expect(body(res).fanout.skippedFiltered).toBe(1);
+  });
 });
 
 describe("createApi — POST /v1/endpoints/:id/rotate-secret", () => {
