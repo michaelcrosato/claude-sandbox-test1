@@ -515,6 +515,61 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("cancel (operator abort)", () => {
+      it("cancels a pending task: terminal, no lease, not claimable", async () => {
+        const enq = await queue.enqueue({ messageId: "m" });
+
+        const cancelled = await queue.cancel(enq.id);
+        expect(cancelled.id).toBe(enq.id);
+        expect(cancelled.status).toBe("cancelled");
+        expect(cancelled.leaseToken).toBeNull();
+        expect(cancelled.leaseExpiresAt).toBeNull();
+        expect(cancelled.nextAttemptAt).toBeNull();
+        expect(cancelled.attempts).toBe(0);
+        expect(cancelled.updatedAt).toBe(clock.now());
+        expect(await queue.get(enq.id)).toEqual(cancelled);
+
+        // A cancelled task is terminal — the worker must not claim it.
+        const claimed = await queue.claimDue({ nowMs: clock.now() });
+        expect(claimed).toHaveLength(0);
+      });
+
+      it("cancelled task can be revived via retry (resend)", async () => {
+        const enq = await queue.enqueue({ messageId: "m" });
+        await queue.cancel(enq.id);
+
+        const revived = await queue.retry(enq.id);
+        expect(revived.status).toBe("pending");
+        expect(revived.attempts).toBe(0);
+
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        expect(claimed?.id).toBe(enq.id);
+      });
+
+      it("throws UnknownDeliveryTaskError for an unknown id", async () => {
+        await expect(queue.cancel("dtask_nope")).rejects.toBeInstanceOf(
+          UnknownDeliveryTaskError,
+        );
+      });
+
+      it("rejects cancelling a non-pending task", async () => {
+        // delivering — in-flight, cannot abort.
+        await queue.enqueue({ messageId: "m" });
+        const [delivering] = await queue.claimDue({ nowMs: clock.now() });
+        await expect(queue.cancel(delivering!.id)).rejects.toBeInstanceOf(
+          DeliveryStateError,
+        );
+        // Task is still delivering (untouched).
+        expect((await queue.get(delivering!.id))?.status).toBe("delivering");
+
+        // succeeded — already terminal, nothing to cancel.
+        await queue.complete(delivering!.id, delivering!.leaseToken!);
+        await expect(queue.cancel(delivering!.id)).rejects.toBeInstanceOf(
+          DeliveryStateError,
+        );
+      });
+    });
+
     describe("lease expiry (crash / stall recovery)", () => {
       it("reclaims a lapsed lease with a fresh token and invalidates the old one", async () => {
         await queue.enqueue({ messageId: "m" });
@@ -844,6 +899,7 @@ export function describeDeliveryQueueContract(
           delivering: 0,
           succeeded: 0,
           dead_letter: 0,
+          cancelled: 0,
         });
       });
 
@@ -874,6 +930,7 @@ export function describeDeliveryQueueContract(
           delivering: 1,
           succeeded: 1,
           dead_letter: 1,
+          cancelled: 0,
         });
       });
 
@@ -884,6 +941,7 @@ export function describeDeliveryQueueContract(
           delivering: 0,
           succeeded: 0,
           dead_letter: 0,
+          cancelled: 0,
         });
 
         const [claimed] = await queue.claimDue({ nowMs: clock.now() });

@@ -275,7 +275,7 @@ export function isDeliveryAfterCursor(
  * counts into it, so every status is represented even when the queue is empty.
  */
 export function zeroDeliveryCounts(): Record<DeliveryStatus, number> {
-  return { pending: 0, delivering: 0, succeeded: 0, dead_letter: 0 };
+  return { pending: 0, delivering: 0, succeeded: 0, dead_letter: 0, cancelled: 0 };
 }
 
 /**
@@ -329,6 +329,20 @@ export interface DeliveryQueue {
    * {@link StaleLeaseError}.
    */
   retry(taskId: string): Promise<DeliveryTask>;
+  /**
+   * Cancel a `pending` delivery — the operator's abort path for a scheduled or
+   * queued task that should not be sent. Moves the task to the terminal
+   * `cancelled` state so the worker never claims it. An in-flight (`delivering`)
+   * task cannot be cancelled (the HTTP request is already in progress).
+   *
+   * Throws {@link UnknownDeliveryTaskError} if the id is unknown, or
+   * {@link DeliveryStateError} if the task is not `pending` — a `delivering`
+   * task is in flight; a terminal task has nothing left to cancel. That makes a
+   * second `cancel` of an already-cancelled task throw, which a bulk caller
+   * treats as an expected, catchable "already cancelled" condition, mirroring how
+   * a concurrent `retry` surfaces as {@link DeliveryStateError}.
+   */
+  cancel(taskId: string): Promise<DeliveryTask>;
   /**
    * List every delivery task for `messageId`, oldest-first (enqueue order).
    * Returns an empty array when the message has no tasks — because fan-out
@@ -650,6 +664,32 @@ export function applyManualRetry(
     status: next.status,
     attempts: next.attempts,
     nextAttemptAt: next.nextAttemptAt,
+    leaseExpiresAt: null,
+    leaseToken: null,
+    lastError: next.lastError,
+    updatedAt: nowMs,
+  };
+}
+
+/**
+ * Cancel a `pending` delivery task, moving it to the terminal `cancelled` state.
+ * Pure — the cancel transition comes from the delivery-state reducer so it
+ * cannot drift from the FSM; no lease fields are present on a pending task, so
+ * none need clearing. Backends call this then persist the result.
+ *
+ * @throws `DeliveryStateError` if `task` is not `pending`.
+ */
+export function applyCancel(task: DeliveryTask, nowMs: number): DeliveryTask {
+  const next = reduce(
+    {} as RetryPolicy, // policy is unused by the cancel event
+    taskToDeliveryState(task),
+    { type: "cancel" },
+  );
+  return {
+    ...task,
+    status: next.status,
+    attempts: next.attempts,
+    nextAttemptAt: null,
     leaseExpiresAt: null,
     leaseToken: null,
     lastError: next.lastError,

@@ -513,6 +513,7 @@ describe("DeliveryWorker.processOnce", () => {
         throw boom;
       },
       retry: async () => claimedTask,
+      cancel: async () => claimedTask,
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
@@ -523,6 +524,7 @@ describe("DeliveryWorker.processOnce", () => {
         delivering: 1,
         succeeded: 0,
         dead_letter: 0,
+        cancelled: 0,
       }),
     };
     const worker = new DeliveryWorker({
@@ -1637,6 +1639,9 @@ describe("DeliveryWorker.run", () => {
       retry: async () => {
         throw boom;
       },
+      cancel: async () => {
+        throw boom;
+      },
       get: async () => null,
       listByMessage: async () => [],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
@@ -1647,6 +1652,7 @@ describe("DeliveryWorker.run", () => {
         delivering: 0,
         succeeded: 0,
         dead_letter: 0,
+        cancelled: 0,
       }),
     };
     const errors: unknown[] = [];

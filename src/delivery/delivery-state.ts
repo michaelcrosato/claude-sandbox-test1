@@ -9,13 +9,18 @@
  *
  * ```text
  *   pending ──attemptStarted──▶ delivering ──attemptSucceeded──▶ succeeded (terminal)
- *      ▲                            │
- *      └──── retry scheduled ◀──────┤
- *      ▲                            └──attemptFailed──▶ dead_letter (terminal, exhausted)
- *      └──────────── manualRetry ◀──────────── (from either terminal state)
+ *      │                            │
+ *      │cancel                      └──attemptFailed──▶ dead_letter (terminal, exhausted)
+ *      ▼                            └──── retry scheduled ◀────────────────────┐
+ *   cancelled (terminal)                                                        │
+ *      ▲                                                                        │
+ *      └──────────────────────── manualRetry ◀─── (from any terminal state) ───┘
  * ```
  *
- * `manualRetry` is the lone transition *out* of a terminal state — the operator's
+ * `cancel` moves a `pending` delivery to the terminal `cancelled` state — the
+ * operator's abort path for a scheduled or queued delivery that should not be sent.
+ *
+ * `manualRetry` is the lone transition *out of* any terminal state — the operator's
  * recovery path. It revives a finished delivery as a brand-new one (a fresh
  * attempt budget, deliverable now), so a `dead_letter` whose receiver has since
  * been fixed can be replayed instead of being a permanent dead end.
@@ -38,12 +43,16 @@ import {
  * - `delivering`: an attempt is in flight.
  * - `succeeded`: terminal — a delivery attempt got an accepting response.
  * - `dead_letter`: terminal — retries were exhausted without success.
+ * - `cancelled`: terminal — the operator aborted the delivery before any attempt
+ *   was made (or while it was queued for a retry). The `manualRetry` transition
+ *   can revive a cancelled delivery the same way it revives a `dead_letter`.
  */
 export type DeliveryStatus =
   | "pending"
   | "delivering"
   | "succeeded"
-  | "dead_letter";
+  | "dead_letter"
+  | "cancelled";
 
 /** An immutable snapshot of a message's delivery progress. */
 export interface DeliveryState {
@@ -64,7 +73,8 @@ export type DeliveryEvent =
   | { readonly type: "attemptStarted" }
   | { readonly type: "attemptSucceeded" }
   | { readonly type: "attemptFailed"; readonly error: string; readonly nowMs: number }
-  | { readonly type: "manualRetry" };
+  | { readonly type: "manualRetry" }
+  | { readonly type: "cancel" };
 
 /** Thrown when an event is applied to a state that does not permit it. */
 export class DeliveryStateError extends Error {
@@ -93,7 +103,11 @@ export function initialDeliveryState(
 
 /** Whether a state is terminal (no further transitions are possible). */
 export function isTerminal(state: DeliveryState): boolean {
-  return state.status === "succeeded" || state.status === "dead_letter";
+  return (
+    state.status === "succeeded" ||
+    state.status === "dead_letter" ||
+    state.status === "cancelled"
+  );
 }
 
 /**
@@ -190,6 +204,21 @@ export function reduce(
         attempts: 0,
         nextAttemptAt: null,
         lastError: null,
+      };
+    }
+
+    case "cancel": {
+      // Only valid from `pending` — a delivery that is already in flight
+      // (`delivering`) cannot be aborted mid-HTTP, and terminal deliveries
+      // have nothing left to cancel.
+      if (state.status !== "pending") {
+        illegal(event, state);
+      }
+      return {
+        status: "cancelled",
+        attempts: state.attempts,
+        nextAttemptAt: null,
+        lastError: state.lastError,
       };
     }
   }

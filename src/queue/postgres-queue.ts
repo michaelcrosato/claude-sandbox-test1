@@ -11,6 +11,7 @@
 
 import type { Pool, PoolClient } from "pg";
 import {
+  applyCancel,
   applyClaim,
   applyFailure,
   applyManualRetry,
@@ -267,6 +268,31 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
     }
   }
 
+  async cancel(taskId: string): Promise<DeliveryTask> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query<TaskRow>(
+        "SELECT * FROM delivery_tasks WHERE id = $1 FOR UPDATE",
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        throw new UnknownDeliveryTaskError(taskId);
+      }
+      // applyCancel throws DeliveryStateError if the task is not pending.
+      const next = applyCancel(rowToTask(row), this.#now());
+      await this.#persist(client, next);
+      await client.query("COMMIT");
+      return next;
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch { /* already aborted */ }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async get(taskId: string): Promise<DeliveryTask | null> {
     const { rows } = await this.#pool.query<TaskRow>(
       "SELECT * FROM delivery_tasks WHERE id = $1",
@@ -356,7 +382,7 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
 
   async pruneTerminalTasks(olderThanMs: number): Promise<number> {
     const result = await this.#pool.query(
-      "DELETE FROM delivery_tasks WHERE updated_at < $1 AND status IN ('succeeded', 'dead_letter')",
+      "DELETE FROM delivery_tasks WHERE updated_at < $1 AND status IN ('succeeded', 'dead_letter', 'cancelled')",
       [olderThanMs],
     );
     return result.rowCount ?? 0;

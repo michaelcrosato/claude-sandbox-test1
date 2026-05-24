@@ -94,6 +94,7 @@ describe("renderPrometheus", () => {
       delivering: 1,
       succeeded: 39,
       dead_letter: 1,
+      cancelled: 0,
     },
   };
 

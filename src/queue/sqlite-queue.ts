@@ -20,6 +20,7 @@ import type {
   StatementSync,
 } from "node:sqlite";
 import {
+  applyCancel,
   applyClaim,
   applyFailure,
   applyManualRetry,
@@ -404,6 +405,19 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     });
   }
 
+  async cancel(taskId: string): Promise<DeliveryTask> {
+    return this.#transaction(() => {
+      const row = this.#selectTask.get(taskId) as TaskRow | undefined;
+      if (row === undefined) {
+        throw new UnknownDeliveryTaskError(taskId);
+      }
+      // applyCancel throws DeliveryStateError if the task is not pending.
+      const next = applyCancel(rowToTask(row), this.#now());
+      this.#persist(next);
+      return next;
+    });
+  }
+
   async get(taskId: string): Promise<DeliveryTask | null> {
     const row = this.#selectTask.get(taskId) as TaskRow | undefined;
     return row === undefined ? null : rowToTask(row);
@@ -481,7 +495,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   async pruneTerminalTasks(olderThanMs: number): Promise<number> {
     const result = this.#db
       .prepare(
-        "DELETE FROM delivery_tasks WHERE updated_at < ? AND status IN ('succeeded', 'dead_letter')",
+        "DELETE FROM delivery_tasks WHERE updated_at < ? AND status IN ('succeeded', 'dead_letter', 'cancelled')",
       )
       .run(olderThanMs);
     return Number(result.changes);

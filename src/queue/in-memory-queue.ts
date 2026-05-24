@@ -15,6 +15,7 @@
  */
 
 import {
+  applyCancel,
   applyClaim,
   applyFailure,
   applyManualRetry,
@@ -185,6 +186,17 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     // applyManualRetry throws DeliveryStateError if the task is not terminal.
     const next = applyManualRetry(this.#policy, task, this.#now());
     this.#tasks.set(next.id, next); // same key → keeps insertion order
+    return next;
+  }
+
+  async cancel(taskId: string): Promise<DeliveryTask> {
+    const task = this.#tasks.get(taskId);
+    if (task === undefined) {
+      throw new UnknownDeliveryTaskError(taskId);
+    }
+    // applyCancel throws DeliveryStateError if the task is not pending.
+    const next = applyCancel(task, this.#now());
+    this.#tasks.set(next.id, next);
     return next;
   }
 
