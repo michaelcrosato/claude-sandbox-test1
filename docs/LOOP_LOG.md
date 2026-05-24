@@ -4,6 +4,74 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 59: Per-Endpoint Bulk Retry
+
+**Repo truth at start:** clean main @ `0b1df75` (iter-58, cancel delivery API+SDK). Baseline
+verified: `tsc --noEmit` clean, vitest **1212/1212** (45 files), `npm run build` clean.
+
+**High-leverage move chosen:** Per-endpoint bulk retry — the final missing cell in the recovery
+matrix. Operators whose Stripe or Shopify endpoint was down for hours now have a single route to
+revive all dead-lettered deliveries for that specific endpoint without touching healthy ones.
+`POST /v1/endpoints/:id/deliveries/retry` mirrors `POST /v1/deliveries/retry` (app-wide) but
+scoped to one endpoint.
+
+**Root blocker:** `listByEndpoint` had no status filter, making dead-letter scans
+O(all-time history) without backend-side filtering. The fix is `ListByEndpointOptions extends
+ListDeliveriesOptions` with an optional `status` field — a 6-line interface that unlocks
+efficient pagination in all three backends.
+
+**Architecture (additive, zero blast radius):**
+
+1. **`delivery-queue.ts`** — `ListByEndpointOptions` interface (extends `ListDeliveriesOptions`,
+   adds `status?: DeliveryStatus | null`); `listByEndpoint` signature updated to accept it.
+
+2. **`in-memory-queue.ts`** — status filter as a single `.filter()` call after the
+   `endpointId` filter; `null` → no filter (backwards compatible).
+
+3. **`sqlite-queue.ts`** — 4-path dispatch (filtered/unfiltered × cursor/no-cursor) + a
+   new covering index `(endpoint_id, status, created_at, id) WHERE endpoint_id IS NOT NULL`
+   added to the SCHEMA string with `IF NOT EXISTS` for idempotent upgrades.
+
+4. **`postgres-queue.ts`** — same 4-path pattern using positional `$1/$2/...` parameters.
+
+5. **`conformance.ts`** — 2 new `listByEndpoint` tests: status filter returns correct subset;
+   status-filtered pagination emits correct `nextCursor` across pages. Fixed
+   `retryPolicy: { retries: 0, delaysMs: [] }` → `fixedSchedule([])` (TS error caught by tsc).
+
+6. **`retry-app.ts`** — `retryEndpointDeliveries` function (structural twin of
+   `retryAppDeliveries`): validates limit, calls `listByEndpoint(..., { status: "dead_letter" })`,
+   re-drives each task, absorbs `DeliveryStateError` / `UnknownDeliveryTaskError`.
+
+7. **`retry-app.test.ts`** — new `describe("retryEndpointDeliveries")` block: 7 tests (empty,
+   pending-only, revives N tasks, endpoint isolation, hasMore pagination, concurrent-revive
+   absorption, invalid-limit RangeError).
+
+8. **`api.ts`** — `"POST /v1/endpoints/:id/deliveries/retry"` in `API_ROUTE_KEYS`;
+   `retryEndpointAllDeliveries` authed handler (ownership check via `loadOwnedEndpoint`);
+   route table entry.
+
+9. **`openapi.ts`** — `/v1/endpoints/{id}/deliveries/retry` path with `post` operation;
+   reuses `BulkRetryResult` schema.
+
+10. **`sdk/client.ts`** — `retryEndpointDeliveries(endpointId)` method.
+
+11. **`api.test.ts`** — 4-test describe block: 401 unauthenticated, 404 unknown endpoint,
+    `{retried:0, hasMore:false}` when no dead-letters, revives 1 dead-lettered delivery.
+
+12. **`sdk/client.test.ts`** — transport test: correct URL encoding + `{retried, hasMore}`
+    round-trip.
+
+13. **`index.ts`** — exports `ListByEndpointOptions`, `retryEndpointDeliveries`.
+
+**Validation:**
+- `tsc --noEmit` — clean (one TS error caught and fixed: `retries` → `fixedSchedule([])`).
+- `vitest run` — **1228/1228** (45 files, 6 Postgres skipped), up from 1212. All 16 new tests green.
+- `npm run build` — clean.
+
+**Commit:** `623464e` — iter-59 — 13 files changed, 429 insertions, 33 deletions.
+
+---
+
 ## 2026-05-24 — Iteration 58: Cancel Delivery HTTP API + SDK
 
 **Repo truth at start:** clean main @ `a25b17f` (iter-57, delivery cancellation). Baseline
