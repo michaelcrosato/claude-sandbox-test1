@@ -148,6 +148,9 @@ import {
 } from "./router.js";
 import { buildOpenApiDocument } from "./openapi.js";
 
+/** Maximum number of messages accepted in a single `POST /v1/messages/batch` call. */
+export const MAX_BATCH_MESSAGES = 100;
+
 /** The stores the API composes. One instance per running Posthorn service. */
 export interface ApiDeps {
   /** Authenticates each request's API key to its owning tenant. */
@@ -773,6 +776,7 @@ export const API_ROUTE_KEYS = [
   "GET /metrics",
   "GET /openapi.json",
   "POST /v1/messages",
+  "POST /v1/messages/batch",
   "GET /v1/messages",
   "GET /v1/messages/:id",
   "GET /v1/messages/:id/attempts",
@@ -982,6 +986,128 @@ export function createApi(deps: ApiDeps): ApiHandler {
               skippedUnsubscribed: result.fanout.skippedUnsubscribed,
             },
     });
+  };
+
+  const batchSendMessages: AuthedHandler = async (ctx) => {
+    const body = parseJsonObject(ctx.req);
+    if (!Array.isArray(body["messages"])) {
+      throw new HttpError(400, "invalid_request", "messages must be a non-empty array");
+    }
+    const rawMessages = body["messages"] as unknown[];
+    if (rawMessages.length === 0) {
+      throw new HttpError(400, "invalid_request", "messages must be a non-empty array");
+    }
+    if (rawMessages.length > MAX_BATCH_MESSAGES) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `messages may contain at most ${MAX_BATCH_MESSAGES} items`,
+      );
+    }
+
+    // Compute remaining quota once for the whole batch. Replays are exempt (they
+    // return the already-stored message without re-delivering), so the pre-check
+    // for each idempotent item happens before decrementing.
+    let quotaBudget: number | null = null; // null = unlimited
+    if (ctx.app.monthlyMessageQuota !== null) {
+      const usage = await deps.messages.summarizeUsageByApp(ctx.app.id, utcMonthRange(now()));
+      quotaBudget = Math.max(0, ctx.app.monthlyMessageQuota - usage.total);
+    }
+
+    let consumed = 0; // new (non-duplicate) messages accepted so far in this batch
+    const results: unknown[] = [];
+
+    for (const rawMsg of rawMessages) {
+      if (rawMsg === null || typeof rawMsg !== "object" || Array.isArray(rawMsg)) {
+        results.push({
+          ok: false,
+          error: { code: "invalid_request", message: "each message must be a JSON object" },
+        });
+        continue;
+      }
+      const msg = rawMsg as Record<string, unknown>;
+      if (!("payload" in msg)) {
+        results.push({
+          ok: false,
+          error: { code: "invalid_request", message: "payload is required" },
+        });
+        continue;
+      }
+
+      // Quota pre-flight: idempotent replays are exempt; everything else counts.
+      if (quotaBudget !== null) {
+        const rawKey = "idempotencyKey" in msg ? msg["idempotencyKey"] : undefined;
+        const lookupKey = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : null;
+        const isReplay =
+          lookupKey !== null &&
+          (await deps.messages.getByIdempotencyKey(ctx.app.id, lookupKey)) !== null;
+        if (!isReplay && consumed >= quotaBudget) {
+          results.push({
+            ok: false,
+            error: {
+              code: "quota_exceeded",
+              message: `monthly message quota of ${ctx.app.monthlyMessageQuota} reached`,
+            },
+          });
+          continue;
+        }
+      }
+
+      try {
+        const input: NewMessage = {
+          appId: ctx.app.id,
+          eventType: msg["eventType"] as string,
+          payload: JSON.stringify(msg["payload"]),
+          ...("idempotencyKey" in msg
+            ? { idempotencyKey: msg["idempotencyKey"] as string | null }
+            : {}),
+        };
+        const result = await ingest(input, {
+          messages: deps.messages,
+          endpoints: deps.endpoints,
+          queue: deps.queue,
+        });
+        deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
+        if (!result.deduplicated) {
+          consumed++;
+        }
+        results.push({
+          ok: true,
+          message: {
+            id: result.message.id,
+            appId: result.message.appId,
+            eventType: result.message.eventType,
+            idempotencyKey: result.message.idempotencyKey,
+            createdAt: result.message.createdAt,
+          },
+          deduplicated: result.deduplicated,
+          fanout:
+            result.fanout === null
+              ? null
+              : {
+                  matched: result.fanout.matched,
+                  skippedDisabled: result.fanout.skippedDisabled,
+                  skippedUnsubscribed: result.fanout.skippedUnsubscribed,
+                },
+        });
+      } catch (err) {
+        if (err instanceof IdempotencyConflictError) {
+          results.push({
+            ok: false,
+            error: { code: "idempotency_conflict", message: (err as Error).message },
+          });
+        } else if (err instanceof TypeError) {
+          results.push({
+            ok: false,
+            error: { code: "invalid_request", message: (err as TypeError).message },
+          });
+        } else {
+          throw err; // unexpected — let the outer error handler render a 500
+        }
+      }
+    }
+
+    return json(200, { results });
   };
 
   const listMessages: AuthedHandler = async (ctx) => {
@@ -1487,6 +1613,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /metrics": metricsExposition,
     "GET /openapi.json": openapi,
     "POST /v1/messages": authed(createMessage),
+    "POST /v1/messages/batch": authed(batchSendMessages),
     "GET /v1/messages": authed(listMessages),
     "GET /v1/messages/:id": authed(getMessage),
     "GET /v1/messages/:id/attempts": authed(listMessageAttempts),

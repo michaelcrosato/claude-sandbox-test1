@@ -270,6 +270,34 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/messages/batch": {
+        post: {
+          operationId: "sendMessageBatch",
+          tags: ["Messages"],
+          summary: "Send a batch of messages",
+          description:
+            "Accept up to 100 messages in a single call and fan each out to the tenant's " +
+            "matching endpoints. Each item is processed independently: a per-item error " +
+            "(e.g. `invalid_request`, `quota_exceeded`, `idempotency_conflict`) is returned " +
+            "in that result slot without aborting the rest of the batch. The response is " +
+            "always `200`; inspect each `result.ok` to detect per-item failures. " +
+            "Idempotency keys are honored per message and quota-exempt replays are never " +
+            "double-delivered. Quota enforcement mirrors the single-message endpoint: a " +
+            "quota-exceeded error is returned for items that would breach the tenant's limit; " +
+            "subsequent items in the same request also fail once the budget is exhausted.",
+          requestBody: jsonBody(ref("BatchMessageInput")),
+          responses: {
+            "200": jsonResponse(
+              "Per-message results (inspect `ok` on each element for success/failure).",
+              ref("BatchResults"),
+            ),
+            "400": errorResponse(
+              "The `messages` field is missing, not an array, or exceeds 100 items.",
+            ),
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+      },
       "/v1/messages/{id}": {
         get: {
           operationId: "getMessage",
@@ -1642,6 +1670,65 @@ export function buildOpenApiDocument(): OpenApiDocument {
               properties: { quota: ref("QuotaStatus") },
             },
           ],
+        },
+        BatchMessageInput: {
+          type: "object",
+          description: "The body of `POST /v1/messages/batch`.",
+          required: ["messages"],
+          properties: {
+            messages: {
+              type: "array",
+              items: ref("NewMessage"),
+              minItems: 1,
+              maxItems: 100,
+              description: "The messages to accept, up to 100. Each item uses the same shape as `POST /v1/messages`.",
+            },
+          },
+        },
+        BatchMessageOk: {
+          type: "object",
+          description: "A successfully accepted message in a batch response.",
+          required: ["ok", "message", "deduplicated", "fanout"],
+          properties: {
+            ok: { type: "boolean", enum: [true] },
+            message: ref("MessageSummary"),
+            deduplicated: { type: "boolean", description: "True when an idempotency key collapsed this onto an existing message." },
+            fanout: {
+              ...nullableRef("FanoutSummary"),
+              description: "The fan-out summary, or null for a deduplicated replay.",
+            },
+          },
+        },
+        BatchMessageError: {
+          type: "object",
+          description: "A failed message in a batch response.",
+          required: ["ok", "error"],
+          properties: {
+            ok: { type: "boolean", enum: [false] },
+            error: {
+              type: "object",
+              required: ["code", "message"],
+              properties: {
+                code: {
+                  type: "string",
+                  examples: ["invalid_request", "quota_exceeded", "idempotency_conflict"],
+                },
+                message: { type: "string" },
+              },
+            },
+          },
+        },
+        BatchResults: {
+          type: "object",
+          description: "The `200` body of `POST /v1/messages/batch`: one result per input message, in order.",
+          required: ["results"],
+          properties: {
+            results: {
+              type: "array",
+              items: { anyOf: [ref("BatchMessageOk"), ref("BatchMessageError")] },
+              description: "One entry per message in the request, in the same order.",
+            },
+          },
         },
         NewPortalSession: {
           type: "object",

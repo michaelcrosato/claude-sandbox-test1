@@ -110,6 +110,28 @@ export interface SendMessageResult {
   readonly fanout: FanoutSummary | null;
 }
 
+/** One item in a {@link PosthornClient.sendMessageBatch} response — success. */
+export interface BatchMessageOk {
+  readonly ok: true;
+  readonly message: MessageRef;
+  readonly deduplicated: boolean;
+  readonly fanout: FanoutSummary | null;
+}
+
+/** One item in a {@link PosthornClient.sendMessageBatch} response — failure. */
+export interface BatchMessageError {
+  readonly ok: false;
+  readonly error: { readonly code: string; readonly message: string };
+}
+
+/** One item in a {@link PosthornClient.sendMessageBatch} response. */
+export type BatchMessageResult = BatchMessageOk | BatchMessageError;
+
+/** The result of {@link PosthornClient.sendMessageBatch}. */
+export interface BatchResults {
+  readonly results: readonly BatchMessageResult[];
+}
+
 /** One delivery's current state, as returned by {@link PosthornClient.getMessage}. */
 export interface DeliveryView {
   readonly id: string;
@@ -580,6 +602,20 @@ export class PosthornClient {
       body["idempotencyKey"] = input.idempotencyKey;
     }
     return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
+  }
+
+  /**
+   * Accept up to 100 messages in a single call — `POST /v1/messages/batch`.
+   * Each item is processed independently; inspect `result.ok` on each element
+   * to detect per-item failures (e.g. `quota_exceeded`, `idempotency_conflict`).
+   */
+  async sendMessageBatch(messages: readonly SendMessageInput[]): Promise<BatchResults> {
+    const items = messages.map((m) => {
+      const item: Record<string, unknown> = { eventType: m.eventType, payload: m.payload };
+      if (m.idempotencyKey !== undefined) item["idempotencyKey"] = m.idempotencyKey;
+      return item;
+    });
+    return this.#transport.request<BatchResults>("POST", "/v1/messages/batch", { messages: items });
   }
 
   /**

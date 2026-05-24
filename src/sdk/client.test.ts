@@ -557,6 +557,32 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     await client.listDeliveries();
     expect(seenUrl.endsWith("/v1/deliveries")).toBe(true);
   });
+
+  it("sendMessageBatch posts to /v1/messages/batch with the messages array", async () => {
+    let seenUrl = "";
+    let seenBody: unknown;
+    const result = {
+      results: [
+        { ok: true, message: { id: "m1", appId: "a1", eventType: "e", idempotencyKey: null, createdAt: 1 }, deduplicated: false, fanout: null },
+      ],
+    };
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenBody = JSON.parse(init.body as string);
+      return Promise.resolve(fakeResponse(200, JSON.stringify(result)));
+    });
+    const res = await client.sendMessageBatch([
+      { eventType: "e", payload: { n: 1 }, idempotencyKey: "k1" },
+      { eventType: "e2", payload: null },
+    ]);
+    expect(seenUrl.endsWith("/v1/messages/batch")).toBe(true);
+    const msgs = (seenBody as any).messages as unknown[];
+    expect(msgs).toHaveLength(2);
+    expect((msgs[0] as any).idempotencyKey).toBe("k1");
+    expect(Object.prototype.hasOwnProperty.call(msgs[1], "idempotencyKey")).toBe(false);
+    expect(res.results).toHaveLength(1);
+    expect((res.results[0] as any).ok).toBe(true);
+  });
 });
 
 describe("PosthornClient end-to-end via a running gateway", () => {

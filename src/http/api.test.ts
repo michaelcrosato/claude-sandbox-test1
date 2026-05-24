@@ -2753,3 +2753,201 @@ describe("createApi — POST /v1/endpoints/:id/test", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("createApi — POST /v1/messages/batch", () => {
+  it("accepts a batch and returns one result per message", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "a.created", payload: { n: 1 } },
+            { eventType: "b.updated", payload: { n: 2 }, idempotencyKey: "key-1" },
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect(results).toHaveLength(2);
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[0] as any).message.eventType).toBe("a.created");
+    expect((results[0] as any).deduplicated).toBe(false);
+    expect((results[1] as any).ok).toBe(true);
+    expect((results[1] as any).message.idempotencyKey).toBe("key-1");
+  });
+
+  it("returns per-item errors for malformed items without aborting the batch", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "good.event", payload: { ok: true } },
+            "not an object", // invalid — not an object
+            { eventType: "no.payload" }, // missing payload
+            { eventType: "also.good", payload: 42 },
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect(results).toHaveLength(4);
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[1] as any).ok).toBe(false);
+    expect((results[1] as any).error.code).toBe("invalid_request");
+    expect((results[2] as any).ok).toBe(false);
+    expect((results[2] as any).error.code).toBe("invalid_request");
+    expect((results[3] as any).ok).toBe(true);
+  });
+
+  it("rejects an empty messages array", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest("POST", "/v1/messages/batch", { messages: [] }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("rejects a messages field that is not an array", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest("POST", "/v1/messages/batch", { messages: "nope" }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("rejects a batch exceeding the 100-item limit", async () => {
+    const { api, secret } = await setup();
+    const messages = Array.from({ length: 101 }, (_, i) => ({
+      eventType: "e",
+      payload: { i },
+    }));
+    const res = await api(
+      jsonRequest("POST", "/v1/messages/batch", { messages }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("deduplicates idempotent messages within the batch", async () => {
+    const { api, secret } = await setup();
+    // Send the same idempotency key twice in one batch.
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "e", payload: { n: 1 }, idempotencyKey: "dup" },
+            { eventType: "e", payload: { n: 1 }, idempotencyKey: "dup" },
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[0] as any).deduplicated).toBe(false);
+    expect((results[1] as any).ok).toBe(true);
+    expect((results[1] as any).deduplicated).toBe(true);
+    // Both results reference the same message id.
+    expect((results[0] as any).message.id).toBe((results[1] as any).message.id);
+  });
+
+  it("stops accepting new messages once the monthly quota is reached", async () => {
+    let nowMs = Date.UTC(2026, 4, 15, 12, 0, 0);
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs, eventTypes });
+    const app = await apps.create({ name: "Q", monthlyMessageQuota: 2 });
+    const { secret } = await apps.createApiKey(app.id);
+
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "e", payload: { n: 1 } },
+            { eventType: "e", payload: { n: 2 } },
+            { eventType: "e", payload: { n: 3 } }, // over quota
+            { eventType: "e", payload: { n: 4 } }, // over quota
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect(results).toHaveLength(4);
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[1] as any).ok).toBe(true);
+    expect((results[2] as any).ok).toBe(false);
+    expect((results[2] as any).error.code).toBe("quota_exceeded");
+    expect((results[3] as any).ok).toBe(false);
+    expect((results[3] as any).error.code).toBe("quota_exceeded");
+  });
+
+  it("quota-exempt idempotent replay does not consume the budget", async () => {
+    let nowMs = Date.UTC(2026, 4, 15, 12, 0, 0);
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, now: () => nowMs, eventTypes });
+    const app = await apps.create({ name: "Q", monthlyMessageQuota: 1 });
+    const { secret } = await apps.createApiKey(app.id);
+
+    // Use up the 1-message quota with a keyed message.
+    const first = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: { n: 1 }, idempotencyKey: "k1" }, secret),
+    );
+    expect(first.status).toBe(202);
+
+    // Now send a batch: the replay is exempt; the new message is blocked.
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "e", payload: { n: 1 }, idempotencyKey: "k1" }, // replay — exempt
+            { eventType: "e", payload: { n: 2 } }, // new — over quota
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[0] as any).deduplicated).toBe(true);
+    expect((results[1] as any).ok).toBe(false);
+    expect((results[1] as any).error.code).toBe("quota_exceeded");
+  });
+
+  it("requires authentication", async () => {
+    const { api } = await setup();
+    const res = await api(
+      request({ method: "POST", path: "/v1/messages/batch" }),
+    );
+    expect(res.status).toBe(401);
+  });
+});

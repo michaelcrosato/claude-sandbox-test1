@@ -73,7 +73,8 @@ Key capabilities:
 | GET | `/metrics` | none | Prometheus text exposition (operator metrics). |
 | GET | `/openapi.json` | none | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | Accept an event and fan it out (`202`). |
-| GET | `/v1/messages` | Bearer | List messages, newest-first (keyset-paginated). |
+| POST | `/v1/messages/batch` | Bearer | Accept up to 100 events in one call; per-item results (`200`). |
+| GET | `/v1/messages` | Bearer | List messages, newest-first (keyset-paginated, filterable by `?eventType=`). |
 | GET | `/v1/messages/:id` | Bearer | Read a message + per-endpoint delivery statuses. |
 | POST | `/v1/messages/:id/retry` | Bearer | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | Per-attempt audit log (paginated). |
@@ -83,11 +84,17 @@ Key capabilities:
 | PATCH | `/v1/endpoints/:id` | Bearer | Update an endpoint. |
 | DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`). |
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | Rotate signing secret, zero-downtime. |
-| GET | `/v1/usage` | Bearer | Tenant's own message + delivery usage. |
+| POST | `/v1/endpoints/:id/test` | Bearer | Send a one-shot test delivery; returns result synchronously. |
+| GET | `/v1/endpoints/:id/deliveries` | Bearer | Endpoint delivery history (paginated). |
+| GET | `/v1/deliveries` | Bearer | App-wide delivery listing (`?status=dead_letter` etc., paginated). |
+| GET | `/v1/usage` | Bearer | Tenant's own message + delivery usage and current-month quota status. |
+| POST | `/v1/portal/sessions` | Bearer | Mint a consumer portal session token. |
+| GET/POST/PATCH/DELETE | `/v1/event-types` / `/v1/event-types/:id` | Bearer | Event type catalog (create, list, update, archive). |
 | POST | `/v1/admin/apps` | Admin | Create a tenant. |
 | GET | `/v1/admin/apps` | Admin | List tenants. |
 | GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | Read / update / delete a tenant. |
 | GET | `/v1/admin/apps/:id/usage` | Admin | Per-tenant usage (billing read model). |
+| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | Rotate the app's system webhook signing secret. |
 | POST/GET | `/v1/admin/apps/:id/keys` | Admin | Mint / list API keys. |
 | DELETE | `/v1/admin/keys/:id` | Admin | Revoke an API key. |
 
@@ -118,6 +125,16 @@ const { message, fanout } = await client.sendMessage({
   idempotencyKey: "req_abc123", // optional; a retry won't double-send
 });
 fanout?.matched; // number of endpoints a delivery was enqueued for
+
+// Or send a batch (up to 100) in one round-trip:
+const batch = await client.sendMessageBatch([
+  { eventType: "payment.created", payload: { id: 1 } },
+  { eventType: "payment.created", payload: { id: 2 }, idempotencyKey: "pay_2" },
+]);
+batch.results.forEach((r) => {
+  if (r.ok) console.log("accepted", r.message.id);
+  else console.error("rejected", r.error.code);
+});
 
 // Check delivery status:
 const status = await client.getMessage(message.id);
@@ -260,7 +277,7 @@ Set `POSTHORN_ADMIN_TOKEN` to unlock a browser UI at `/dashboard`:
 
 ```bash
 npm install
-npm test            # vitest (856 tests, ~2s)
+npm test            # vitest (~1020 tests, ~2s)
 npm run typecheck
 npm run build
 ```
