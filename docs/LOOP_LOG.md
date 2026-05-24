@@ -4,6 +4,93 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 51: `Retry-After` Header Support
+
+**Repo truth at start:** clean main @ `a262fff` (iter-50, bulk delivery retry). Baseline verified:
+`tsc --noEmit` clean, vitest **1107/1107** (44 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** `Retry-After` header support — the RFC 7231 §7.1.3
+compliance gap that caused Posthorn to hammer overloaded or rate-limited receivers. A receiver
+returning `503 Retry-After: 30` was explicitly asking "don't retry for 30 seconds"; Posthorn
+ignored that and re-queued at the policy's own (potentially shorter) exponential-backoff delay.
+The fix is straightforward: extract the header from the response, parse it (integer-seconds or
+HTTP-date), cap it at a maximum (24h), and floor the task's `nextAttemptAt` so the queue never
+re-claims the task before the receiver asked. The policy delay still wins when it is *larger* than
+`Retry-After`; `Retry-After` only prevents going *sooner* than the receiver asked. Dead-lettered
+tasks are unaffected — a budget-exhausted delivery stays terminal regardless. This directly
+improves reliability for operators whose receivers use rate limiting (`429 Retry-After: 60`) or
+temporary overload signals (`503 Retry-After: 30`), and it is the first RFC 7231 compliance win
+on the delivery path.
+
+**Architecture (additive, zero blast radius):**
+
+Three-layer wiring with each layer additive and non-breaking:
+
+1. **`HttpDeliveryResponse.retryAfter?: string | null`** — new optional field on the existing
+   public interface. Existing fake transports in tests return `{ status }` without the field;
+   the worker safely treats an absent field as `null` (no hint).
+
+2. **`fetchTransport`** — calls `response.headers.get("retry-after")` before the body drain
+   and includes the result in the return value (`string | null`, omitted when absent via spread).
+   The header is captured before the body drain so a drain failure cannot mask it.
+
+3. **`parseRetryAfterMs(header, nowMs): number | null`** — module-level pure function inside
+   `delivery-worker.ts`. Accepts both RFC 7231 integer-seconds form (`"30"`, `"0"`) and
+   HTTP-date form (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Integer-seconds: matched via `/^\d+$/`
+   (rejects floats and negatives), converted to ms, capped at `MAX_RETRY_AFTER_MS`. HTTP-date:
+   `Date.parse`, finite check, `date − nowMs`, negative/zero → `null` (past = no floor). Both
+   capped at `MAX_RETRY_AFTER_MS = 86_400_000` (24h) so a malicious or misconfigured receiver
+   cannot park a task far in the future.
+
+4. **`FailInput.minDelayMs?: number`** — new optional field on the existing public queue
+   interface. `normalizeFailInput` validates it (non-negative finite number when provided).
+
+5. **`InMemoryDeliveryQueue.fail` + `SqliteDeliveryQueue.fail`** — after calling `applyFailure`,
+   if the result is `pending` and `minDelayMs` is set, clamp `nextAttemptAt`:
+   `max(policyNextAttemptAt, nowMs + minDelayMs)`. Dead-lettered tasks have
+   `nextAttemptAt: null` so the clamp branch is unreachable — no behavioral change there.
+
+6. **`DeliveryWorker.#deliver`** — extracts `retryAfterMs = parseRetryAfterMs(response.retryAfter, nowMs)`
+   only when `response !== null && !isSuccessStatus(response.status)`. Transport errors and
+   unresolvable-endpoint failures carry no response, so they get no floor.
+
+7. **`DeliveryWorker.#settleFailure`** — accepts a new optional `minDelayMs` parameter,
+   spread-includes it in the `FailInput` when defined (required by `exactOptionalPropertyTypes`).
+
+**Built this tick:**
+
+- **`src/queue/delivery-queue.ts`** — `FailInput.minDelayMs?: number` (JSDoc; semantics);
+  `normalizeFailInput` updated to validate and return `minDelayMs`.
+- **`src/queue/in-memory-queue.ts`** — `fail()` destructures `minDelayMs`, clamps `nextAttemptAt`
+  post-`applyFailure` when `status === "pending"` and floor exceeds policy result.
+- **`src/queue/sqlite-queue.ts`** — same clamp logic in the SQLite transaction's `fail()`.
+- **`src/queue/conformance.ts`** — added `describe("minDelayMs floor")` nested inside the `fail`
+  describe: 3 cases (floor wins, policy wins, dead-letter unaffected) × 2 backends = 6 tests.
+- **`src/worker/delivery-worker.ts`** — `HttpDeliveryResponse.retryAfter?: string | null`;
+  `fetchTransport` captures `Retry-After` pre-drain; `MAX_RETRY_AFTER_MS = 86_400_000` (exported);
+  `parseRetryAfterMs` (private, integer-seconds + HTTP-date, capped); `#deliver` wires
+  `retryAfterMs`; `#settleFailure` accepts and spreads `minDelayMs`.
+- **`src/index.ts`** — re-exports `MAX_RETRY_AFTER_MS`.
+
+**Tests (+13 over baseline):**
+- **`src/queue/conformance.ts`** (+3 × 2 backends = 6): `minDelayMs` floor wins (clamps and
+  confirms not claimable at policy time but claimable at floor time); policy wins when smaller;
+  dead-letter unaffected (task remains `dead_letter`, `nextAttemptAt: null`).
+- **`src/worker/delivery-worker.test.ts`** (+7, new `describe("DeliveryWorker — Retry-After support")`):
+  integer-seconds floor wins (503 + `"30"` → `nextAttemptAt = 30_000`); policy wins when
+  larger (60s policy, 5s Retry-After → 60_000); malformed header ignored (pure policy);
+  Retry-After ignored on 2xx success; capped at `MAX_RETRY_AFTER_MS` (172800s → 86_400_000ms);
+  budget-exhausted task still dead-letters (Retry-After cannot revive a spent budget);
+  HTTP-date format accepted and delay computed correctly (`toBeCloseTo`).
+
+**Validation:** `tsc --noEmit` clean. vitest **1120/1120** (44 files, +13). `npm run build` clean.
+`exactOptionalPropertyTypes` compliance verified (spread-based conditional inclusion throughout).
+
+**State:** GREEN → committed to main @ `43bd2ab` (iter-51). Next tick: assess next highest-leverage gap.
+
+---
+
 ## 2026-05-24 — Iteration 50: Bulk Delivery Retry (`POST /v1/deliveries/retry`)
 
 **Repo truth at start:** clean main @ `05fc3b6` (iter-49, data retention). Baseline verified:
