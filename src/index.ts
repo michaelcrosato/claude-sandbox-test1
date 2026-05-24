@@ -74,6 +74,11 @@ export {
 } from "./storage/sqlite-store.js";
 
 export {
+  PostgresMessageStore,
+  type PostgresMessageStoreOptions,
+} from "./storage/postgres-store.js";
+
+export {
   UnknownDeliveryTaskError,
   StaleLeaseError,
   createTaskId,
@@ -119,6 +124,11 @@ export {
 } from "./queue/sqlite-queue.js";
 
 export {
+  PostgresDeliveryQueue,
+  type PostgresQueueOptions,
+} from "./queue/postgres-queue.js";
+
+export {
   createAttemptId,
   normalizeNewAttempt,
   type DeliveryAttempt,
@@ -144,6 +154,11 @@ export {
   SqliteDeliveryAttemptStore,
   type SqliteDeliveryAttemptStoreOptions,
 } from "./attempts/sqlite-attempt-store.js";
+
+export {
+  PostgresDeliveryAttemptStore,
+  type PostgresAttemptStoreOptions,
+} from "./attempts/postgres-attempt-store.js";
 
 export {
   DeliveryWorker,
@@ -201,6 +216,11 @@ export {
   SqliteEndpointStore,
   type SqliteEndpointStoreOptions,
 } from "./endpoints/sqlite-endpoint-store.js";
+
+export {
+  PostgresEndpointStore,
+  type PostgresEndpointStoreOptions,
+} from "./endpoints/postgres-endpoint-store.js";
 
 export {
   storeBackedResolver,
@@ -270,6 +290,11 @@ export {
 } from "./apps/sqlite-app-store.js";
 
 export {
+  PostgresAppStore,
+  type PostgresAppStoreOptions,
+} from "./apps/postgres-app-store.js";
+
+export {
   DuplicateEventTypeError,
   UnknownEventTypeError,
   type EventType,
@@ -278,6 +303,17 @@ export {
   type ListEventTypesOptions,
   type EventTypeStore,
 } from "./event-types/event-type.js";
+
+export {
+  PostgresEventTypeStore,
+  type PostgresEventTypeStoreOptions,
+} from "./event-types/postgres-event-type-store.js";
+
+export {
+  createPostgresPool,
+  type Pool,
+  type PoolClient,
+} from "./db/postgres.js";
 
 export {
   createApi,
