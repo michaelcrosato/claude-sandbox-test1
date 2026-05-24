@@ -4,6 +4,30 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 73: Portal Event-Type Detail — Subscribed Endpoints
+
+**Repo truth at start:** clean main @ `7df5489` (iter-72, admin dashboard per-app usage column). Baseline verified: `tsc --noEmit` clean, vitest **1418/1418** (46 files, 6 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** The portal's event-type detail page (`GET /portal/event-types/:id`) gave operators a full view of an event type's metadata and edit controls, but had no way to see which of the tenant's endpoints would actually receive messages of that type. A developer had to mentally cross-reference the event-type list against each endpoint's subscription settings — a friction point that grows with the number of endpoints.
+
+**Move chosen:** Add a "Subscribed endpoints" section to the portal event-type detail page. For each tenant endpoint whose `eventTypes` includes the viewed type (or is `null`, meaning subscribe-all), render a link to the endpoint detail page alongside its URL, description, and enabled/disabled status. When no endpoints are subscribed, render an explicit empty state so the absence of subscribers is unambiguous.
+
+**Architecture (3 files, +57 / −2):**
+
+1. **`src/portal/portal-handler.ts`** — Added `endpointSubscribesTo` to the import from `../endpoints/endpoint.js`. In the `GET /portal/event-types/:id` handler, after fetching the event type, calls `endpoints.listByApp(auth.appId)` and filters the result with `endpointSubscribesTo(ep, et.id)` to produce a `subscribers` array. Passes the array as the 4th argument to `portalEventTypeDetailPage`.
+
+2. **`src/portal/portal-views.ts`** — Updated `portalEventTypeDetailPage` to accept an optional 4th parameter `subscribers?: readonly Pick<Endpoint, "id" | "url" | "description" | "disabled">[]`. A `subscribersSection` IIFE renders either an empty-state paragraph ("No endpoints are subscribed…") or a table of subscriber rows — each with a link to `/portal/endpoints/:id`, the URL in a truncated monospace span, the description, and an active/disabled status pill. The section is inserted between the summary card and the edit form.
+
+3. **`src/portal/portal-handler.test.ts`** — Added 2 new tests under "Event type catalog management":
+   - No subscribed endpoints → page contains "No endpoints"
+   - One endpoint subscribed to the type + one subscribed to a different type → only the matched URL appears in the rendered HTML
+
+**Validation:** `tsc --noEmit` clean → vitest **1420/1420** (was 1418; +2 all new tests green). `npm run build` clean → committed `b99a86c`.
+
+**Next moves:** Admin dashboard app-detail page shows current-month usage in the app summary card (matching the per-app column added in iter-72); global (per-gateway) default rate limit for all endpoints via `POSTHORN_DEFAULT_RATE_LIMIT`.
+
+---
+
 ## 2026-05-24 — Iteration 72: Admin Dashboard Per-App This-Month Usage Column
 
 **Repo truth at start:** clean main @ `cb63ae2` (iter-71, event-type catalog management in
