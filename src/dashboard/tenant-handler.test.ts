@@ -241,6 +241,42 @@ describe("createTenantDashboardHandler — endpoints list", () => {
   });
 });
 
+describe("createTenantDashboardHandler — usage bar on messages page", () => {
+  it("shows current month message count with no quota", async () => {
+    const { handler, apps, messages } = setup();
+    const { cookie, appId } = await loginAs(handler, apps, "UsageApp");
+    await messages.create({ appId, eventType: "user.created", payload: "{}" });
+    await messages.create({ appId, eventType: "order.placed", payload: "{}" });
+
+    const res = await handler(req("GET", "/dashboard/tenant/messages", { cookie }));
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    // Usage count visible
+    expect(body).toContain("2");
+    expect(body).toContain("No quota");
+  });
+
+  it("shows quota and remaining when app has monthlyMessageQuota", async () => {
+    const { handler, apps, messages } = setup();
+    const app = await apps.create({ name: "QuotaApp", monthlyMessageQuota: 100 });
+    const { secret } = await apps.createApiKey(app.id);
+    const loginRes = await handler(
+      req("POST", "/dashboard/tenant/login", { body: `apikey=${encodeURIComponent(secret)}` }),
+    );
+    const setCookie = (loginRes.headers as Record<string, string>)["set-cookie"] as string;
+    const match = setCookie.match(/ph_tenant_session=([^;]+)/);
+    const cookie = `ph_tenant_session=${match![1]}`;
+
+    await messages.create({ appId: app.id, eventType: "x", payload: "{}" });
+
+    const res = await handler(req("GET", "/dashboard/tenant/messages", { cookie }));
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    expect(body).toContain("100"); // quota
+    expect(body).toContain("99");  // remaining (100 - 1)
+  });
+});
+
 describe("createTenantDashboardHandler — unknown routes", () => {
   it("returns 404 for an unknown sub-path", async () => {
     const { handler, apps } = setup();

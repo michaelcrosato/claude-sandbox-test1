@@ -453,6 +453,41 @@ describe("createPortalHandler", () => {
     expect(String(res.body)).toMatch(/verified|authentic/i);
   });
 
+  // ── Rate limit field ──────────────────────────────────────────────────────────
+
+  it("POST /portal/endpoints creates an endpoint with a rate limit and detail page shows it", async () => {
+    const { sessions, endpoints, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const body = new URLSearchParams({ url: "https://example.com/hook", rateLimit: "60" }).toString();
+    const res = await handler(
+      withCookie(req({ method: "POST", path: "/portal/endpoints", rawBody: body }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    const list = await endpoints.listByApp("app_1");
+    expect(list).toHaveLength(1);
+    expect(list[0]!.rateLimit).toBe(60);
+    // Detail page shows the rate limit
+    const detail = await handler(
+      withCookie(req({ path: `/portal/endpoints/${list[0]!.id}` }), COOKIE, token),
+    );
+    expect(String(detail.body)).toContain("60");
+  });
+
+  it("POST /portal/endpoints/:id/update clears the rate limit when field is empty", async () => {
+    const { sessions, endpoints, handler, clock } = setup();
+    const ep = await endpoints.create({ appId: "app_2", url: "https://example.com/hook", rateLimit: 100 });
+    const token = sessions.createSession("app_2", "user_2", clock.t);
+    const body = new URLSearchParams({ url: ep.url, rateLimit: "" }).toString();
+    const res = await handler(
+      withCookie(req({ method: "POST", path: `/portal/endpoints/${ep.id}/update`, rawBody: body }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    const updated = await endpoints.get(ep.id);
+    expect(updated!.rateLimit).toBeNull();
+    // Detail page shows "No limit"
+    expect(String(res.body)).toContain("No limit");
+  });
+
   // ── Unknown routes ────────────────────────────────────────────────────────────
 
   it("unknown portal route returns 404", async () => {

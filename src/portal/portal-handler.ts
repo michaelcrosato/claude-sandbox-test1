@@ -136,6 +136,19 @@ function parseEventTypes(raw: string): string[] | null {
 }
 
 /**
+ * Parse the `rateLimit` form field (req/min). An empty or blank value returns `null`
+ * (no limit); a valid integer is returned; NaN/negative values return null and the
+ * store's normalizeRateLimit will reject out-of-range/non-integer values via the
+ * caller's existing catch block.
+ */
+function parseRateLimitField(raw: string | undefined): number | null {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return null;
+  const n = parseInt(trimmed, 10);
+  return Number.isNaN(n) ? null : n;
+}
+
+/**
  * Parse a headers textarea value into a plain object or null.
  * Accepts one `Header-Name: value` pair per line; empty lines and lines without
  * a `:` are skipped. Returns `null` when no valid pairs are found (semantically
@@ -254,6 +267,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         description: rawDesc,
         eventTypes: resolvedEventTypes,
         headers: parseHeadersTextarea(form["headers"] ?? ""),
+        rateLimit: parseRateLimitField(form["rateLimit"]),
       };
       let secret: string;
       try {
@@ -319,6 +333,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         eventTypes: resolvedEventTypes,
         disabled: form["disabled"] === "1",
         headers: parseHeadersTextarea(form["headers"] ?? ""),
+        rateLimit: parseRateLimitField(form["rateLimit"]),
       };
       let updated: typeof ep;
       try {

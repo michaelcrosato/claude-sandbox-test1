@@ -156,11 +156,43 @@ export function tenantLoginPage(error?: string): string {
 </html>`;
 }
 
+/** Current-month usage and quota for the usage bar. */
+export interface UsageStats {
+  readonly currentMonth: number;
+  readonly quota: number | null;
+  readonly periodStart: string;
+  readonly resetsAt: string;
+}
+
+/** Compact usage bar shown at the top of the messages page. */
+function usageBar(stats: UsageStats): string {
+  const { currentMonth, quota, periodStart, resetsAt } = stats;
+  if (quota === null) {
+    return `<div class="card" style="padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">
+  <span style="font-size:13px;color:#374151">This month (${periodStart} – ${resetsAt}): <strong>${currentMonth.toLocaleString()}</strong> messages sent</span>
+  <span class="meta">No quota</span>
+</div>`;
+  }
+  const remaining = Math.max(0, quota - currentMonth);
+  const pct = quota > 0 ? Math.min(100, Math.round((currentMonth / quota) * 100)) : 100;
+  const barColor = pct >= 90 ? "#ef4444" : pct >= 75 ? "#f59e0b" : "#2563eb";
+  return `<div class="card" style="padding:12px 18px;margin-bottom:16px">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+    <span style="font-size:13px;color:#374151"><strong>${currentMonth.toLocaleString()}</strong> / ${quota.toLocaleString()} messages this month</span>
+    <span class="meta">${remaining.toLocaleString()} remaining · resets ${resetsAt}</span>
+  </div>
+  <div style="height:6px;border-radius:3px;background:#e5e7eb;overflow:hidden">
+    <div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px"></div>
+  </div>
+</div>`;
+}
+
 /** Messages list page — newest-first, paginated. */
 export function tenantMessagesPage(
   messages: readonly Message[],
   nextCursor: string | null,
   currentCursor?: string,
+  usageStats?: UsageStats,
 ): string {
   const rows =
     messages.length === 0
@@ -182,8 +214,10 @@ export function tenantMessagesPage(
       ? `<div class="pagination"><span class="meta">End of results</span></div>`
       : "";
 
+  const usageSection = usageStats !== undefined ? usageBar(usageStats) : "";
+
   const body = `<h2>Messages</h2>
-<div class="card">
+${usageSection}<div class="card">
   <table>
     <thead>
       <tr><th>ID</th><th>Event Type</th><th>Idempotency Key</th><th>Sent</th></tr>

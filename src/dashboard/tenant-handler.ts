@@ -27,6 +27,7 @@ import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
 import type { MessageStore } from "../storage/message-store.js";
+import { utcMonthRange } from "../storage/message-store.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import {
   MAX_LIST_ATTEMPTS_LIMIT,
@@ -39,6 +40,7 @@ import {
   tenantMessageDetailPage,
   tenantEndpointsPage,
   type EnrichedDelivery,
+  type UsageStats,
 } from "./tenant-views.js";
 
 export interface TenantDashboardDeps {
@@ -178,13 +180,22 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
 
       const cursor = req.query["cursor"];
       const resolvedCursor = cursor !== undefined && cursor !== "" ? cursor : null;
-      const page = await messages.listByApp(appId, {
-        limit: DEFAULT_PAGE_LIMIT,
-        cursor: resolvedCursor,
-      });
+      const nowMs = clock();
+      const monthRange = utcMonthRange(nowMs);
+      const [page, usageSummary, app] = await Promise.all([
+        messages.listByApp(appId, { limit: DEFAULT_PAGE_LIMIT, cursor: resolvedCursor }),
+        messages.summarizeUsageByApp(appId, monthRange),
+        apps.get(appId),
+      ]);
+      const usageStats: UsageStats = {
+        currentMonth: usageSummary.total,
+        quota: app !== null ? app.monthlyMessageQuota : null,
+        periodStart: new Date(monthRange.fromMs).toISOString().slice(0, 10),
+        resetsAt: new Date(monthRange.toMs).toISOString().slice(0, 10),
+      };
       return html(
         200,
-        tenantMessagesPage(page.messages, page.nextCursor, cursor),
+        tenantMessagesPage(page.messages, page.nextCursor, cursor, usageStats),
       );
     }
 

@@ -53,7 +53,7 @@ tr:hover td{background:#f8fafc}
 .btn-gray{background:#e2e8f0;color:#374151}
 .btn-red{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
 .btn-sm{padding:4px 8px;font-size:12px}
-input[type=text],input[type=url],textarea{padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;outline:none;width:100%}
+input[type=text],input[type=url],input[type=number],textarea{padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;outline:none;width:100%}
 input:focus,textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
 label{display:block;font-size:12px;font-weight:600;margin-bottom:3px;color:#374151;text-transform:uppercase;letter-spacing:.04em}
 .form-row{margin-bottom:14px}
@@ -207,6 +207,10 @@ export function portalEndpointsPage(
       <label for="headers">Custom headers <span class="meta">(optional — one per line: Header-Name: value)</span></label>
       <textarea id="headers" name="headers" rows="3" placeholder="X-API-Key: my-key&#10;X-Tenant-ID: 123"></textarea>
     </div>
+    <div class="form-row">
+      <label for="rateLimit">Rate limit <span class="meta">(requests/min — leave blank for no limit)</span></label>
+      <input id="rateLimit" type="number" name="rateLimit" min="1" placeholder="e.g. 100" style="max-width:180px">
+    </div>
     <button type="submit" class="btn btn-blue">Create endpoint</button>
   </form>
 </div>`;
@@ -322,6 +326,10 @@ export function portalEndpointDetailPage(
       <label for="headers">Custom headers <span class="meta">(one per line: Header-Name: value — clear all to remove)</span></label>
       <textarea id="headers" name="headers" rows="4" placeholder="X-API-Key: my-key&#10;X-Tenant-ID: 123">${esc(headersText)}</textarea>
     </div>
+    <div class="form-row">
+      <label for="rateLimit">Rate limit <span class="meta">(requests/min — leave blank to remove limit)</span></label>
+      <input id="rateLimit" type="number" name="rateLimit" min="1" value="${endpoint.rateLimit !== null ? String(endpoint.rateLimit) : ""}" style="max-width:180px">
+    </div>
     <div class="form-row" style="display:flex;gap:8px;align-items:center">
       <input type="checkbox" id="disabled" name="disabled" value="1"${endpoint.disabled ? " checked" : ""} style="width:auto">
       <label for="disabled" style="text-transform:none;letter-spacing:0;margin:0">Disabled (pauses delivery to this endpoint)</label>
@@ -423,6 +431,7 @@ try {
     <tr><td style="color:#64748b">Description</td><td>${esc(endpoint.description) || '<span class="meta">—</span>'}</td></tr>
     <tr><td style="color:#64748b">Event types</td><td>${esc(types)}</td></tr>
     <tr><td style="color:#64748b;vertical-align:top">Custom headers</td><td class="mono">${endpoint.headers ? Object.entries(endpoint.headers).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>") : '<span class="meta" style="font-style:normal">—</span>'}</td></tr>
+    <tr><td style="color:#64748b">Rate limit</td><td>${endpoint.rateLimit !== null ? endpoint.rateLimit.toLocaleString() + " req/min" : '<span class="meta">No limit</span>'}</td></tr>
     <tr><td style="color:#64748b">Status</td><td>${endpoint.disabled ? '<span class="pill pill-gray">disabled</span>' : '<span class="pill pill-green">active</span>'}</td></tr>
     <tr><td style="color:#64748b">Created</td><td class="meta">${fmtTime(endpoint.createdAt)}</td></tr>
   </table>
