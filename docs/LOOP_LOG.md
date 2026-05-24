@@ -4,6 +4,72 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 50: Bulk Delivery Retry (`POST /v1/deliveries/retry`)
+
+**Repo truth at start:** clean main @ `05fc3b6` (iter-49, data retention). Baseline verified:
+`tsc --noEmit` clean, vitest **1093/1093** (43 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Bulk delivery retry — `POST /v1/deliveries/retry`.
+The per-message retry path (`POST /v1/messages/:id/retry`, iter-34) solves one recovery
+scenario: "I know which message failed, replay it." The far more common scenario after an
+outage is: "my endpoint was down for hours, now it's fixed — replay everything that died."
+Without bulk retry, operators must list all dead-lettered deliveries (`GET
+/v1/deliveries?status=dead_letter`), page through the results, and call per-message retry for
+each affected message — potentially dozens or hundreds of HTTP calls. One `POST
+/v1/deliveries/retry` replaces all of them. Every serious webhook platform (Svix, Convoy,
+Hookdeck) exposes this as "retry all failures"; Posthorn now does too. Completes the recovery
+arc: `endpoint.disabled` (iter-36) and `message.dead_lettered` (iter-48) tell you *when*
+things failed; `POST /v1/messages/:id/retry` (iter-34) recovers one message; this recovers
+the entire backlog.
+
+**Architecture (additive, zero blast radius):**
+
+Pure fn `retryAppDeliveries(appId, deps, options?)` in new `src/queue/retry-app.ts` — the
+tenant-wide structural twin of `retryMessageDeliveries` (same absorb-concurrent-revive
+pattern). Uses existing `DeliveryQueue.listByApp(appId, { status: 'dead_letter', limit })`
+(from iter-40) to fetch the dead-letter page, then calls `queue.retry(task.id)` for each.
+`hasMore: page.nextCursor !== null` — the same keyset-pagination invariant as every list
+route. After reviving a batch the tasks become `pending` (no longer `dead_letter`), so a
+subsequent call naturally fetches the *next* batch of still-dead-letter tasks — no cursor
+threading needed by the caller. Bounded at `MAX_LIST_DELIVERIES_LIMIT = 200` per call.
+
+**Built this tick:**
+
+- **`src/queue/retry-app.ts`** *(new)* — `retryAppDeliveries`, `BulkRetryResult` interface,
+  `DEFAULT_BULK_RETRY_LIMIT = MAX_LIST_DELIVERIES_LIMIT`, `RetryAppDeps`. `RangeError` on
+  out-of-bounds `limit`; concurrent `DeliveryStateError` / `UnknownDeliveryTaskError`
+  absorbed.
+- **`src/queue/retry-app.test.ts`** *(new)* — 8 unit tests: empty-app no-op, pending-only
+  no-op, multiple dead-letter tasks counted, tenant isolation, skips non-dead-letter tasks,
+  `hasMore: true` when backlog exceeds limit, concurrent-revive absorbed, limit validation.
+- **`src/http/api.ts`** — Added `"POST /v1/deliveries/retry"` to `API_ROUTE_KEYS`. Imported
+  `retryAppDeliveries` and `BulkRetryResult`. Added `retryAllDeliveries: AuthedHandler`
+  (no-body POST; tenant-scoped; returns `200 { retried, hasMore }`). Registered in route
+  table. Updated surface comment.
+- **`src/http/api.test.ts`** — Added `describe("createApi — POST /v1/deliveries/retry")`: 4
+  tests (401 unauthenticated, `{ retried:0, hasMore:false }` no dead-letters, `retried:2`
+  after two dead-lettered deliveries via a worker run, tenant isolation confirmed 0).
+- **`src/http/openapi.ts`** — Added `"/v1/deliveries/retry"` path with `post` operation
+  (`retryAllDeliveries`, `Deliveries` tag). Added `BulkRetryResult` component schema
+  (`retried: integer ≥ 0`, `hasMore: boolean`). Both forced by the bidirectional drift +
+  orphan-schema tests.
+- **`src/sdk/client.ts`** — Added `BulkRetryResult` interface. Added `retryAllDeliveries()`
+  → `BulkRetryResult` (plain POST `/v1/deliveries/retry`, no body).
+- **`src/sdk/client.test.ts`** — Added transport-layer test: method=POST, URL path, retried
+  and hasMore fields round-trip.
+- **`src/index.ts`** — Exported `retryAppDeliveries`, `DEFAULT_BULK_RETRY_LIMIT`,
+  `BulkRetryResult`, `RetryAppDeps`.
+
+**Validation:** `tsc --noEmit` clean, vitest **1107/1107** (44 files, +14: 8 unit + 4 handler +
+1 SDK + 1 export constant), `npm run build` clean. Integrity gate + local gate: exit 0.
+One flaky tinypool "Worker exited unexpectedly" on the first run — confirmed known noise by
+re-running to clean pass. git status: clean (8 files staged + committed).
+
+**State:** GREEN → committed to main. Next tick: assess next highest-leverage gap.
+
+---
+
 ## 2026-05-24 — Iteration 49: Data Retention / Automatic Pruning (`POSTHORN_RETENTION_DAYS`)
 
 **Repo truth at start:** clean main @ `e120fb5` (iter-48, `message.dead_lettered`). Baseline verified:
