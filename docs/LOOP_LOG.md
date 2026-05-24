@@ -4,6 +4,69 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 44: Test Event Delivery
+
+**Repo truth at start:** clean main @ `af99750` (iter-43, event type catalog).
+Baseline verified: `tsc --noEmit` clean, vitest **997/997** (42 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** `POST /v1/endpoints/:id/test` — the #1 developer
+debugging feature in every incumbent webhook service (Svix, Hookdeck, Convoy all have it), and the
+last named competitive gap between "complete webhook platform" and "production grade." A developer
+who just creates or reconfigures an endpoint needs to verify it is reachable and configured
+correctly *immediately*, without waiting for a real production message, cluttering their message
+history, or consuming monthly quota. This delivers that in one HTTP call and synchronously returns
+the result.
+
+**Built this tick:**
+
+- **`src/http/api.ts`** — Imported `buildSignedRequest`, `fetchTransport`, `isSuccessStatus`,
+  `DEFAULT_REQUEST_TIMEOUT_MS`, `Transport` from the worker and `endpointToDeliveryTarget` from the
+  endpoint resolver. Added `transport?: Transport` and `testRequestTimeoutMs?: number` to `ApiDeps`
+  (optional; default to production values). Added `"POST /v1/endpoints/:id/test"` to
+  `API_ROUTE_KEYS`. Handler `testEndpoint`: validates bearer auth → fetches endpoint (404 if absent
+  or cross-tenant) → 400 if `disabled` → parses optional `{ eventType?, payload? }` body (defaults:
+  `"test"` / `{"test":true}`) → builds a **synthetic, non-persisted message** (`id: "test_<UUID>"`
+  — never stored, never queued, never counted against quota) → calls `endpointToDeliveryTarget`
+  (respects rotation-overlap secrets) → calls `buildSignedRequest` → sends via injected transport
+  with `AbortController` timeout → returns `200 { success, httpStatus?, error?, durationMs }`. The
+  response always has HTTP status 200; `success` in the body reports the delivery outcome so callers
+  can reliably inspect it (a `4xx` from the endpoint is still a 200 from the API, with
+  `success:false`).
+
+- **`src/http/openapi.ts`** — `TestEndpointInput` and `TestEndpointResult` component schemas; the
+  `POST /v1/endpoints/{id}/test` operation (the bidirectional drift test forced both).
+
+- **`src/sdk/client.ts`** — `TestEndpointInput` and `TestEndpointResult` wire types; `client.
+  testEndpoint(id, input?)` sends the body (omitting undefined fields) and returns the typed result.
+
+- **`src/portal/portal-handler.ts`** + **`src/portal/portal-views.ts`** — The consumer portal
+  gets a "Test delivery" card on the endpoint detail page (hidden when the endpoint is disabled, the
+  same guard the API enforces). The card shows a "Send test" submit button; a `POST
+  /portal/endpoints/:id/test` dispatch branch runs the same signed-request logic (injectable
+  transport for tests), then re-renders the detail page with an inline result banner (`alert-ok` /
+  `alert-err`). `PortalDeps` gains an optional `transport` field; `PortalTestResult` is the view
+  type exported from `portal-views.ts`.
+
+**Tests (`src/http/api.test.ts`, +7; `src/sdk/client.test.ts`, +2):**
+- API: success path (transport returns 200, `success:true`); failure path (transport returns 500,
+  `success:false`); transport throw → `success:false` with `error` field; default body → `webhook-id`
+  starts with `test_` + `webhook-signature` present; 400 for disabled endpoint; 404 for unknown and
+  cross-tenant endpoint; 401 without auth.
+- SDK: body with `eventType`/`payload` serialized correctly; empty input omits both fields.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**1006/1006, 42 files** (+9 over baseline). `npm run build` clean. **compiled-`dist` smoke**
+(`scripts/smoke-test-endpoint.mjs`, 21/21 checks through production ESM on `:memory:`): provision →
+create endpoint → test success (receiver 200, `webhook-id` starts with `test_`, signature present) →
+test failure (receiver 500, `success:false`) → test with custom eventType+payload (receiver 201,
+`success:true`) → verify no messages stored in message list (quota not consumed) → 404 unknown → 400
+disabled → 401 unauthenticated.
+
+**State:** GREEN → committed to main @ iter-44 (`f01f9e0`).
+
+---
+
 ## 2026-05-23 — Iteration 43: Event Type Catalog
 
 **Repo truth at start:** clean main @ `4a0c1e2` (iter-42, portal delivery detail + manual retry).
