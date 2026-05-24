@@ -1,11 +1,23 @@
 {
   "name": "posthorn",
   "version": "0.0.1",
-  "private": true,
   "description": "Open-core, Standard Webhooks-compliant reliable webhook delivery infrastructure. Single container, no Redis.",
   "type": "module",
   "license": "MIT",
   "author": "Michael Crosato",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelcrosato/claude-sandbox-test1"
+  },
+  "keywords": [
+    "webhook",
+    "webhook-delivery",
+    "standard-webhooks",
+    "reliable-delivery",
+    "sqlite",
+    "no-redis",
+    "open-core"
+  ],
   "engines": {
     "node": ">=20"
   },
