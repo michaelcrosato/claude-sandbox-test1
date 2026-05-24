@@ -31,7 +31,7 @@
 import { randomUUID } from "node:crypto";
 import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/endpoint.js";
-import { activeSigningSecrets } from "../endpoints/endpoint.js";
+import { activeSigningSecrets, endpointSubscribesTo } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { PortalSessionStore } from "./portal-session.js";
 import type { EventTypeStore, EventType } from "../event-types/event-type.js";
@@ -571,7 +571,9 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       if (eventTypesStore === undefined) return NOT_FOUND;
       const et = await eventTypesStore.get(auth.appId, s1);
       if (et === null) return NOT_FOUND;
-      return html(200, portalEventTypeDetailPage(et));
+      const allEndpoints = await endpoints.listByApp(auth.appId);
+      const subscribers = allEndpoints.filter((ep) => endpointSubscribesTo(ep, et.id));
+      return html(200, portalEventTypeDetailPage(et, undefined, false, subscribers));
     }
 
     // ── POST /portal/event-types/:id/update ───────────────────────────────────

@@ -583,6 +583,7 @@ export function portalEventTypeDetailPage(
   eventType: EventType,
   error?: string,
   saved = false,
+  subscribers?: readonly Pick<Endpoint, "id" | "url" | "description" | "disabled">[],
 ): string {
   const errorBanner = error
     ? `<div class="alert alert-err">${esc(error)}</div>`
@@ -625,6 +626,31 @@ export function portalEventTypeDetailPage(
   </form>
 </div>`;
 
+  const subscribersSection = (() => {
+    if (!subscribers || subscribers.length === 0) {
+      return `<div class="card">
+  <h2>Subscribed endpoints</h2>
+  <p class="empty">No endpoints are subscribed to this event type.</p>
+</div>`;
+    }
+    const rows = subscribers
+      .map(
+        (ep) => `<tr>
+  <td><a href="/portal/endpoints/${esc(ep.id)}">${esc(ep.id)}</a><br><span class="meta trunc">${esc(ep.url)}</span></td>
+  <td>${ep.description ? esc(ep.description) : '<span class="meta">—</span>'}</td>
+  <td>${ep.disabled ? '<span class="pill pill-gray">disabled</span>' : '<span class="pill pill-green">active</span>'}</td>
+</tr>`,
+      )
+      .join("\n");
+    return `<div class="card">
+  <h2>Subscribed endpoints</h2>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Description</th><th>Status</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
+  })();
+
   const body = `<h2 style="margin-bottom:4px">
   <a href="/portal/event-types" style="color:#64748b;font-weight:400;font-size:13px">← Event types</a>
 </h2>
@@ -639,6 +665,7 @@ export function portalEventTypeDetailPage(
   </table>
 </div>
 
+${subscribersSection}
 ${editForm}
 ${archiveSection}`;
 

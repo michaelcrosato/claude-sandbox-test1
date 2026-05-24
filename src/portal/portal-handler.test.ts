@@ -638,6 +638,32 @@ describe("createPortalHandler", () => {
     expect(et!.archived).toBe(true);
   });
 
+  it("GET /portal/event-types/:id shows no subscribers when no endpoints are subscribed", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created" });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/user.created" }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toContain("No endpoints");
+  });
+
+  it("GET /portal/event-types/:id shows endpoints subscribed to that type", async () => {
+    const { endpoints, eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "order.placed", name: "Order placed" });
+    await endpoints.create({ appId: "app_1", url: "https://example.com/hook", eventTypes: ["order.placed"] });
+    await endpoints.create({ appId: "app_1", url: "https://other.com/hook", eventTypes: ["user.created"] });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/order.placed" }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("https://example.com/hook");
+    expect(html).not.toContain("https://other.com/hook");
+  });
+
   // ── Unknown routes ────────────────────────────────────────────────────────────
 
   it("unknown portal route returns 404", async () => {
