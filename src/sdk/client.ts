@@ -82,6 +82,12 @@ export interface SendMessageInput {
    * re-deliver — safe to retry a failed send.
    */
   readonly idempotencyKey?: string | null;
+  /**
+   * ISO 8601 timestamp before which no delivery attempt is made. Omit or pass
+   * `null` for immediate delivery. Past timestamps are treated as immediate.
+   * Applied uniformly to every endpoint in the fan-out.
+   */
+  readonly sendAt?: string | null;
 }
 
 /** The reference to a message returned by {@link PosthornClient.sendMessage}. */
@@ -611,9 +617,8 @@ export class PosthornClient {
       eventType: input.eventType,
       payload: input.payload,
     };
-    if (input.idempotencyKey !== undefined) {
-      body["idempotencyKey"] = input.idempotencyKey;
-    }
+    if (input.idempotencyKey !== undefined) body["idempotencyKey"] = input.idempotencyKey;
+    if (input.sendAt !== undefined) body["sendAt"] = input.sendAt;
     return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
   }
 
@@ -626,6 +631,7 @@ export class PosthornClient {
     const items = messages.map((m) => {
       const item: Record<string, unknown> = { eventType: m.eventType, payload: m.payload };
       if (m.idempotencyKey !== undefined) item["idempotencyKey"] = m.idempotencyKey;
+      if (m.sendAt !== undefined) item["sendAt"] = m.sendAt;
       return item;
     });
     return this.#transport.request<BatchResults>("POST", "/v1/messages/batch", { messages: items });

@@ -300,6 +300,63 @@ describe("createApi — POST /v1/messages (ingest)", () => {
     expect(res.status).toBe(400);
     expect(body(res).error.code).toBe("invalid_request");
   });
+
+  it("delays delivery when sendAt is in the future", async () => {
+    let nowMs = 1_700_000_000_000;
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue({ now: () => nowMs });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, now: () => nowMs });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://recv.test/h" }, secret));
+
+    const futureMs = nowMs + 10_000;
+    const sendAt = new Date(futureMs).toISOString();
+    const res = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, sendAt }, secret),
+    );
+    expect(res.status).toBe(202);
+    expect(body(res).fanout.matched).toBe(1);
+
+    // Nothing claimable yet — the task is gated behind sendAt.
+    expect(await queue.claimDue({ nowMs })).toHaveLength(0);
+
+    // Advance past sendAt → task becomes claimable.
+    nowMs = futureMs + 1;
+    expect(await queue.claimDue({ nowMs })).toHaveLength(1);
+  });
+
+  it("rejects a non-string sendAt with 400", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, sendAt: 12345 }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("rejects an invalid sendAt string with 400", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, sendAt: "not-a-date" }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("treats a null sendAt as immediate delivery", async () => {
+    const { api, secret, queue } = await setup();
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://recv.test/h" }, secret));
+    const res = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, sendAt: null }, secret),
+    );
+    expect(res.status).toBe(202);
+    expect(await queue.claimDue({ nowMs: Date.now() })).toHaveLength(1);
+  });
 });
 
 describe("createApi — POST /v1/messages monthly quota enforcement", () => {
@@ -3015,5 +3072,70 @@ describe("createApi — POST /v1/messages/batch", () => {
       request({ method: "POST", path: "/v1/messages/batch" }),
     );
     expect(res.status).toBe(401);
+  });
+
+  it("delays delivery per-item when sendAt is set", async () => {
+    let nowMs = 1_700_000_000_000;
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue({ now: () => nowMs });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, now: () => nowMs });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://recv.test/h" }, secret));
+
+    // 10s is less than the 30s visibility timeout, so the first claim's lease
+    // won't expire before we advance the clock.
+    const futureMs = nowMs + 10_000;
+    const sendAt = new Date(futureMs).toISOString();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "e", payload: { n: 1 }, sendAt },
+            { eventType: "f", payload: { n: 2 } }, // immediate
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect((results[0] as any).ok).toBe(true);
+    expect((results[1] as any).ok).toBe(true);
+
+    // At nowMs: only the immediate item is claimable.
+    expect(await queue.claimDue({ nowMs })).toHaveLength(1);
+
+    // Past sendAt (still within the first task's lease window): the scheduled item unlocks.
+    nowMs = futureMs + 1;
+    expect(await queue.claimDue({ nowMs })).toHaveLength(1);
+  });
+
+  it("returns a per-item invalid_request for a malformed sendAt in the batch", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      jsonRequest(
+        "POST",
+        "/v1/messages/batch",
+        {
+          messages: [
+            { eventType: "good", payload: {}, sendAt: "not-a-date" },
+            { eventType: "also.good", payload: {} },
+          ],
+        },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const results = body(res).results as unknown[];
+    expect((results[0] as any).ok).toBe(false);
+    expect((results[0] as any).error.code).toBe("invalid_request");
+    expect((results[1] as any).ok).toBe(true);
   });
 });

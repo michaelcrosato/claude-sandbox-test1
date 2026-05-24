@@ -125,7 +125,7 @@ import {
   type NewApp,
 } from "../apps/app.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { ingest } from "../fanout/fanout.js";
+import { ingest, type FanoutOptions } from "../fanout/fanout.js";
 import {
   buildSignedRequest,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -343,6 +343,19 @@ function parseJsonObject(req: ApiRequest): Record<string, unknown> {
     throw new HttpError(400, "invalid_request", "request body must be a JSON object");
   }
   return parsed as Record<string, unknown>;
+}
+
+/**
+ * Parse an optional `sendAt` field from a request body. Accepts an ISO 8601 string
+ * and converts it to epoch-ms. Missing / null → `null` (immediate delivery).
+ * Throws `TypeError` on bad input so the global error handler renders it as 400.
+ */
+function parseSendAt(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string") throw new TypeError("sendAt must be a string");
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) throw new TypeError("sendAt must be a valid ISO 8601 date string");
+  return t;
 }
 
 /** A required path parameter; absent only on a routing bug, surfaced as 500. */
@@ -955,6 +968,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     // receiver verifies these bytes. `eventType`/`idempotencyKey` are validated by
     // the store's `normalizeNewMessage` (TypeError → 400). `appId` is the
     // authenticated tenant — never read from the body.
+    const sendAtMs = parseSendAt("sendAt" in body ? body["sendAt"] : undefined);
     const input: NewMessage = {
       appId: ctx.app.id,
       eventType: body["eventType"] as string,
@@ -963,11 +977,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { idempotencyKey: body["idempotencyKey"] as string | null }
         : {}),
     };
+    const fanoutOptions: FanoutOptions = sendAtMs !== null ? { availableAt: sendAtMs } : {};
     const result = await ingest(input, {
       messages: deps.messages,
       endpoints: deps.endpoints,
       queue: deps.queue,
-    });
+    }, fanoutOptions);
     deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
     return json(202, {
       message: {
@@ -1055,6 +1070,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       }
 
       try {
+        const itemSendAtMs = parseSendAt("sendAt" in msg ? msg["sendAt"] : undefined);
         const input: NewMessage = {
           appId: ctx.app.id,
           eventType: msg["eventType"] as string,
@@ -1063,11 +1079,13 @@ export function createApi(deps: ApiDeps): ApiHandler {
             ? { idempotencyKey: msg["idempotencyKey"] as string | null }
             : {}),
         };
+        const itemFanoutOptions: FanoutOptions =
+          itemSendAtMs !== null ? { availableAt: itemSendAtMs } : {};
         const result = await ingest(input, {
           messages: deps.messages,
           endpoints: deps.endpoints,
           queue: deps.queue,
-        });
+        }, itemFanoutOptions);
         deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
         if (!result.deduplicated) {
           consumed++;

@@ -1202,6 +1202,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["string", "null"],
               description: "Collapse repeat sends onto one message, scoped to this tenant.",
             },
+            sendAt: {
+              type: ["string", "null"],
+              format: "date-time",
+              description:
+                "ISO 8601 timestamp before which no delivery attempt is made. Omit or pass `null` for immediate delivery. " +
+                "Past timestamps are treated as immediate. Each endpoint in the fan-out inherits the same delay.",
+              examples: ["2026-06-01T09:00:00Z"],
+            },
           },
         },
         NewEndpoint: {
