@@ -4,6 +4,102 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 62: Channel-Based Message Routing
+
+**Repo truth at start:** clean main @ `c1684c5` (iter-61, direct delivery lookup). Baseline
+verified: `tsc --noEmit` clean, vitest **1286/1286** (45 files), `npm run build` clean.
+
+**Problem:** Posthorn's fan-out targeted every enabled, subscribed endpoint in the tenant — but
+there was no way to scope a delivery to a *subset* of endpoints based on the message sender's
+intent. A SaaS platform ("Acme") wanting to send a `payment.created` webhook only to
+customer_Alice's endpoint would have to either (a) create one Posthorn App per customer (admin
+overhead scales with the customer count), (b) maintain routing externally (defeats the product's
+purpose), or (c) use payload filters — but filters are owned by the *endpoint*, not the message,
+and they require the customer_id to be in the payload rather than in the routing envelope.
+Every serious webhook platform (Svix calls this "Applications"; Hookdeck calls it "channels")
+exposes per-customer scoping as a first-class feature.
+
+**Move chosen:** Add a `channel` field to both messages and endpoints. The routing rule is
+simple and composable with existing filters:
+- `endpoint.channel = null` → **global** — receives all messages regardless of channel
+- `endpoint.channel = "x"` → **channel-scoped** — receives only messages with `channel = "x"`
+- Message with `channel = null` → untagged — only global endpoints receive it
+- Message with `channel = "x"` → received by global endpoints AND channel-"x" endpoints
+
+A SaaS platform creates one endpoint per end-user (with `channel = "customer/{id}"`), sends
+messages tagged with the same channel, and only the right customer's endpoint fires. A shared
+analytics endpoint with no channel receives everything. Fully composable with event-type
+subscription and payload filters (the channel check runs after the eventType check, before
+the payload filter check) — all three gate a delivery independently.
+
+**Architecture (additive, zero blast radius):**
+
+1. **`src/endpoints/endpoint.ts`** — `MAX_CHANNEL_LENGTH = 200`, `normalizeChannel()` (validates
+   non-empty string ≤ 200 chars, no control chars; null passthrough); `channel: string | null`
+   on `Endpoint`, `NewEndpoint`, `EndpointUpdate`, `NormalizedNewEndpoint`; wired into
+   `normalizeNewEndpoint` and `applyEndpointUpdate`.
+
+2. **`src/storage/message-store.ts`** — `channel: string | null` on `Message`, `NewMessage`;
+   `channel?: string | null` on `ListMessagesOptions`; `normalizeNewMessage` validates via
+   `normalizeChannel`; `resolveListMessagesQuery` propagates the channel filter.
+
+3. **`src/fanout/fanout.ts`** — `skippedChannel: readonly Endpoint[]` added to `FanoutSelection`
+   and `skippedChannel: number` to `FanoutResult`; pure `channelMatchesEndpoint(endpoint, msgChannel)`
+   helper (returns `true` when `endpoint.channel === null || endpoint.channel === msgChannel`);
+   `selectFanoutTargets` gains a `channel` param (3rd arg, default `null`) and inserts the
+   channel check as the 3rd priority (after disabled, after unsubscribed, before filter);
+   `fanOut` passes `message.channel` to the selection.
+
+4. **All six stores** (in-memory + SQLite + Postgres for both endpoints and messages):
+   - In-memory: `channel` stored on create, filtered in `listByApp`.
+   - SQLite endpoints: `channel TEXT` column via `#migrateChannelColumn()` (`PRAGMA table_info` +
+     `ALTER TABLE`); INSERT/UPDATE updated; `rowToEndpoint` maps it.
+   - SQLite messages: same additive migration; `#selectByAppFirst` / `#selectByAppAfter` and their
+     eventType-filtered twins extended with `IS ?` predicate for null-safe channel matching;
+     new `idx_messages_app_channel_created (app_id, channel, created_at, id)` covering index for
+     channel-filtered list queries.
+   - Postgres endpoints/messages: same column additions; `IS NOT DISTINCT FROM` for null-safe
+     channel equality on Postgres.
+
+5. **`src/http/api.ts`** — `createMessage` and `batchSendMessages` parse `channel` from body
+   via `normalizeChannel`; `createEndpoint` / `updateEndpoint` pass it through; `messageView`,
+   `messageListItemView`, and `endpointView` include `channel`; fan-out summary exposes
+   `skippedChannel`; `GET /v1/messages` parses `?channel=` and threads it to `listByApp`.
+
+6. **`src/http/openapi.ts`** — `channel` field added to `MessageSummary`, `Message`, `NewMessage`,
+   `Endpoint`, `NewEndpoint`, `EndpointUpdate` schemas; `skippedChannel` added to `FanoutSummary`
+   (both `required` array and `properties`); `?channel=` parameter added to `GET /v1/messages`
+   path.
+
+7. **`src/sdk/client.ts`** — `channel` added to `SendMessageInput`, `MessageRef`,
+   `MessageWithDeliveries`, `CreateEndpointInput`, `UpdateEndpointInput`, `EndpointView`,
+   `ListMessagesParams`, `FanoutSummary`; serialized in `sendMessage`, `sendMessageBatch`,
+   `createEndpoint`, `updateEndpoint`, `listMessages`.
+
+8. **`src/index.ts`** — exports `normalizeChannel`, `MAX_CHANNEL_LENGTH`.
+
+**Tests (+25 cases, total 1311/1311 green):**
+- `fanout.test.ts`: 8 new `selectFanoutTargets` cases — global endpoint receives any-channel
+  message, global receives untagged, channel endpoint receives same channel, channel endpoint
+  skips different channel (→ skippedChannel), channel endpoint skips untagged message,
+  mixed [global + channelA + channelB] only skips channelB, `skippedChannel` bucket is empty
+  on no-channel endpoints, disabled channel endpoint still goes to skippedDisabled first.
+- `storage/conformance.ts`: 5 new message-store channel cases × 2 backends = 10 tests —
+  create with channel, create without channel (null), listByApp channel filter, `channel=null`
+  filter, no filter returns all.
+- `endpoints/conformance.ts`: 4 new endpoint channel cases × 2 backends = 8 tests — create
+  with channel, create without channel (null), update channel, update to null.
+- `http/api.test.ts` / `sdk/client.test.ts`: 7 new tests — channel round-trip in message view,
+  skippedChannel in fan-out summary, `?channel=` filter, endpoint create/update channel, SDK
+  transport serialization.
+
+**Validation:** `tsc --noEmit` clean → vitest **1311/1311** (45 files, 6 Postgres skipped), up
+from 1286. All 25 new tests green. `npm run build` clean.
+
+**Commit:** `6bd7777` — iter-62 — 20 files changed, 541 insertions, 74 deletions.
+
+---
+
 ## 2026-05-24 — Iteration 61: Direct Delivery Lookup + Attempt History
 
 **Repo truth at start:** clean main @ `b3c0438` (iter-60, endpoint payload filters). Baseline
