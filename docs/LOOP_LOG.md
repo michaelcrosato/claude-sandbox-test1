@@ -4,6 +4,58 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 61: Direct Delivery Lookup + Attempt History
+
+**Repo truth at start:** clean main @ `b3c0438` (iter-60, endpoint payload filters). Baseline
+verified: `tsc --noEmit` clean, vitest **1262/1262** (45 files), `npm run build` clean.
+
+**Problem:** Operators debugging a failed delivery could only reach its attempt history
+through the parent message (`GET /v1/messages/:id/attempts`), which returns attempts
+for *all* endpoints in the fan-out, not just the one delivery they care about. Anyone
+storing task IDs (e.g., from a list operation) had no direct fetch path — they had to
+list and filter client-side or scan the full message attempts log.
+
+**Move chosen:** Add `GET /v1/deliveries/:id` (single delivery fetch) and
+`GET /v1/deliveries/:id/attempts` (per-delivery attempt history). This completes the
+delivery API surface: every resource now has a direct GET path, and attempt history is
+reachable both via message and via delivery. The backing `listByTask` query on the
+attempt store is the natural complement to the existing `listByMessage` — the data is
+already there (every attempt records its `taskId`); only the index and API surface were
+missing.
+
+**What landed (10 files, +522 / 0):**
+
+- `src/attempts/delivery-attempt.ts` — `listByTask(taskId, options?)` added to
+  `DeliveryAttemptStore` interface.
+- `src/attempts/in-memory-attempt-store.ts` — `listByTask` implemented (filter on
+  `taskId`, same pagination logic as `listByMessage`).
+- `src/attempts/sqlite-attempt-store.ts` — `idx_delivery_attempts_task_paged` covering
+  index `(task_id, attempted_at, id)`; `#selectByTaskFirst` / `#selectByTaskAfter`
+  prepared statements; `listByTask` + `#fetchTaskPage` helper.
+- `src/attempts/postgres-attempt-store.ts` — `idx_delivery_attempts_task_paged` added
+  to `INDEXES` const; `listByTask` implemented.
+- `src/attempts/conformance.ts` — `describe("listByTask")` block: 6 cases covering
+  empty page, isolation from other tasks, forward pagination, exact-fit last page,
+  RangeError on limit=0, TypeError on bad cursor.
+- `src/http/api.ts` — `"GET /v1/deliveries/:id"` and `"GET /v1/deliveries/:id/attempts"`
+  added to `API_ROUTE_KEYS`; `getDelivery` and `listDeliveryAttempts` handlers (both
+  do the standard tenant-ownership check via `queue.get` + `task.appId` comparison —
+  another tenant's delivery is 404); wired into the exhaustive route table.
+- `src/http/openapi.ts` — `/v1/deliveries/{id}` (GET) and `/v1/deliveries/{id}/attempts`
+  (GET) paths with full parameter/response schemas.
+- `src/sdk/client.ts` — `getDelivery(id)` and `listDeliveryAttempts(id, params?)` methods.
+- `src/http/api.test.ts` — 2 new describe blocks (9 tests): 401/404 auth guards,
+  cross-tenant 404, field presence checks, recorded-attempt round-trip.
+- `src/sdk/client.test.ts` — 4 new transport tests: correct URL/method, URL encoding,
+  query-string passthrough.
+
+**Validation:** `tsc --noEmit` clean → vitest **1286/1286** (45 files, 6 Postgres
+skipped), up from 1262. All 24 new tests green. `npm run build` clean.
+
+**Commit:** `2697af7` — iter-61 — 10 files changed, 522 insertions.
+
+---
+
 ## 2026-05-24 — Iteration 60: Endpoint Payload Filters
 
 **Repo truth at start:** clean main @ `879d1d1` (iter-59, per-endpoint bulk retry). Baseline
