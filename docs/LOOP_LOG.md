@@ -4,6 +4,78 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 70: Portal Rate Limit Field + Tenant Dashboard Usage/Quota Bar
+
+**Repo truth at start:** clean main @ `067b502` (iter-69, webhook signature verification
+widget). Baseline verified: `tsc --noEmit` clean, vitest **1401/1401** (46 files, 6
+Postgres-skipped), `npm run build` clean.
+
+**Gaps closed (explicitly called out in iter-69 "Next moves"):**
+
+1. **Rate limit field in portal create/edit forms** — `rateLimit` was fully modeled in
+   `Endpoint`, API-complete, and SDK-complete, but the portal create and edit forms had no
+   field for it. A customer managing their endpoint via the portal had no self-service way
+   to set or clear a delivery rate limit.
+
+2. **Tenant-level usage/quota display in tenant dashboard** — The `GET /v1/usage` API and
+   the monthly quota enforcement (`429 quota_exceeded`) were both complete, but a developer
+   logged into the tenant dashboard had no way to see their current-month message count,
+   plan limit, or how many messages remain before hitting the quota.
+
+**Architecture (6 files, +147 / −7):**
+
+1. **`src/portal/portal-views.ts`** — Three targeted additions:
+   - Added `input[type=number]` to the CSS selector so the new field inherits the existing
+     form-input styling (consistent with text/url/textarea).
+   - **Create form** (`portalEndpointsPage`): new `rateLimit` number input (min=1,
+     placeholder "e.g. 100", max-width 180px) after the headers textarea; blank = no limit.
+   - **Edit form** (`portalEndpointDetailPage`): matching `rateLimit` number input pre-filled
+     from `endpoint.rateLimit`; clearing the field removes the limit on save.
+   - **Detail summary table**: new "Rate limit" row showing `N req/min` or "No limit" (meta
+     gray) — so the customer can always see the current value without opening edit mode.
+
+2. **`src/portal/portal-handler.ts`** — Added private `parseRateLimitField(raw)` helper:
+   blank/undefined → `null`; valid `parseInt` result → that integer; `NaN` → `null` (silently
+   treated as no limit; out-of-range/non-integer values reach `normalizeRateLimit` which throws,
+   caught by the existing error handler → JS alert). Wired `rateLimit: parseRateLimitField(...)` 
+   into both `POST /portal/endpoints` (create) and `POST /portal/endpoints/:id/update` (edit).
+
+3. **`src/dashboard/tenant-views.ts`** — Added `UsageStats` interface (`currentMonth`,
+   `quota`, `periodStart`, `resetsAt`) and a private `usageBar(stats)` renderer:
+   - **No quota**: one-line info bar ("This month (YYYY-MM-DD – YYYY-MM-DD): N messages sent
+     · No quota").
+   - **With quota**: two-line bar — count/quota text + remaining/reset metadata, and a
+     6px-tall progress bar (blue ≤ 74%, amber 75–89%, red ≥ 90%) that turns visually urgent
+     near the ceiling. Remaining is `max(0, quota − used)` so a soft-limit overshoot never
+     shows a negative. Updated `tenantMessagesPage` signature with an optional `usageStats`
+     parameter; the bar is injected above the messages table card (absent when undefined).
+
+4. **`src/dashboard/tenant-handler.ts`** — In `GET /dashboard/tenant/messages`, added a
+   `Promise.all` that fetches three things in parallel alongside the message page: (a) the
+   current-month `UsageSummary` via `messages.summarizeUsageByApp(appId, utcMonthRange(nowMs))`
+   — reusing the same store method the API and quota enforcement use; (b) the `App` record via
+   `apps.get(appId)` to read `monthlyMessageQuota`. Assembled into `UsageStats` and passed to
+   the view. Zero new store calls on the hot write path; the parallel fetch adds negligible
+   latency on a dashboard page load.
+
+**Tests (+4 new, total 1405/1401):**
+- `src/portal/portal-handler.test.ts`: 2 new cases under "Rate limit field":
+  - Create endpoint with `rateLimit=60` → store persists `60`, detail page contains it.
+  - Update endpoint with empty `rateLimit` field → clears to `null`, detail shows "No limit".
+- `src/dashboard/tenant-handler.test.ts`: 2 new cases under "Usage bar on messages page":
+  - No quota: messages page contains the sent count and "No quota".
+  - With quota (`monthlyMessageQuota: 100`, 1 message sent): page contains "100" (quota) and
+    "99" (remaining).
+
+**Validation:** `tsc --noEmit` clean → vitest **1405/1405** (was 1401; +4 all new tests green;
+Postgres skipped count unchanged). `npm run build` clean → committed `41f9c02`.
+
+**Next moves:** Global (per-gateway) default rate limit for all endpoints; tenant event-type
+catalog management via the portal (currently only accessible via the API/SDK); admin dashboard
+per-app usage column alongside the existing quota column.
+
+---
+
 ## 2026-05-24 — Iteration 69: Webhook Signature Verification Widget
 
 **Repo truth at start:** clean main @ `092e3df` (iter-68, per-endpoint delivery rate
