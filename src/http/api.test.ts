@@ -2992,6 +2992,151 @@ describe("createApi — POST /v1/endpoints/:id/deliveries/retry (per-endpoint bu
   });
 });
 
+describe("createApi — POST /v1/endpoints/:id/replay (endpoint message replay)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api, endpoints, secret } = await setup();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(request({ method: "POST", path: `/v1/endpoints/${epId}/replay` }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown endpoint id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/endpoints/ep_unknown/replay",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when the endpoint belongs to another tenant", async () => {
+    const { apps, api } = await setup();
+    const other = await apps.create({ name: "Other" });
+    const otherEndpoints = new InMemoryEndpointStore();
+    const otherEp = await otherEndpoints.create({
+      appId: other.id,
+      url: "https://other.example/hook",
+    });
+    const { secret: mySecret } = await apps.createApiKey((await apps.create({ name: "Mine" })).id);
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${otherEp.id}/replay`,
+        headers: { authorization: `Bearer ${mySecret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns { enqueued: 0, hasMore: false } when there are no messages", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${epId}/replay`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ enqueued: 0, hasMore: false });
+  });
+
+  it("enqueues a task for a matching message and returns the count", async () => {
+    const { api, secret, queue, appId } = await setup();
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "order.placed", payload: {} }, secret));
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${epId}/replay`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).enqueued).toBe(1);
+    expect(body(res).hasMore).toBe(false);
+    const tasks = (await queue.listByApp(appId)).deliveries;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.endpointId).toBe(epId);
+  });
+
+  it("respects event-type subscription — skips non-subscribed messages", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "user.created", payload: {} }, secret));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "payment.done", payload: {} }, secret));
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep", eventTypes: ["user.created"] }, secret),
+    );
+    const epId = body(ep).id as string;
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/endpoints/${epId}/replay`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).enqueued).toBe(1);
+  });
+
+  it("respects since / until time-range bounds in the request body", async () => {
+    const clockMs = { value: 1_700_000_000_000 };
+    const now = () => clockMs.value;
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore({ now });
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, now });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+
+    // old message — before the window
+    await messages.create({ appId: app.id, eventType: "ping", payload: "{}" });
+    clockMs.value += 5_000;
+    const sinceMs = clockMs.value;
+    clockMs.value += 1_000;
+    // message inside the window
+    await messages.create({ appId: app.id, eventType: "ping", payload: "{}" });
+    clockMs.value += 1_000;
+    const untilMs = clockMs.value;
+    clockMs.value += 1_000;
+    // message after the window
+    await messages.create({ appId: app.id, eventType: "ping", payload: "{}" });
+
+    const ep = await endpoints.create({ appId: app.id, url: "https://acme.example/ep" });
+    const res = await api(
+      jsonRequest(
+        "POST",
+        `/v1/endpoints/${ep.id}/replay`,
+        { since: sinceMs, until: untilMs },
+        secret,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).enqueued).toBe(1);
+  });
+
+  it("returns 400 for an out-of-range limit", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
+    const epId = body(ep).id as string;
+    const res = await api(
+      jsonRequest("POST", `/v1/endpoints/${epId}/replay`, { limit: 99999 }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});
+
 describe("createApi — POST /v1/portal/sessions (portal session minting)", () => {
   async function portalSetup() {
     const apps = new InMemoryAppStore();

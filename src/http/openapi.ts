@@ -29,6 +29,7 @@ import {
   MAX_STATS_DAYS,
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
+import { MAX_REPLAY_LIMIT } from "../queue/replay-endpoint.js";
 import {
   MAX_FILTER_DEPTH,
   MAX_FILTER_NODES,
@@ -538,6 +539,36 @@ export function buildOpenApiDocument(): OpenApiDocument {
           parameters: [idParam("The endpoint id.")],
           responses: {
             "200": jsonResponse("The bulk-retry tally.", ref("BulkRetryResult")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such endpoint for this tenant."),
+          },
+        },
+      },
+      "/v1/endpoints/{id}/replay": {
+        post: {
+          operationId: "replayEndpoint",
+          tags: ["Endpoints"],
+          summary: "Replay historical messages to an endpoint",
+          description:
+            "Scan the tenant's message history and enqueue fresh delivery tasks for messages " +
+            "that match the endpoint's subscription (event-type filter, channel, and payload filter). " +
+            "This is the catch-up path for a newly-added endpoint (which has never seen prior messages) " +
+            "or a recovering endpoint (re-deliver without waiting for manual per-message retries). " +
+            "Each enqueued task is a brand-new `pending` delivery — the stable `webhook-id` on each " +
+            "delivery lets the receiver deduplicate if it has already processed the message. " +
+            "The scan is bounded by the optional `since`/`until` epoch-ms window and the `limit` " +
+            `(default ${MAX_REPLAY_LIMIT}, max ${MAX_REPLAY_LIMIT}). ` +
+            "When `hasMore` is `true` there are more messages in the window not yet replayed; " +
+            "re-invoke until `false` to fully drain. Another tenant's (or an unknown) endpoint is `404`.",
+          security: [{ BearerAuth: [] }],
+          parameters: [idParam("The endpoint id.")],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: ref("ReplayRequest") } },
+          },
+          responses: {
+            "200": jsonResponse("The replay tally.", ref("ReplayResult")),
+            "400": errorResponse("Malformed request body (e.g. an invalid `limit`)."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such endpoint for this tenant."),
           },
@@ -1882,6 +1913,56 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "`true` when further dead-lettered deliveries remain beyond this call's limit. " +
                 "Re-invoke `POST /v1/deliveries/retry` until `false` to fully drain the backlog.",
+            },
+          },
+        },
+        ReplayRequest: {
+          type: "object",
+          description:
+            "Optional input for `POST /v1/endpoints/{id}/replay`. All fields have defaults; " +
+            "omit the body entirely to replay all matching historical messages up to the default limit.",
+          properties: {
+            since: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "Inclusive epoch-ms lower bound — only messages created at or after this " +
+                "timestamp are replayed. Absent means no lower bound.",
+            },
+            until: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "Exclusive epoch-ms upper bound — only messages created strictly before this " +
+                "timestamp are replayed. Absent means no upper bound.",
+            },
+            limit: {
+              type: "integer",
+              minimum: 1,
+              maximum: MAX_REPLAY_LIMIT,
+              description:
+                `Maximum delivery tasks to enqueue this call (1–${MAX_REPLAY_LIMIT}). ` +
+                `Defaults to ${MAX_REPLAY_LIMIT}. When the limit is reached, ` +
+                "`hasMore` is `true`; re-invoke to continue.",
+            },
+          },
+        },
+        ReplayResult: {
+          type: "object",
+          description: "The result of an endpoint message replay.",
+          required: ["enqueued", "hasMore"],
+          properties: {
+            enqueued: {
+              type: "integer",
+              minimum: 0,
+              description: "Fresh delivery tasks enqueued this call.",
+            },
+            hasMore: {
+              type: "boolean",
+              description:
+                "`true` when the scan was truncated by `limit` — more messages in the time " +
+                "window may match the endpoint's subscription. Re-invoke until `false` to " +
+                "fully replay the window.",
             },
           },
         },

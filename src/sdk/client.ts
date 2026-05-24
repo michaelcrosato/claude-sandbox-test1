@@ -379,6 +379,36 @@ export interface BulkRetryResponse {
   readonly hasMore: boolean;
 }
 
+/** Optional input for {@link PosthornClient.replayEndpoint}. */
+export interface ReplayEndpointInput {
+  /**
+   * Inclusive epoch-ms lower bound. Only messages created at or after this timestamp
+   * are replayed. Absent means no lower bound (scan from the most recent message back).
+   */
+  readonly since?: number | null;
+  /**
+   * Exclusive epoch-ms upper bound. Only messages created strictly before this timestamp
+   * are replayed. Absent means no upper bound.
+   */
+  readonly until?: number | null;
+  /**
+   * Maximum delivery tasks to enqueue this call (1–1000). Defaults to 100.
+   * When `hasMore` is `true`, re-invoke to continue the replay.
+   */
+  readonly limit?: number;
+}
+
+/** The result of {@link PosthornClient.replayEndpoint}. */
+export interface ReplayEndpointResponse {
+  /** Fresh delivery tasks enqueued this call. */
+  readonly enqueued: number;
+  /**
+   * `true` when the scan was truncated by `limit`. Re-invoke until `false` to
+   * fully replay the window.
+   */
+  readonly hasMore: boolean;
+}
+
 /** The result of {@link PosthornClient.retryMessage}. */
 export interface RetryMessageResponse {
   /** The message whose deliveries were replayed. */
@@ -897,6 +927,27 @@ export class PosthornClient {
     return this.#transport.request<BulkRetryResponse>(
       "POST",
       `/v1/endpoints/${encodeURIComponent(endpointId)}/deliveries/retry`,
+    );
+  }
+
+  /**
+   * Replay historical messages to one endpoint — `POST /v1/endpoints/:id/replay`.
+   * Scans the tenant's message history and enqueues fresh delivery tasks for messages
+   * matching the endpoint's subscription (event type, channel, filter). Use `since`/`until`
+   * to narrow to a time window; re-invoke until `hasMore` is `false` to fully replay.
+   */
+  async replayEndpoint(
+    endpointId: string,
+    input?: ReplayEndpointInput,
+  ): Promise<ReplayEndpointResponse> {
+    const body: Record<string, unknown> = {};
+    if (input?.since !== undefined) body["since"] = input.since;
+    if (input?.until !== undefined) body["until"] = input.until;
+    if (input?.limit !== undefined) body["limit"] = input.limit;
+    return this.#transport.request<ReplayEndpointResponse>(
+      "POST",
+      `/v1/endpoints/${encodeURIComponent(endpointId)}/replay`,
+      Object.keys(body).length > 0 ? body : undefined,
     );
   }
 

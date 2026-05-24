@@ -604,6 +604,38 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(res.hasMore).toBe(true);
   });
 
+  it("replayEndpoint POSTs to /v1/endpoints/:id/replay and returns the tally", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    let seenBody: unknown;
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      seenBody = init.body ? JSON.parse(init.body as string) : undefined;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ enqueued: 7, hasMore: true })),
+      );
+    });
+    const res = await client.replayEndpoint("ep/1", { since: 1_000_000, until: 2_000_000, limit: 50 });
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toBe("http://example.test/v1/endpoints/ep%2F1/replay");
+    expect(seenBody).toEqual({ since: 1_000_000, until: 2_000_000, limit: 50 });
+    expect(res.enqueued).toBe(7);
+    expect(res.hasMore).toBe(true);
+  });
+
+  it("replayEndpoint omits the body when no input is provided", async () => {
+    let seenBody: unknown = "not-checked";
+    const client = fakeClient((url, init) => {
+      seenBody = init.body;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ enqueued: 0, hasMore: false })),
+      );
+    });
+    await client.replayEndpoint("ep_1");
+    expect(seenBody).toBeUndefined();
+  });
+
   it("cancelMessage sends POST /v1/messages/:id/cancel and returns { id, cancelled, deliveries }", async () => {
     let seenUrl = "";
     let seenMethod = "";

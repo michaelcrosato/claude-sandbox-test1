@@ -117,6 +117,11 @@ import {
   type BulkRetryResult,
 } from "../queue/retry-app.js";
 import {
+  normalizeReplayLimit,
+  replayEndpointMessages,
+  type ReplayResult,
+} from "../queue/replay-endpoint.js";
+import {
   DEFAULT_STATS_DAYS,
   MAX_LIST_ATTEMPTS_LIMIT,
   MAX_STATS_DAYS,
@@ -307,11 +312,9 @@ function toErrorResponse(err: unknown): ApiResponse {
   if (err instanceof DuplicateEventTypeError) {
     return json(409, { error: { code: "conflict", message: err.message } });
   }
-  // Every intake validator in the codebase (`normalizeNew*`/`apply*Update`) throws
-  // TypeError on malformed input, so a TypeError on a request path is a client
-  // error, surfaced as 400. (A genuine internal bug that threw TypeError would also
-  // land here; the validators are the only realistic source on these routes.)
-  if (err instanceof TypeError) {
+  // Validators throw TypeError for type mismatches and RangeError for out-of-range
+  // values (e.g. a `limit` outside `[1, MAX]`). Both are client errors on request paths.
+  if (err instanceof TypeError || err instanceof RangeError) {
     return json(400, { error: { code: "invalid_request", message: err.message } });
   }
   return json(500, { error: { code: "internal_error", message: "internal server error" } });
@@ -829,6 +832,7 @@ export const API_ROUTE_KEYS = [
   "POST /v1/endpoints/:id/test",
   "GET /v1/endpoints/:id/deliveries",
   "POST /v1/endpoints/:id/deliveries/retry",
+  "POST /v1/endpoints/:id/replay",
   "GET /v1/endpoints/:id/stats",
   "GET /v1/deliveries",
   "GET /v1/deliveries/:id",
@@ -1422,6 +1426,49 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, result);
   };
 
+  const replayEndpoint: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const endpoint = await loadOwnedEndpoint(ctx.app.id, id);
+    // Body is optional — all fields have defaults. Only parse when present.
+    let since: number | null = null;
+    let until: number | null = null;
+    let limit: number | undefined;
+    if (ctx.req.rawBody.length > 0) {
+      const body = parseJsonObject(ctx.req);
+      if ("since" in body) {
+        const raw = body["since"];
+        if (raw !== null && raw !== undefined) {
+          const val = Number(raw);
+          if (!Number.isFinite(val) || val < 0) {
+            throw new HttpError(400, "invalid_request", "since must be a non-negative epoch-ms number");
+          }
+          since = val;
+        }
+      }
+      if ("until" in body) {
+        const raw = body["until"];
+        if (raw !== null && raw !== undefined) {
+          const val = Number(raw);
+          if (!Number.isFinite(val) || val < 0) {
+            throw new HttpError(400, "invalid_request", "until must be a non-negative epoch-ms number");
+          }
+          until = val;
+        }
+      }
+      if ("limit" in body && body["limit"] !== undefined && body["limit"] !== null) {
+        limit = body["limit"] as number;
+      }
+    }
+    // normalizeReplayLimit validates the limit range and applies the default.
+    // An out-of-range limit throws RangeError, which toErrorResponse maps to 400.
+    const result: ReplayResult = await replayEndpointMessages(
+      endpoint,
+      { messages: deps.messages, queue: deps.queue },
+      { since, until, ...(limit !== undefined ? { limit } : {}) },
+    );
+    return json(200, result);
+  };
+
   const getEndpointStats: AuthedHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     // Ownership check — another tenant's (or absent) endpoint is 404, same as every
@@ -1783,6 +1830,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/endpoints/:id/test": authed(testEndpoint),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
     "POST /v1/endpoints/:id/deliveries/retry": authed(retryEndpointAllDeliveries),
+    "POST /v1/endpoints/:id/replay": authed(replayEndpoint),
     "GET /v1/endpoints/:id/stats": authed(getEndpointStats),
     "GET /v1/deliveries": authed(getAppDeliveries),
     "GET /v1/deliveries/:id": authed(getDelivery),

@@ -116,6 +116,16 @@ export {
 } from "./queue/retry-app.js";
 
 export {
+  replayEndpointMessages,
+  normalizeReplayLimit,
+  DEFAULT_REPLAY_LIMIT,
+  MAX_REPLAY_LIMIT,
+  type ReplayOptions,
+  type ReplayResult,
+  type ReplayDeps,
+} from "./queue/replay-endpoint.js";
+
+export {
   InMemoryDeliveryQueue,
   type InMemoryQueueOptions,
 } from "./queue/in-memory-queue.js";
@@ -406,6 +416,8 @@ export {
   type MessageListPage,
   type MessageWithDeliveries,
   type RetryMessageResponse,
+  type ReplayEndpointInput,
+  type ReplayEndpointResponse,
   type DeliveryView,
   type DeliveryAttemptView,
   type EndpointView,
