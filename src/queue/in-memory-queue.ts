@@ -104,7 +104,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, endpointId, appId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, appId, availableAt, priority } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     if (this.#tasks.has(id)) {
@@ -121,6 +121,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      priority,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
@@ -130,11 +131,18 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
 
   async claimDue(options: ClaimOptions): Promise<readonly DeliveryTask[]> {
     const { nowMs, limit } = normalizeClaimOptions(options);
+    // Collect all claimable candidates, sort priority DESC then createdAt ASC / id ASC
+    // (matches the SQL ORDER BY priority DESC, rowid/created_at ASC so behaviour is identical).
+    const candidates = [...this.#tasks.values()]
+      .filter((t) => claimableState(t, nowMs) !== null)
+      .sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
     const claimed: DeliveryTask[] = [];
-    // Map iteration is insertion order → oldest-first claiming.
-    for (const task of this.#tasks.values()) {
+    for (const task of candidates) {
       if (claimed.length >= limit) break;
-      if (claimableState(task, nowMs) === null) continue;
       const leased = applyClaim(
         this.#policy,
         task,
@@ -143,7 +151,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
         this.#visibilityTimeoutMs,
         this.#jitter,
       );
-      this.#tasks.set(leased.id, leased); // same key → keeps insertion order
+      this.#tasks.set(leased.id, leased);
       claimed.push(leased);
     }
     return claimed;

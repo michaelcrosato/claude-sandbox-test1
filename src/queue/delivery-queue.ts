@@ -84,6 +84,12 @@ export interface DeliveryTask {
   readonly leaseToken: string | null;
   /** Detail of the most recent failure, if any. */
   readonly lastError: string | null;
+  /**
+   * Delivery priority: `1` = high, `0` = normal, `-1` = low. Higher values are
+   * claimed first by `claimDue` when multiple tasks are due simultaneously. Set
+   * from the message's `priority` field at fan-out time. Defaults to `0`.
+   */
+  readonly priority: number;
   /** Enqueue time, epoch ms. */
   readonly createdAt: number;
   /** Time of the last state change, epoch ms. */
@@ -112,6 +118,12 @@ export interface EnqueueInput {
    * it deliverable immediately. Useful for scheduled/delayed first delivery.
    */
   readonly availableAt?: number | null;
+  /**
+   * Numeric delivery priority: `1` = high, `0` = normal (default), `-1` = low.
+   * Higher-priority tasks are claimed before lower-priority ones when multiple
+   * tasks are due at the same time. Omit (or `0`) for normal priority.
+   */
+  readonly priority?: number;
 }
 
 /** Options for a {@link DeliveryQueue.claimDue} call. */
@@ -473,6 +485,7 @@ export interface NormalizedEnqueue {
   readonly endpointId: string | null;
   readonly appId: string | null;
   readonly availableAt: number | null;
+  readonly priority: number;
 }
 
 /**
@@ -502,7 +515,11 @@ export function normalizeEnqueueInput(input: EnqueueInput): NormalizedEnqueue {
   if (availableAt !== null && !Number.isFinite(availableAt)) {
     throw new TypeError("availableAt must be a finite epoch-ms timestamp or null");
   }
-  return { messageId, endpointId, appId, availableAt };
+  const priority = input.priority ?? 0;
+  if (![-1, 0, 1].includes(priority)) {
+    throw new RangeError("priority must be -1, 0, or 1");
+  }
+  return { messageId, endpointId, appId, availableAt, priority };
 }
 
 /** Validate {@link ClaimOptions} and resolve the effective limit. */

@@ -100,6 +100,7 @@ interface TaskRow {
   readonly lease_expires_at: number | null;
   readonly lease_token: string | null;
   readonly last_error: string | null;
+  readonly priority: number;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -117,6 +118,7 @@ function rowToTask(row: TaskRow): DeliveryTask {
       row.lease_expires_at === null ? null : Number(row.lease_expires_at),
     leaseToken: row.lease_token,
     lastError: row.last_error,
+    priority: row.priority ?? 0,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -174,6 +176,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#db.exec(SCHEMA);
     // Ensure app_id column + indexes exist (idempotent; handles pre-migration DBs).
     this.#migrateAppIdColumn();
+    // Ensure priority column exists (idempotent; handles pre-migration DBs).
+    this.#migratePriorityColumn();
 
     this.#selectTask = this.#db.prepare(
       "SELECT * FROM delivery_tasks WHERE id = ?",
@@ -242,22 +246,23 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
     );
-    // Claimable = due pending OR delivering with a lapsed lease. rowid order
-    // claims oldest-first; the partial-ish index keeps the scan cheap.
+    // Claimable = due pending OR delivering with a lapsed lease.
+    // ORDER BY priority DESC, rowid ASC: highest-priority tasks claimed first;
+    // within the same priority, oldest-first (insertion order).
     this.#selectClaimable = this.#db.prepare(
       `SELECT * FROM delivery_tasks
        WHERE (status = 'pending'
               AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
           OR (status = 'delivering'
               AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
-       ORDER BY rowid
+       ORDER BY priority DESC, rowid ASC
        LIMIT ?`,
     );
     this.#insertTask = this.#db.prepare(
       `INSERT INTO delivery_tasks
          (id, message_id, endpoint_id, app_id, status, attempts, next_attempt_at,
-          lease_expires_at, lease_token, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lease_expires_at, lease_token, last_error, priority, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateTask = this.#db.prepare(
       `UPDATE delivery_tasks
@@ -272,6 +277,20 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#countByStatus = this.#db.prepare(
       "SELECT status, COUNT(*) AS n FROM delivery_tasks GROUP BY status",
     );
+  }
+
+  /**
+   * Ensure the `priority` column exists. A database created before priority was
+   * added has the column missing; add it with `DEFAULT 0` (normal priority) so
+   * existing rows are semantically correct. For a fresh database the column is
+   * already in {@link SCHEMA} and the ALTER is skipped.
+   */
+  #migratePriorityColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_tasks)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "priority")) return;
+    this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
   }
 
   /**
@@ -314,7 +333,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, endpointId, appId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, appId, availableAt, priority } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     const task: DeliveryTask = {
@@ -328,6 +347,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      priority,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
@@ -343,6 +363,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       task.leaseExpiresAt,
       task.leaseToken,
       task.lastError,
+      task.priority,
       task.createdAt,
       task.updatedAt,
     );
@@ -615,6 +636,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
   lease_expires_at INTEGER,
   lease_token      TEXT,
   last_error       TEXT,
+  priority         INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL,
   updated_at       INTEGER NOT NULL
 ) STRICT;

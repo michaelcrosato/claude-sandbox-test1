@@ -63,6 +63,7 @@ interface MessageRow {
   readonly channel: string | null;
   readonly deliver_at: string | null; // pg returns BIGINT as string
   readonly expires_at: string | null; // pg returns BIGINT as string
+  readonly priority: string;
   readonly created_at: string; // pg returns BIGINT as string
   readonly fanned_out_at: string | null;
 }
@@ -83,6 +84,7 @@ function rowToMessage(row: MessageRow): Message {
     channel: row.channel ?? null,
     deliverAt: row.deliver_at !== null ? Number(row.deliver_at) : null,
     expiresAt: row.expires_at !== null ? Number(row.expires_at) : null,
+    priority: (row.priority ?? "normal") as import("./message-store.js").MessagePriority,
     createdAt: Number(row.created_at),
   };
 }
@@ -119,6 +121,10 @@ export class PostgresMessageStore implements MessageStore {
     await this.#pool.query(
       "ALTER TABLE messages ADD COLUMN IF NOT EXISTS expires_at BIGINT",
     );
+    // Additive migration: add priority for delivery ordering. Existing rows default to 'normal'.
+    await this.#pool.query(
+      "ALTER TABLE messages ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal'",
+    );
     await this.#pool.query(INDEXES);
   }
 
@@ -133,7 +139,7 @@ export class PostgresMessageStore implements MessageStore {
   close(): void {}
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key, channel, deliverAt, expiresAt } =
+    const { appId, eventType, payload, idempotencyKey: key, channel, deliverAt, expiresAt, priority } =
       normalizeNewMessage(input);
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
@@ -149,6 +155,7 @@ export class PostgresMessageStore implements MessageStore {
         channel,
         deliverAt,
         expiresAt,
+        priority,
         key,
         fingerprint,
         nowMs,
@@ -175,6 +182,7 @@ export class PostgresMessageStore implements MessageStore {
     channel: string | null,
     deliverAt: number | null,
     expiresAt: number | null,
+    priority: import("./message-store.js").MessagePriority,
     key: string | null,
     fingerprint: string,
     nowMs: number,
@@ -193,7 +201,7 @@ export class PostgresMessageStore implements MessageStore {
           throw new IdempotencyConflictError(key);
         }
         const { rows: msgRows } = await client.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, created_at, fanned_out_at FROM messages WHERE id = $1",
+          "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at FROM messages WHERE id = $1",
           [existing.message_id],
         );
         const row = msgRows[0];
@@ -213,8 +221,8 @@ export class PostgresMessageStore implements MessageStore {
 
     const id = this.#generateId();
     await client.query(
-      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-      [id, appId, key, eventType, payload, channel, deliverAt, expiresAt, nowMs],
+      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [id, appId, key, eventType, payload, channel, deliverAt, expiresAt, priority, nowMs],
     );
     if (key !== null) {
       await client.query(
@@ -223,7 +231,7 @@ export class PostgresMessageStore implements MessageStore {
       );
     }
     return {
-      message: { id, appId, idempotencyKey: key, eventType, payload, channel, deliverAt, expiresAt, createdAt: nowMs },
+      message: { id, appId, idempotencyKey: key, eventType, payload, channel, deliverAt, expiresAt, priority, createdAt: nowMs },
       deduplicated: false,
       fanoutPending: true,
     };
@@ -231,7 +239,7 @@ export class PostgresMessageStore implements MessageStore {
 
   async get(id: string): Promise<Message | null> {
     const { rows } = await this.#pool.query<MessageRow>(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, created_at, fanned_out_at FROM messages WHERE id = $1",
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at FROM messages WHERE id = $1",
       [id],
     );
     const row = rows[0];
@@ -277,7 +285,7 @@ export class PostgresMessageStore implements MessageStore {
   async listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage> {
     const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
     const fetchLimit = limit + 1;
-    const sel = "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, created_at, fanned_out_at FROM messages";
+    const sel = "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at FROM messages";
     let rows: MessageRow[];
 
     if (channel !== undefined) {
@@ -392,6 +400,7 @@ CREATE TABLE IF NOT EXISTS messages (
   channel         TEXT,
   deliver_at      BIGINT,
   expires_at      BIGINT,
+  priority        TEXT    NOT NULL DEFAULT 'normal',
   created_at      BIGINT  NOT NULL,
   fanned_out_at   BIGINT
 );

@@ -96,7 +96,7 @@ export class InMemoryMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key, channel, deliverAt, expiresAt } =
+    const { appId, eventType, payload, idempotencyKey: key, channel, deliverAt, expiresAt, priority } =
       normalizeNewMessage(input);
 
     const nowMs = this.#now();
@@ -141,6 +141,7 @@ export class InMemoryMessageStore implements MessageStore {
       channel,
       deliverAt,
       expiresAt,
+      priority,
       createdAt: nowMs,
     };
     this.#messages.set(id, message);

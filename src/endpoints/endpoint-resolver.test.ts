@@ -27,6 +27,7 @@ function taskWithEndpoint(endpointId: string | null): DeliveryTask {
     leaseExpiresAt: 1,
     leaseToken: "tok",
     lastError: null,
+    priority: 0,
     createdAt: 0,
     updatedAt: 0,
   };
@@ -41,6 +42,7 @@ const FAKE_MESSAGE = {
   channel: null,
   deliverAt: null,
   expiresAt: null,
+  priority: "normal" as const,
   createdAt: 0,
 } as const;
 

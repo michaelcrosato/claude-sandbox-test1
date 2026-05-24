@@ -66,6 +66,7 @@ interface TaskRow {
   readonly lease_expires_at: string | null;
   readonly lease_token: string | null;
   readonly last_error: string | null;
+  readonly priority: number; // INTEGER — pg returns small ints as number
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -82,6 +83,7 @@ function rowToTask(row: TaskRow): DeliveryTask {
     leaseExpiresAt: row.lease_expires_at === null ? null : Number(row.lease_expires_at),
     leaseToken: row.lease_token,
     lastError: row.last_error,
+    priority: row.priority ?? 0,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -118,6 +120,10 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
   async initialize(): Promise<void> {
     await this.#pool.query(SCHEMA);
     await this.#pool.query(INDEXES);
+    // Additive migration: add priority for delivery ordering. Existing rows default to 0 (normal).
+    await this.#pool.query(
+      "ALTER TABLE delivery_tasks ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0",
+    );
   }
 
   async truncate(): Promise<void> {
@@ -129,7 +135,7 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
   close(): void {}
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, endpointId, appId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, appId, availableAt, priority } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     const task: DeliveryTask = {
@@ -143,18 +149,19 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      priority,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
     await this.#pool.query(
       "INSERT INTO delivery_tasks (id, message_id, endpoint_id, app_id, status, attempts," +
-        " next_attempt_at, lease_expires_at, lease_token, last_error, created_at, updated_at)" +
-        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+        " next_attempt_at, lease_expires_at, lease_token, last_error, priority, created_at, updated_at)" +
+        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
       [
         task.id, task.messageId, task.endpointId, task.appId,
         task.status, task.attempts, task.nextAttemptAt,
         task.leaseExpiresAt, task.leaseToken, task.lastError,
-        task.createdAt, task.updatedAt,
+        task.priority, task.createdAt, task.updatedAt,
       ],
     );
     return task;
@@ -172,7 +179,7 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
         "SELECT * FROM delivery_tasks" +
           " WHERE (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= $1))" +
           "    OR (status = 'delivering' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $2)" +
-          " ORDER BY created_at ASC, id ASC" +
+          " ORDER BY priority DESC, created_at ASC, id ASC" +
           " LIMIT $3 FOR UPDATE SKIP LOCKED",
         [nowMs, nowMs, limit],
       );
@@ -460,6 +467,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
   lease_expires_at BIGINT,
   lease_token      TEXT,
   last_error       TEXT,
+  priority         INTEGER NOT NULL DEFAULT 0,
   created_at       BIGINT  NOT NULL,
   updated_at       BIGINT  NOT NULL
 );

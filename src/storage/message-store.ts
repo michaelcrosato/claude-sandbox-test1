@@ -15,6 +15,15 @@
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeChannel } from "../endpoints/endpoint.js";
 
+/**
+ * Valid message priority values. Higher priority messages are delivered before
+ * lower priority ones when multiple tasks are due at the same time.
+ */
+export const VALID_PRIORITIES = ["high", "normal", "low"] as const;
+
+/** The delivery priority of a message. */
+export type MessagePriority = (typeof VALID_PRIORITIES)[number];
+
 /** A message accepted for delivery. Immutable once created. */
 export interface Message {
   /** Server-assigned unique id (e.g. `msg_…`). */
@@ -58,6 +67,12 @@ export interface Message {
    * survives crashes just like `deliverAt`.
    */
   readonly expiresAt: number | null;
+  /**
+   * Delivery priority. Higher-priority messages are claimed from the queue
+   * before lower-priority ones when multiple tasks are due simultaneously.
+   * Defaults to `"normal"` when not specified.
+   */
+  readonly priority: MessagePriority;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -94,6 +109,11 @@ export interface NewMessage {
    * `deliverAt`. Must be a non-negative integer when provided.
    */
   readonly expiresAt?: number | null;
+  /**
+   * Delivery priority. Higher-priority messages are delivered before lower-priority
+   * ones when multiple tasks are due at the same time. Defaults to `"normal"`.
+   */
+  readonly priority?: MessagePriority;
 }
 
 /** The outcome of {@link MessageStore.create}. */
@@ -313,6 +333,7 @@ export interface NormalizedNewMessage {
   readonly channel: string | null;
   readonly deliverAt: number | null;
   readonly expiresAt: number | null;
+  readonly priority: MessagePriority;
 }
 
 /**
@@ -350,7 +371,12 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
   if (expiresAt !== null && (!Number.isInteger(expiresAt) || expiresAt < 0)) {
     throw new TypeError("expiresAt must be a non-negative integer");
   }
-  return { appId, eventType, payload, idempotencyKey, channel, deliverAt, expiresAt };
+  const rawPriority = input.priority ?? "normal";
+  if (!(VALID_PRIORITIES as readonly string[]).includes(rawPriority)) {
+    throw new TypeError(`priority must be one of: ${VALID_PRIORITIES.join(", ")}`);
+  }
+  const priority = rawPriority as MessagePriority;
+  return { appId, eventType, payload, idempotencyKey, channel, deliverAt, expiresAt, priority };
 }
 
 /**

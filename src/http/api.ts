@@ -1397,6 +1397,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       channel: null,
       deliverAt: null,
       expiresAt: null,
+      priority: "normal" as const,
       createdAt: now,
       fanoutPending: false,
     };

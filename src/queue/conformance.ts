@@ -175,6 +175,23 @@ export function describeDeliveryQueueContract(
           queue.enqueue({ messageId: "m", endpointId: "" }),
         ).rejects.toThrow(TypeError);
       });
+
+      it("stores priority, defaulting to 0 when omitted", async () => {
+        const normal = await queue.enqueue({ messageId: "m" });
+        expect(normal.priority).toBe(0);
+        const high = await queue.enqueue({ messageId: "h", priority: 1 });
+        expect(high.priority).toBe(1);
+        const low = await queue.enqueue({ messageId: "l", priority: -1 });
+        expect(low.priority).toBe(-1);
+        // Persisted value survives a round-trip through get().
+        expect((await queue.get(high.id))?.priority).toBe(1);
+        expect((await queue.get(low.id))?.priority).toBe(-1);
+      });
+
+      it("rejects an out-of-range priority", async () => {
+        await expect(queue.enqueue({ messageId: "m", priority: 2 })).rejects.toThrow(RangeError);
+        await expect(queue.enqueue({ messageId: "m", priority: -2 })).rejects.toThrow(RangeError);
+      });
     });
 
     describe("claimDue", () => {
@@ -198,12 +215,22 @@ export function describeDeliveryQueueContract(
         expect(await queue.claimDue({ nowMs: clock.now() })).toEqual([]);
       });
 
-      it("claims oldest-first (enqueue order)", async () => {
+      it("claims oldest-first (enqueue order) when priorities are equal", async () => {
         const a = await queue.enqueue({ messageId: "a" });
         const b = await queue.enqueue({ messageId: "b" });
         const c = await queue.enqueue({ messageId: "c" });
         const claimed = await queue.claimDue({ nowMs: clock.now(), limit: 10 });
         expect(claimed.map((t) => t.id)).toEqual([a.id, b.id, c.id]);
+      });
+
+      it("claims higher-priority tasks before lower-priority ones when due simultaneously", async () => {
+        const low = await queue.enqueue({ messageId: "low", priority: -1 });
+        const normal = await queue.enqueue({ messageId: "normal", priority: 0 });
+        const high = await queue.enqueue({ messageId: "high", priority: 1 });
+        const claimed = await queue.claimDue({ nowMs: clock.now(), limit: 3 });
+        expect(claimed.map((t) => t.id)).toEqual([high.id, normal.id, low.id]);
+        // Priority is preserved through the claim transition.
+        expect(claimed.map((t) => t.priority)).toEqual([1, 0, -1]);
       });
 
       it("respects the batch limit and never re-leases a live claim", async () => {

@@ -120,6 +120,7 @@ describe("buildSignedRequest", () => {
     channel: null,
     deliverAt: null,
     expiresAt: null,
+    priority: "normal",
     createdAt: 1_000,
   };
 
@@ -540,6 +541,7 @@ describe("DeliveryWorker.processOnce", () => {
       leaseExpiresAt: 30_000,
       leaseToken: "tok",
       lastError: null,
+      priority: 0,
       createdAt: 0,
       updatedAt: 0,
     };
