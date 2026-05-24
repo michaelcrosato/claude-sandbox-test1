@@ -4,6 +4,65 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 72: Admin Dashboard Per-App This-Month Usage Column
+
+**Repo truth at start:** clean main @ `cb63ae2` (iter-71, event-type catalog management in
+portal). Baseline verified: `tsc --noEmit` clean, vitest **1415/1415** (46 files, 6
+Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** The admin dashboard's apps-list page (`GET /dashboard/apps`) already displayed
+each tenant's monthly quota alongside name, ID, and creation date, but an operator had no
+way to see how much of that quota was actually consumed without leaving the dashboard and
+hitting `GET /v1/admin/apps/:id/usage` over the API. The "Next moves" from iter-71 called
+this out explicitly: "Admin dashboard per-app usage column alongside the existing quota
+column."
+
+**Move chosen:** Add a fifth "This-month usage" column to the apps-list table. The column
+shows the current UTC calendar-month message count for each tenant — the same window that
+quota enforcement uses — so an operator sees used vs. allowed side-by-side in a single
+glance. When no `MessageStore` is injected (a store-less deployment or the existing test
+harness without modification), the column still renders but shows "—" for every row, keeping
+the table layout stable and the feature strictly opt-in. When a store is provided, all
+per-app counts are fetched in parallel (`Promise.all`) within the existing `GET /dashboard/apps`
+handler so there is no per-app serial round-trip.
+
+**Architecture (3 files, +76 / −5):**
+
+1. **`src/dashboard/handler.ts`** — Added `import type { MessageStore }` and
+   `import { utcMonthRange }` from `../storage/message-store.js`. Added optional
+   `readonly messages?: MessageStore` to `DashboardDeps` (same opt-in pattern as
+   `EventTypeStore` in the portal). Destructured `messages` in `createDashboardHandler`.
+   In `GET /dashboard/apps`: when `messages` is defined, calls
+   `messages.summarizeUsageByApp(app.id, utcMonthRange(clock()))` for every app in
+   parallel via `Promise.all`, builds a `Map<string, number>` (appId → total), and passes
+   it to `appsPage()`. When `messages` is undefined, `usage` is `undefined` and the column
+   renders "—".
+
+2. **`src/dashboard/views.ts`** — Updated `appsPage()` signature to accept
+   `usage?: ReadonlyMap<string, number>`. Added "This-month usage" as the fifth `<th>`.
+   Each row's fifth `<td>` renders `(usage.get(app.id) ?? 0).toLocaleString()` when the map
+   is present, or `"—"` when absent. Updated the empty-table colspan from 4 to 5.
+
+3. **`src/dashboard/handler.test.ts`** — Added `InMemoryMessageStore` import. Added
+   `setupWithMessages()` helper: same structure as `setup()` but injects an
+   `InMemoryMessageStore` (clocked at 2025-01-15 so `utcMonthRange` covers January 2025)
+   and passes the same `now` to both the store and the handler. Added 3 new tests under
+   "per-app usage column":
+   - No messages store → "—" in usage column
+   - Messages store + no traffic → each app shows "0"
+   - Messages store + seeded traffic → Gamma (3 messages) and Delta (1 message) show correct
+     distinct counts in the rendered HTML
+
+**Validation:** `tsc --noEmit` clean → vitest **1418/1418** (was 1415; +3 all new tests
+green). `npm run build` clean → committed `7df5489`.
+
+**Next moves:** Global (per-gateway) default rate limit for all endpoints; portal event-type
+detail page shows which endpoints subscribe to that event type; admin dashboard app-detail
+page shows the current-month usage figure in the app summary card (matches the new list
+column).
+
+---
+
 ## 2026-05-24 — Iteration 71: Event-Type Catalog Management in the Portal
 
 **Repo truth at start:** clean main @ `5126ad4` (iter-70, portal rate limit field + tenant
