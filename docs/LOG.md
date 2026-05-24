@@ -41,6 +41,37 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T16:52 · iter-0077 · GREEN · config-docs-drift-guard
+
+- **Baseline:** clean main @ `2c6c952` (iter-0076 ledger migration). Code baseline verified green
+  before change: `tsc --noEmit` clean, vitest **1435/1435**, `npm run build` clean.
+- **Move:** Close the config↔docs drift on the self-host surface — three operator env knobs had
+  landed in `loadConfig` but never reached the docs, making them invisible to self-hosters — and add
+  a guard so it can never recur.
+- **Changed:**
+  - `.env.example`: added the three undocumented vars — `POSTHORN_MAX_BODY_BYTES`,
+    `POSTHORN_RETENTION_DAYS`, `POSTHORN_DEFAULT_RATE_LIMIT` (with new retention + rate-limit
+    sections); admin-token comment now states the **enforced** 16-char floor (was a false "32").
+  - `docs/DEPLOY.md`: added `POSTHORN_DEFAULT_RATE_LIMIT` + `POSTHORN_RETENTION_DAYS` rows to the
+    configuration reference; corrected the three "≥ 32 chars" admin-token claims to the enforced ≥ 16.
+  - `src/runtime/config.test.ts`: new **config-documentation drift guard** — a `Proxy` probes
+    `loadConfig` to capture the exact `POSTHORN_*` keys it reads (no hand-maintained list, no source
+    parsing), then asserts each is documented in *both* `.env.example` and `docs/DEPLOY.md`, plus a
+    reverse check that `.env.example` lists no var the loader doesn't recognize. +34 tests.
+- **Decisions:** Proxy-capture over an exported constant — the guard verifies real loader behavior
+  and needs **zero** production-code change (lowest risk). Forward guard against both docs; reverse
+  guard only against `.env.example` (structured `VAR=` lines; DEPLOY prose names vars in many
+  contexts → too noisy to invert). Corrected docs to the code's `MIN_ADMIN_TOKEN_LENGTH=16` (code is
+  source of truth), not the reverse. Same "one source of truth, can't drift" discipline as the
+  OpenAPI route table.
+- **Validation:** `tsc --noEmit` exit 0; `vitest` **1469/1469** (was 1435; +34), 6 PG-skipped, no
+  flaky worker exit; `npm run build` exit 0; `assert-gate-integrity.ps1` exit 0 (zero substrate
+  edits); `validate-log-compliance.py` → `[PASS]`.
+- **Notes:** Docs + test only; no product code touched, so the green code baseline above stands.
+- **Next:** Portal endpoint-detail page should surface the *effective* rate limit (explicit vs.
+  `POSTHORN_DEFAULT_RATE_LIMIT` fallback) — thread the gateway default into `PortalDeps`; or extend
+  the drift guard to cover README config mentions.
+
 ## 2026-05-24T16:39 · iter-0076 · GREEN · migrate-ledger-to-canonical-log
 
 - **Baseline:** clean main @ `1159d45` (operator substrate refresh). Code baseline verified green

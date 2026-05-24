@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
@@ -268,5 +270,69 @@ describe("loadConfig", () => {
         /POSTHORN_DEFAULT_RATE_LIMIT must be an integer/,
       );
     });
+  });
+});
+
+/**
+ * Config↔docs drift guard. The set of `POSTHORN_*` variables {@link loadConfig}
+ * actually reads is the source of truth; this asserts every one of them is
+ * documented for operators in both `.env.example` and `docs/DEPLOY.md`, and that
+ * `.env.example` lists no variable the loader does not recognize. It is the same
+ * "one source of truth, can't drift" discipline the OpenAPI route table uses: a
+ * future tick that adds a config knob without documenting it fails here rather
+ * than shipping an invisible feature (the exact regression this tick repaired —
+ * `POSTHORN_DEFAULT_RATE_LIMIT`, `POSTHORN_RETENTION_DAYS`, and
+ * `POSTHORN_MAX_BODY_BYTES` had landed in the loader but not the docs).
+ */
+describe("config documentation", () => {
+  /**
+   * The exact env keys {@link loadConfig} reads, captured by probing it with a
+   * Proxy that records every property access. No source parsing, no
+   * hand-maintained list — the guard tracks real loader behavior. Every read
+   * returns `undefined`, so the loader takes all defaults and never throws.
+   */
+  function recognizedEnvKeys(): string[] {
+    const accessed = new Set<string>();
+    const probe = new Proxy({} as Record<string, string | undefined>, {
+      get(_target, prop) {
+        if (typeof prop === "string") accessed.add(prop);
+        return undefined;
+      },
+    });
+    loadConfig(probe);
+    return [...accessed].filter((k) => k.startsWith("POSTHORN_")).sort();
+  }
+
+  const read = (rel: string): string =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+
+  const recognized = recognizedEnvKeys();
+  const envExample = read("../../.env.example");
+  const deployDoc = read("../../docs/DEPLOY.md");
+
+  it("captures the full recognized variable set (probe sanity check)", () => {
+    // If the Proxy probe ever silently captured nothing, the per-key checks below
+    // would vacuously pass; this floor makes that failure mode loud instead.
+    expect(recognized.length).toBeGreaterThanOrEqual(16);
+  });
+
+  it.each(recognized)("%s is documented in .env.example", (key) => {
+    expect(envExample).toContain(key);
+  });
+
+  it.each(recognized)("%s is documented in docs/DEPLOY.md", (key) => {
+    expect(deployDoc).toContain(key);
+  });
+
+  it("lists no unrecognized POSTHORN_* variable in .env.example", () => {
+    const assigned: string[] = [];
+    for (const m of envExample.matchAll(/^(POSTHORN_[A-Z0-9_]+)=/gm)) {
+      assigned.push(m[1]!);
+    }
+    expect(assigned.length).toBeGreaterThan(0);
+    const known = new Set(recognized);
+    for (const key of assigned) {
+      expect(known.has(key), `${key} in .env.example is not read by loadConfig`).toBe(true);
+    }
   });
 });

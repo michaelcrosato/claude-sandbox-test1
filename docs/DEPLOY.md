@@ -46,7 +46,7 @@ scrapes `/metrics`.
 ```bash
 # 1. Copy the example environment file and fill in your admin token:
 cp .env.example .env
-# Edit .env: set POSTHORN_ADMIN_TOKEN to a strong secret (≥ 32 chars).
+# Edit .env: set POSTHORN_ADMIN_TOKEN to a strong random secret (≥ 16 chars).
 
 # 2. Build and start:
 docker compose up -d
@@ -133,16 +133,18 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the four SQLite files. Use `:memory:` for an ephemeral in-memory run (data lost on restart). |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap in bytes (`413` if exceeded). |
-| `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 32 chars. Unset = both disabled. |
+| `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
 | `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight within one tick. `1` = sequential. |
 | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout (ms). |
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when the queue is empty (ms). |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime (ms); a task is reclaimed after this if the worker dies mid-delivery. |
 | `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` | `432000000` | Auto-disable an endpoint after this many ms of continuous failures (default 5 days). `0` = off (health still tracked). |
+| `POSTHORN_DEFAULT_RATE_LIMIT` | _(unset)_ | Gateway-wide default delivery rate limit (deliveries/min) for endpoints without an explicit `rateLimit`. Unset = no default (such endpoints are unrestricted). Range when set: 1–10000. |
 | `POSTHORN_FANOUT_GRACE_MS` | `5000` | FanoutDispatcher: minimum age of a pending-fanout message before the dispatcher acts on it (ms). |
 | `POSTHORN_FANOUT_BATCH_SIZE` | `50` | FanoutDispatcher: messages processed per sweep. |
 | `POSTHORN_FANOUT_IDLE_POLL_MS` | `5000` | FanoutDispatcher: poll interval when the outbox is empty (ms). |
+| `POSTHORN_RETENTION_DAYS` | `0` | Delete delivered/expired data older than this many days on an hourly sweep. `0` (default) disables pruning; minimum 1 when set. |
 
 ---
 
@@ -178,8 +180,8 @@ POSTHORN_HOST=127.0.0.1
 
 ### Admin token strength
 
-`POSTHORN_ADMIN_TOKEN` must be at least 32 characters.  Generate a
-cryptographically strong value:
+`POSTHORN_ADMIN_TOKEN` must be at least 16 characters; use a long random
+value in production.  Generate a cryptographically strong one:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
