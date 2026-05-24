@@ -240,6 +240,16 @@ export interface PortalTestResult {
   readonly durationMs: number;
 }
 
+/** Result of a portal signature-verification attempt, with echoed form fields for state preservation. */
+export interface VerifyWidgetResult {
+  readonly success: boolean;
+  readonly error?: string;
+  readonly webhookId?: string;
+  readonly webhookTimestamp?: string;
+  readonly webhookSignature?: string;
+  readonly rawBody?: string;
+}
+
 /** Endpoint detail page — config + edit form + recent deliveries. */
 export function portalEndpointDetailPage(
   endpoint: Endpoint,
@@ -247,6 +257,7 @@ export function portalEndpointDetailPage(
   error?: string,
   catalogTypes?: readonly { id: string; name: string }[],
   testResult?: PortalTestResult,
+  verifyResult?: VerifyWidgetResult,
 ): string {
   const errorBanner = error
     ? `<div class="alert alert-err">${esc(error)}</div>`
@@ -359,6 +370,50 @@ export function portalEndpointDetailPage(
   </form>
 </div>`;
 
+  const verifyResultHtml = verifyResult
+    ? verifyResult.success
+      ? `<div class="alert alert-ok" style="margin-top:10px">Signature verified — the webhook is authentic.</div>`
+      : `<div class="alert alert-err" style="margin-top:10px">Verification failed: ${esc(verifyResult.error ?? "no matching signature found")}</div>`
+    : "";
+
+  const verifyForm = `<div class="card">
+  <h2 style="margin-bottom:8px">Verify signature</h2>
+  <p class="meta" style="margin-bottom:12px">Paste the three Standard Webhooks headers and the raw request body from a received webhook to confirm your server is extracting them correctly. Timestamp tolerance is relaxed so you can paste headers from earlier requests.</p>
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/verify">
+    <div class="form-row">
+      <label for="vWebhookId">webhook-id header</label>
+      <input id="vWebhookId" type="text" name="webhookId" value="${esc(verifyResult?.webhookId ?? "")}" placeholder="msg_..." class="mono" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="vWebhookTimestamp">webhook-timestamp header</label>
+      <input id="vWebhookTimestamp" type="text" name="webhookTimestamp" value="${esc(verifyResult?.webhookTimestamp ?? "")}" placeholder="1717000000" class="mono" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="vWebhookSig">webhook-signature header</label>
+      <input id="vWebhookSig" type="text" name="webhookSignature" value="${esc(verifyResult?.webhookSignature ?? "")}" placeholder="v1,..." class="mono" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="vRawBody">Raw request body (exact bytes — do not JSON.parse or re-serialize)</label>
+      <textarea id="vRawBody" name="rawBody" rows="4" class="mono" placeholder='{"eventType":"user.created","data":{"id":1}}'>${esc(verifyResult?.rawBody ?? "")}</textarea>
+    </div>
+    <button type="submit" class="btn btn-gray">Verify</button>
+  </form>
+  ${verifyResultHtml}
+  <details style="margin-top:14px">
+    <summary style="cursor:pointer;font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;user-select:none">Node.js code example</summary>
+    <pre class="mono" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-top:8px;font-size:12px;overflow-x:auto;white-space:pre">import { verifyWebhook } from "posthorn";
+
+// Inside your POST /webhooks handler — use the raw body string,
+// NOT JSON.parse + re-serialize (that can change whitespace and break the signature).
+try {
+  verifyWebhook(process.env.WEBHOOK_SECRET, req.headers, rawBody);
+  // Signature is valid — safe to process the event.
+} catch {
+  return res.status(401).end("invalid signature");
+}</pre>
+  </details>
+</div>`;
+
   const body = `<h2 style="margin-bottom:4px">
   <a href="/portal/endpoints" style="color:#64748b;font-weight:400;font-size:13px">← Endpoints</a>
 </h2>
@@ -385,6 +440,7 @@ export function portalEndpointDetailPage(
 
 ${editForm}
 ${testForm}
+${verifyForm}
 ${rotateForm}
 ${deleteForm}`;
 

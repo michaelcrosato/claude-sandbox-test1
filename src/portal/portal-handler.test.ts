@@ -4,6 +4,7 @@ import { InMemoryPortalSessionStore } from "./portal-session.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
+import { sign } from "../signing/webhook-signature.js";
 import type { ApiRequest } from "../http/api.js";
 
 function req(partial: Partial<ApiRequest>): ApiRequest {
@@ -327,6 +328,129 @@ describe("createPortalHandler", () => {
     );
     const res = await handler(r);
     expect(res.status).toBe(404);
+  });
+
+  // ── Signature verification widget ─────────────────────────────────────────────
+
+  it("POST /portal/endpoints/:id/verify unauthenticated redirects to login", async () => {
+    const { endpoints, handler, clock } = setup();
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const r = req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: "" });
+    const res = await handler(r);
+    expect(res.status).toBe(302);
+    expect(res.headers?.["location"]).toBe("/portal/login");
+  });
+
+  it("POST /portal/endpoints/:id/verify for cross-tenant endpoint returns 404", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_2", url: "https://other.example/hook" });
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: "" }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /portal/endpoints/:id/verify with valid signature shows success", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+
+    const msgId = "msg_verify_test";
+    const timestamp = Math.floor(clock.t / 1000);
+    const body = '{"eventType":"test","data":{}}';
+    const signature = sign(ep.secret, { id: msgId, timestamp, payload: body });
+
+    const formBody = new URLSearchParams({
+      webhookId: msgId,
+      webhookTimestamp: String(timestamp),
+      webhookSignature: signature,
+      rawBody: body,
+    }).toString();
+
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: formBody }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/verified|authentic/i);
+    // Form values echoed back for state preservation
+    expect(String(res.body)).toContain(msgId);
+  });
+
+  it("POST /portal/endpoints/:id/verify with wrong signature shows failure", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+
+    const formBody = new URLSearchParams({
+      webhookId: "msg_1",
+      webhookTimestamp: String(Math.floor(clock.t / 1000)),
+      webhookSignature: "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      rawBody: '{"data":1}',
+    }).toString();
+
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: formBody }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/failed|no matching/i);
+  });
+
+  it("POST /portal/endpoints/:id/verify with missing headers shows error", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+
+    const formBody = new URLSearchParams({ webhookId: "", webhookTimestamp: "", webhookSignature: "", rawBody: "" }).toString();
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: formBody }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/required/i);
+  });
+
+  it("POST /portal/endpoints/:id/verify succeeds against a rotated (previous) secret", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const oldSecret = ep.secret;
+
+    // Rotate to a new secret — old one stays active for 24h overlap
+    await endpoints.rotateSecret(ep.id);
+
+    const msgId = "msg_old_secret";
+    const timestamp = Math.floor(clock.t / 1000);
+    const body = '{"eventType":"test"}';
+    // Sign with the OLD secret (simulates a webhook that arrived before rotation propagated)
+    const signature = sign(oldSecret, { id: msgId, timestamp, payload: body });
+
+    const formBody = new URLSearchParams({
+      webhookId: msgId,
+      webhookTimestamp: String(timestamp),
+      webhookSignature: signature,
+      rawBody: body,
+    }).toString();
+
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: formBody }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/verified|authentic/i);
   });
 
   // ── Unknown routes ────────────────────────────────────────────────────────────

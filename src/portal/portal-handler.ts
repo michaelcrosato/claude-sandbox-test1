@@ -31,6 +31,7 @@
 import { randomUUID } from "node:crypto";
 import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/endpoint.js";
+import { activeSigningSecrets } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { PortalSessionStore } from "./portal-session.js";
 import type { EventTypeStore } from "../event-types/event-type.js";
@@ -43,6 +44,7 @@ import {
   type Transport,
 } from "../worker/delivery-worker.js";
 import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
+import { verify as verifySignature } from "../signing/webhook-signature.js";
 import {
   portalExpiredPage,
   portalEndpointsPage,
@@ -51,6 +53,7 @@ import {
   portalRotatedSecretPage,
   type DeliveryRow,
   type PortalTestResult,
+  type VerifyWidgetResult,
 } from "./portal-views.js";
 
 export interface PortalDeps {
@@ -408,6 +411,60 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
         : undefined;
       return html(200, portalEndpointDetailPage(ep, rows, undefined, catalogTypes, testResult));
+    }
+
+    // ── POST /portal/endpoints/:id/verify ─────────────────────────────────────
+    // Server-side signature verifier: tries the endpoint's active secrets (primary +
+    // any still-in-overlap retired ones) with a relaxed timestamp tolerance so
+    // developers can paste headers from recently received webhooks without hitting
+    // the replay-protection window.
+    if (method === "POST" && s0 === "endpoints" && s1 !== undefined && s2 === "verify" && segs.length === 3) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      const ep = await endpoints.get(s1);
+      if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+
+      const form = parseForm(req.rawBody);
+      const webhookId = (form["webhookId"] ?? "").trim();
+      const webhookTimestamp = (form["webhookTimestamp"] ?? "").trim();
+      const webhookSignature = (form["webhookSignature"] ?? "").trim();
+      const rawBody = form["rawBody"] ?? "";
+
+      let verifyResult: VerifyWidgetResult;
+      if (!webhookId || !webhookTimestamp || !webhookSignature) {
+        verifyResult = {
+          success: false,
+          error: "All three webhook headers (webhook-id, webhook-timestamp, webhook-signature) are required",
+          webhookId, webhookTimestamp, webhookSignature, rawBody,
+        };
+      } else {
+        // Try each active secret (primary + non-expired rotated ones); succeed on first match.
+        // Tolerance is 7 days — this is a debug tool, not a security gate.
+        const nowMs = clock();
+        const secrets = activeSigningSecrets(ep, nowMs);
+        const TOLERANCE_S = 7 * 24 * 3600;
+        let matched = false;
+        let lastError = "no matching signature found";
+        for (const secret of secrets) {
+          try {
+            verifySignature(secret, { id: webhookId, timestamp: webhookTimestamp, signature: webhookSignature }, rawBody, { toleranceInSeconds: TOLERANCE_S, now: Math.floor(nowMs / 1000) });
+            matched = true;
+            break;
+          } catch (e) {
+            lastError = e instanceof Error ? e.message : String(e);
+          }
+        }
+        verifyResult = matched
+          ? { success: true, webhookId, webhookTimestamp, webhookSignature, rawBody }
+          : { success: false, error: lastError, webhookId, webhookTimestamp, webhookSignature, rawBody };
+      }
+
+      const verifyPage = await queue.listByEndpoint(s1, { limit: RECENT_DELIVERIES_LIMIT });
+      const verifyRows: DeliveryRow[] = verifyPage.deliveries.map((task) => ({ task, messageId: task.messageId ?? "" }));
+      const verifyCatalogTypes = eventTypesStore !== undefined
+        ? (await eventTypesStore.list(auth.appId)).map((et) => ({ id: et.id, name: et.name }))
+        : undefined;
+      return html(200, portalEndpointDetailPage(ep, verifyRows, undefined, verifyCatalogTypes, undefined, verifyResult));
     }
 
     // ── GET /portal/endpoints/:id/deliveries/:deliveryId ──────────────────────
