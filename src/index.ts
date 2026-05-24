@@ -149,6 +149,7 @@ export {
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_WORKER_BATCH_SIZE,
   DEFAULT_WORKER_CONCURRENCY,
+  MAX_RETRY_AFTER_MS,
   type DeliveryWorkerOptions,
   type DeliveryTarget,
   type EndpointResolver,

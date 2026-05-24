@@ -128,6 +128,14 @@ export interface FailInput {
   readonly error: string;
   /** Time the failure occurred, epoch ms — the basis for the next retry. */
   readonly nowMs: number;
+  /**
+   * Minimum delay in ms before the next retry attempt, sourced from the
+   * receiver's `Retry-After` response header. When provided, `nextAttemptAt`
+   * is floored at `nowMs + minDelayMs` so Posthorn never retries sooner than
+   * the receiver asked. Smaller than the policy-computed delay → policy wins.
+   * Has no effect when the task dead-letters (budget exhausted — terminal).
+   */
+  readonly minDelayMs?: number;
 }
 
 /**
@@ -485,6 +493,7 @@ export function normalizeClaimOptions(options: ClaimOptions): {
 export function normalizeFailInput(input: FailInput): {
   error: string;
   nowMs: number;
+  minDelayMs: number | undefined;
 } {
   if (typeof input.error !== "string") {
     throw new TypeError("fail error must be a string");
@@ -492,7 +501,16 @@ export function normalizeFailInput(input: FailInput): {
   if (!Number.isFinite(input.nowMs)) {
     throw new TypeError("fail nowMs must be a finite number");
   }
-  return { error: input.error, nowMs: input.nowMs };
+  const { minDelayMs } = input;
+  if (
+    minDelayMs !== undefined &&
+    (!Number.isFinite(minDelayMs) || minDelayMs < 0)
+  ) {
+    throw new TypeError(
+      "fail minDelayMs must be a non-negative finite number when provided",
+    );
+  }
+  return { error: input.error, nowMs: input.nowMs, minDelayMs };
 }
 
 /** Project the FSM-relevant fields of a task into a {@link DeliveryState}. */

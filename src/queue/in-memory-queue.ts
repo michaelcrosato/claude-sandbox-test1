@@ -160,9 +160,19 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     leaseToken: string,
     input: FailInput,
   ): Promise<DeliveryTask> {
-    const { error, nowMs } = normalizeFailInput(input);
+    const { error, nowMs, minDelayMs } = normalizeFailInput(input);
     const task = this.#requireLeaseHolder(taskId, leaseToken);
-    const next = applyFailure(this.#policy, task, error, nowMs, this.#jitter);
+    let next = applyFailure(this.#policy, task, error, nowMs, this.#jitter);
+    if (
+      next.status === "pending" &&
+      next.nextAttemptAt !== null &&
+      minDelayMs !== undefined
+    ) {
+      const floor = nowMs + minDelayMs;
+      if (next.nextAttemptAt < floor) {
+        next = { ...next, nextAttemptAt: floor };
+      }
+    }
     this.#tasks.set(next.id, next);
     return next;
   }

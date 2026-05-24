@@ -333,6 +333,59 @@ export function describeDeliveryQueueContract(
           queue.fail(task!.id, "wrong", { error: "e", nowMs: clock.now() }),
         ).rejects.toBeInstanceOf(StaleLeaseError);
       });
+
+      describe("minDelayMs floor (Retry-After support)", () => {
+        it("clamps nextAttemptAt when minDelayMs exceeds the policy delay", async () => {
+          await queue.enqueue({ messageId: "m" });
+          const [task] = await queue.claimDue({ nowMs: clock.now() });
+          // Policy first delay is 1_000ms; minDelayMs is 5_000ms → floor wins.
+          const failed = await queue.fail(task!.id, task!.leaseToken!, {
+            error: "503",
+            nowMs: clock.now(),
+            minDelayMs: 5_000,
+          });
+          expect(failed.status).toBe("pending");
+          expect(failed.nextAttemptAt).toBe(clock.now() + 5_000);
+          // Not claimable at policy time, but claimable once minDelay elapses.
+          clock.advance(1_000);
+          expect(await queue.claimDue({ nowMs: clock.now() })).toHaveLength(0);
+          clock.advance(4_000);
+          expect(await queue.claimDue({ nowMs: clock.now() })).toHaveLength(1);
+        });
+
+        it("uses the policy delay when minDelayMs is smaller", async () => {
+          await queue.enqueue({ messageId: "m" });
+          const [task] = await queue.claimDue({ nowMs: clock.now() });
+          // Policy first delay is 1_000ms; minDelayMs is 200ms → policy wins.
+          const failed = await queue.fail(task!.id, task!.leaseToken!, {
+            error: "429",
+            nowMs: clock.now(),
+            minDelayMs: 200,
+          });
+          expect(failed.status).toBe("pending");
+          expect(failed.nextAttemptAt).toBe(clock.now() + 1_000);
+        });
+
+        it("has no effect when the task dead-letters (budget exhausted)", async () => {
+          await queue.enqueue({ messageId: "m" });
+          // Two retries allowed by CONFORMANCE_POLICY → exhaust both first.
+          let [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "e", nowMs: clock.now() });
+          clock.advance(1_000);
+          [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "e", nowMs: clock.now() });
+          clock.advance(2_000);
+          [t] = await queue.claimDue({ nowMs: clock.now() });
+          // Last attempt: budget spent → dead_letter regardless of minDelayMs.
+          const dead = await queue.fail(t!.id, t!.leaseToken!, {
+            error: "e",
+            nowMs: clock.now(),
+            minDelayMs: 60_000,
+          });
+          expect(dead.status).toBe("dead_letter");
+          expect(dead.nextAttemptAt).toBeNull();
+        });
+      });
     });
 
     describe("retry (manual recovery)", () => {

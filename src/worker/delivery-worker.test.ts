@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DeliveryWorker,
+  MAX_RETRY_AFTER_MS,
   buildSignedRequest,
   isSuccessStatus,
   type DeliveryWorkerOptions,
@@ -1165,6 +1166,159 @@ describe("DeliveryWorker — onDeadLettered seam", () => {
 
     expect(result).toMatchObject({ deadLettered: 1 });
     expect(errors).toEqual([boom]);
+  });
+});
+
+describe("DeliveryWorker — Retry-After support", () => {
+  /** Build a transport that returns the given status + optional Retry-After header. */
+  function retryAfterTransport(
+    status: number,
+    retryAfter?: string,
+  ): Transport {
+    return async () => ({
+      status,
+      ...(retryAfter !== undefined ? { retryAfter } : {}),
+    });
+  }
+
+  it("clamps nextAttemptAt when Retry-After (seconds) exceeds the policy delay", async () => {
+    // Policy: one retry at 1_000ms. Retry-After: 30s > 1s → floor wins.
+    const env = setup({ retryPolicy: fixedSchedule([1_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    await makeWorker(env, {
+      transport: retryAfterTransport(503, "30"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // nowMs = 0; Retry-After = 30s = 30_000ms > policy 1_000ms.
+    expect(task?.nextAttemptAt).toBe(30_000);
+  });
+
+  it("uses the policy delay when Retry-After is smaller", async () => {
+    // Policy: one retry at 60_000ms. Retry-After: 5s < 60s → policy wins.
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    await makeWorker(env, {
+      transport: retryAfterTransport(503, "5"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // Policy 60_000ms > Retry-After 5_000ms → policy wins.
+    expect(task?.nextAttemptAt).toBe(60_000);
+  });
+
+  it("ignores a malformed Retry-After header", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    await makeWorker(env, {
+      transport: retryAfterTransport(503, "not-a-number"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // Malformed → no floor → pure policy delay.
+    expect(task?.nextAttemptAt).toBe(60_000);
+  });
+
+  it("ignores Retry-After on a successful (2xx) response", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    await makeWorker(env, {
+      transport: retryAfterTransport(200, "30"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    // Success → succeeded, Retry-After irrelevant.
+    expect(task?.status).toBe("succeeded");
+  });
+
+  it("caps Retry-After at MAX_RETRY_AFTER_MS", async () => {
+    const env = setup({ retryPolicy: fixedSchedule([1_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    // Receiver asks for 2 days (172_800s > MAX of 86_400s).
+    await makeWorker(env, {
+      transport: retryAfterTransport(429, "172800"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    expect(task?.nextAttemptAt).toBe(MAX_RETRY_AFTER_MS); // capped at 24h from nowMs=0
+  });
+
+  it("dead-letters even when Retry-After is present (budget exhausted)", async () => {
+    // Only one attempt allowed (no retries). Retry-After cannot prevent dead-lettering.
+    const env = setup({ retryPolicy: fixedSchedule([]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    await makeWorker(env, {
+      transport: retryAfterTransport(503, "30"),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    // Budget exhausted → dead_letter regardless of Retry-After.
+    expect(task?.status).toBe("dead_letter");
+    expect(task?.nextAttemptAt).toBeNull();
+  });
+
+  it("accepts an HTTP-date Retry-After and computes the correct delay", async () => {
+    // Worker clock is fixed at nowMs = 1_700_000_000_000 (the setup default is 0,
+    // so we override it to a concrete epoch that a Date string can represent).
+    const startMs = 1_700_000_000_000;
+    const env = setup({ startMs, retryPolicy: fixedSchedule([1_000]) });
+    const { message } = await env.store.create({
+      appId: "app_1",
+      eventType: "e",
+      payload: "{}",
+    });
+    await env.queue.enqueue({ messageId: message.id });
+
+    // Target date = startMs + 45_000ms.
+    const targetDate = new Date(startMs + 45_000).toUTCString();
+    await makeWorker(env, {
+      transport: retryAfterTransport(503, targetDate),
+    }).processOnce();
+
+    const task = await env.queue.get("dtask_0");
+    expect(task?.status).toBe("pending");
+    // HTTP-date 45s from nowMs; policy = 1s → floor wins.
+    expect(task?.nextAttemptAt).toBeCloseTo(startMs + 45_000, -1);
   });
 });
 

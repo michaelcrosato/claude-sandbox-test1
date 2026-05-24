@@ -111,6 +111,14 @@ export interface HttpDeliveryRequest {
 export interface HttpDeliveryResponse {
   /** HTTP status code. 2xx is a successful delivery; anything else is a failure. */
   readonly status: number;
+  /**
+   * Value of the receiver's `Retry-After` response header, if present. The
+   * worker uses this to floor the next retry delay so Posthorn never hammers
+   * an endpoint that has explicitly asked for backoff (RFC 7231 §7.1.3).
+   * Both integer-seconds (`"30"`) and HTTP-date formats are accepted.
+   * `null` or absent = no hint; the policy-computed delay applies unchanged.
+   */
+  readonly retryAfter?: string | null;
 }
 
 /**
@@ -220,6 +228,9 @@ export const fetchTransport: Transport = async (request, signal) => {
     body: request.body,
     signal,
   });
+  // Capture Retry-After before draining so the header is available even if the
+  // body drain fails. The value is the raw header string; the worker parses it.
+  const retryAfter = response.headers.get("retry-after");
   // Drain the body so the socket is released; the bytes are not needed here
   // (a per-attempt audit log capturing response detail is a later add-on).
   try {
@@ -227,8 +238,47 @@ export const fetchTransport: Transport = async (request, signal) => {
   } catch {
     // A drain failure must not mask the status we already have.
   }
-  return { status: response.status };
+  return {
+    status: response.status,
+    ...(retryAfter !== null ? { retryAfter } : {}),
+  };
 };
+
+/**
+ * Maximum `Retry-After` delay accepted from a receiver (24 h). A receiver
+ * returning a larger value is capped here so a malicious or misconfigured
+ * endpoint cannot push Posthorn's retry indefinitely far into the future.
+ */
+export const MAX_RETRY_AFTER_MS = 86_400_000;
+
+/**
+ * Parse the `Retry-After` response header into a delay in ms, floored at 0 and
+ * capped at {@link MAX_RETRY_AFTER_MS}. Returns `null` when the header is absent,
+ * malformed, or points to a past instant (past-date = no floor needed).
+ *
+ * Accepts both RFC 7231 forms:
+ *  - Integer seconds: `"30"`, `"0"`, `"86400"`
+ *  - HTTP-date: `"Wed, 21 Oct 2015 07:28:00 GMT"`
+ */
+function parseRetryAfterMs(
+  header: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (!trimmed) return null;
+  // Integer-seconds form: non-negative decimal integer with no other characters.
+  if (/^\d+$/.test(trimmed)) {
+    const ms = parseInt(trimmed, 10) * 1_000;
+    return Math.min(ms, MAX_RETRY_AFTER_MS);
+  }
+  // HTTP-date form: any string Date.parse can turn into a finite epoch-ms.
+  const ts = Date.parse(trimmed);
+  if (!Number.isFinite(ts)) return null;
+  const delayMs = ts - nowMs;
+  if (delayMs <= 0) return null; // Past date — no floor needed.
+  return Math.min(delayMs, MAX_RETRY_AFTER_MS);
+}
 
 /** Construction options for {@link DeliveryWorker}. */
 export interface DeliveryWorkerOptions {
@@ -598,6 +648,13 @@ export class DeliveryWorker {
       ? null
       : failure ?? `endpoint returned HTTP ${String(response?.status)}`;
 
+    // Extract Retry-After from non-2xx HTTP responses only. Transport errors and
+    // unresolvable-endpoint failures carry no response, so retryAfterMs stays null.
+    const retryAfterMs =
+      response !== null && !isSuccessStatus(response.status)
+        ? parseRetryAfterMs(response.retryAfter, nowMs)
+        : null;
+
     // Append this attempt to the audit log before settling. Best-effort: a failed
     // record never changes the delivery outcome (see #recordDeliveryAttempt).
     await this.#recordDeliveryAttempt(task, nowMs, appId, {
@@ -614,6 +671,7 @@ export class DeliveryWorker {
           leaseToken,
           error ?? "unknown delivery error",
           nowMs,
+          retryAfterMs ?? undefined,
         );
     // Report the terminal verdict to endpoint-health tracking (best-effort).
     await this.#reportEndpointOutcome(task, outcome, nowMs);
@@ -746,11 +804,13 @@ export class DeliveryWorker {
     leaseToken: string,
     error: string,
     nowMs: number,
+    minDelayMs?: number,
   ): Promise<TaskOutcome> {
     try {
       const settled = await this.#queue.fail(task.id, leaseToken, {
         error,
         nowMs,
+        ...(minDelayMs !== undefined ? { minDelayMs } : {}),
       });
       return settled.status === "dead_letter" ? "deadLettered" : "failed";
     } catch (settleError) {
