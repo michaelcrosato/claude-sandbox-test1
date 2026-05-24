@@ -4,6 +4,62 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 54: Per-Endpoint Retry Policy Override
+
+**Repo truth at start:** clean main @ `40e91c7` (iter-53, attempt body capture). Baseline verified:
+`tsc --noEmit` clean, vitest **1146/1146** (44 files), `npm run build` clean.
+
+**High-leverage move chosen:** Per-endpoint retry policy — each endpoint can now carry a
+`RetryPolicy | null` that overrides the system-wide default for its deliveries. Before this,
+every endpoint on an application shared a single retry schedule set at queue-creation time;
+operators running mixed-criticality endpoints (e.g., a critical payment webhook alongside a
+low-priority analytics endpoint) had no way to give them different retry cadences. Every
+incumbent (Svix, Hookdeck, Convoy) exposes per-endpoint or per-application retry configuration
+as a first-class feature.
+
+**Architecture (additive, zero blast radius):**
+
+Policy flows through the pipeline without touching the queue schema:
+
+1. **`Endpoint` model** — new `retryPolicy: RetryPolicy | null` field with `normalizeRetryPolicy()`
+   validator (max 20 retries, max 30-day delay per step). Constants `MAX_RETRY_POLICY_RETRIES`
+   and `MAX_RETRY_POLICY_DELAY_MS` exported from `index.ts`.
+
+2. **SQLite migration** — `#migrateRetryPolicyColumn()` appends `retry_policy TEXT` to the
+   `endpoints` table using the same PRAGMA table_info + ALTER TABLE additive pattern as prior
+   migrations. JSON-serialized in the column, deserialized on read.
+
+3. **Resolver bridge** — `endpointToDeliveryTarget` now spreads `retryPolicy` onto
+   `DeliveryTarget` (optional field, spread-conditional for exactOptionalPropertyTypes).
+
+4. **Worker** — `#deliver` captures the resolved target before sending; `#settleFailure` accepts
+   an optional `retryPolicy` argument and includes it in `FailInput` if present.
+
+5. **Queue** — `FailInput` gains `readonly retryPolicy?: RetryPolicy`; `normalizeFailInput`
+   threads it through; both `InMemoryQueue.fail()` and `SqliteQueue.fail()` use
+   `retryPolicy ?? this.#policy` so per-task policy wins when supplied.
+
+6. **API + OpenAPI** — `endpointView` includes `retryPolicy`; POST/PATCH handlers pass it
+   through. OpenAPI gains a `RetryPolicyConfig` component schema referenced by `Endpoint`,
+   `NewEndpoint`, and `EndpointUpdate`.
+
+7. **SDK** — `RetryPolicyView` interface exported; all endpoint input/output types updated;
+   `createEndpoint` and `updateEndpoint` serialize it to the request body.
+
+**Tests:** 25 new tests over baseline of 1146 → **1171 total**:
+- Endpoint conformance (×2 backends): 6 cases — create with policy, update to null, update from
+  null to policy, normalizeRetryPolicy validation (oversized array, overlong delay), null passthrough
+- Queue conformance (×2 backends): 3 cases — per-task policy wins over global, null falls back to
+  global, override does not persist to subsequent fail calls
+- Worker: 3 cases — policy passed to fail when endpoint has one, null when endpoint has none,
+  null on pre-flight failure
+- API: 3 cases — create with retryPolicy, update to null, round-trip read
+- SDK: 1 case — creates and updates a custom retryPolicy on an endpoint
+
+**Validation:** `tsc --noEmit` clean, `npx vitest run` **1171/1171** (44 files), `npm run build` clean.
+
+---
+
 ## 2026-05-24 — Iteration 53: Attempt Request/Response Body Capture
 
 **Repo truth at start:** clean main @ `f86671b` (iter-52, endpoint delivery statistics). Baseline verified:
