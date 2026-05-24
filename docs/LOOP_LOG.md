@@ -4,6 +4,76 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 71: Event-Type Catalog Management in the Portal
+
+**Repo truth at start:** clean main @ `5126ad4` (iter-70, portal rate limit field + tenant
+usage/quota bar). Baseline verified: `tsc --noEmit` clean, vitest **1405/1405** (46 files,
+6 Postgres-skipped), `npm run build` clean.
+
+**Gap closed:** Posthorn's consumer-app portal gave developers full self-service over webhook
+endpoints but zero self-service over the event-type catalog that drives endpoint subscription
+filters. Creating, editing, or archiving an event type required the HTTP API or SDK — a
+friction point that breaks the portal's "no API key required" promise. Svix exposes event
+types as a first-class resource in its dashboard; we now match that.
+
+**Move chosen:** Add a complete event-type catalog section to the portal:
+`GET /portal/event-types` (list + create form), `POST /portal/event-types` (create),
+`GET /portal/event-types/:id` (detail + edit form + archive action),
+`POST /portal/event-types/:id/update`, `POST /portal/event-types/:id/archive`. All routes
+are automatically tenant-scoped via the portal session `appId`. When no `EventTypeStore` is
+injected (store-less deployments), all five routes return 404 — same opt-in model as the
+existing catalog-filter feature. Archive redirects to the list; the detail page shows the
+archived status pill and replaces the archive button with a static "this type is archived"
+note.
+
+**Architecture (3 files, +378 / −2):**
+
+1. **`src/portal/portal-views.ts`** — Added `import type { EventType }` from the event-types
+   module. Updated the `base()` function to include a persistent `<nav>` beside the brand
+   with "Endpoints" and "Event Types" text links — no parameter-signature change, all existing
+   callers get the nav automatically. Added two exported functions:
+   - **`portalEventTypesPage(eventTypes, error?, created?)`**: list table (ID link, name,
+     description, active/archived pill) + create form (id, name, description, schemaExample
+     textarea); `createdBanner` shown on success, `errorBanner` for validation failures.
+   - **`portalEventTypeDetailPage(eventType, error?, saved)`**: summary card (id, name,
+     description, example payload in a `<pre>`, status, created); edit form (name,
+     description, schemaExample); archive card (form with confirm dialog, replaced by a
+     "this type is archived" note once archived); `savedBanner` shown when `saved=true`.
+
+2. **`src/portal/portal-handler.ts`** — Added `EventType` to the type import from
+   `../event-types/event-type.js`. Added `portalEventTypesPage` and
+   `portalEventTypeDetailPage` to the import from `./portal-views.js`. Added the five
+   route handlers after the existing verify route and before `return NOT_FOUND`. All
+   routes guard `eventTypesStore === undefined → NOT_FOUND`. The update handler uses
+   `typeof et` to avoid an explicit `EventType` import for the `updated` variable. Create
+   and update validation errors are caught generically (`err instanceof Error → err.message`)
+   and surfaced via the error banner; normalization and store-level errors (duplicate ID,
+   invalid JSON schema example, blank name) all produce readable messages this way.
+
+3. **`src/portal/portal-handler.test.ts`** — Added `import InMemoryEventTypeStore`.
+   Added `setupWithEventTypes()` helper (identical to `setup()` but with `eventTypes` store
+   injected). Added 10 new test cases under "Event type catalog management":
+   - No event-type store → 404
+   - Unauthenticated → redirect to login
+   - GET list with a seeded type → 200, id and name visible
+   - POST create → 200, confirmation, type in store
+   - POST create invalid id → 200, error banner in response
+   - GET detail → 200, description visible
+   - GET detail unknown id → 404
+   - GET detail cross-tenant id → 404
+   - POST update → 200, saved banner, new name in response and store
+   - POST archive → 302 redirect to list, type.archived = true in store
+
+**Validation:** `tsc --noEmit` clean → vitest **1415/1415** (was 1405; +10 all new tests
+green; first run had 1 flaky tinypool worker-exit which cleared on re-run, consistent with
+[[vitest-tinypool-flaky-worker-exit]]). `npm run build` clean → committed `4908608`.
+
+**Next moves:** Admin dashboard per-app usage column alongside the existing quota column;
+global (per-gateway) default rate limit for all endpoints; portal event-type detail page
+should also show which endpoints subscribe to that event type.
+
+---
+
 ## 2026-05-24 — Iteration 70: Portal Rate Limit Field + Tenant Dashboard Usage/Quota Bar
 
 **Repo truth at start:** clean main @ `067b502` (iter-69, webhook signature verification
