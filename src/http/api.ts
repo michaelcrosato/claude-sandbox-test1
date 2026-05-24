@@ -143,7 +143,7 @@ import {
   type NewApp,
 } from "../apps/app.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { ingest, type FanoutOptions } from "../fanout/fanout.js";
+import { ingest } from "../fanout/fanout.js";
 import {
   buildSignedRequest,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -654,6 +654,7 @@ function messageListItemView(message: Message): Record<string, unknown> {
     eventType: message.eventType,
     idempotencyKey: message.idempotencyKey,
     channel: message.channel,
+    deliverAt: message.deliverAt,
     createdAt: message.createdAt,
   };
 }
@@ -671,6 +672,7 @@ function messageView(
     // The producer's own payload, echoed back so it can confirm what was sent.
     payload: message.payload,
     channel: message.channel,
+    deliverAt: message.deliverAt,
     createdAt: message.createdAt,
     deliveries: deliveries.map(deliveryView),
   };
@@ -1011,13 +1013,13 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { idempotencyKey: body["idempotencyKey"] as string | null }
         : {}),
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
+      ...(sendAtMs !== null ? { deliverAt: sendAtMs } : {}),
     };
-    const fanoutOptions: FanoutOptions = sendAtMs !== null ? { availableAt: sendAtMs } : {};
     const result = await ingest(input, {
       messages: deps.messages,
       endpoints: deps.endpoints,
       queue: deps.queue,
-    }, fanoutOptions);
+    });
     deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
     return json(202, {
       message: {
@@ -1026,6 +1028,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         eventType: result.message.eventType,
         idempotencyKey: result.message.idempotencyKey,
         channel: result.message.channel,
+        deliverAt: result.message.deliverAt,
         createdAt: result.message.createdAt,
       },
       deduplicated: result.deduplicated,
@@ -1117,14 +1120,13 @@ export function createApi(deps: ApiDeps): ApiHandler {
             ? { idempotencyKey: msg["idempotencyKey"] as string | null }
             : {}),
           ...("channel" in msg ? { channel: msg["channel"] as string | null } : {}),
+          ...(itemSendAtMs !== null ? { deliverAt: itemSendAtMs } : {}),
         };
-        const itemFanoutOptions: FanoutOptions =
-          itemSendAtMs !== null ? { availableAt: itemSendAtMs } : {};
         const result = await ingest(input, {
           messages: deps.messages,
           endpoints: deps.endpoints,
           queue: deps.queue,
-        }, itemFanoutOptions);
+        });
         deps.metrics?.recordIngest({ deduplicated: result.deduplicated });
         if (!result.deduplicated) {
           consumed++;
@@ -1137,6 +1139,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             eventType: result.message.eventType,
             idempotencyKey: result.message.idempotencyKey,
             channel: result.message.channel,
+            deliverAt: result.message.deliverAt,
             createdAt: result.message.createdAt,
           },
           deduplicated: result.deduplicated,
@@ -1371,6 +1374,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       payload,
       idempotencyKey: null,
       channel: null,
+      deliverAt: null,
       createdAt: now,
       fanoutPending: false,
     };

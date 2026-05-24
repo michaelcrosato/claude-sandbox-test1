@@ -118,6 +118,7 @@ describe("buildSignedRequest", () => {
     eventType: "user.created",
     payload: "BODY",
     channel: null,
+    deliverAt: null,
     createdAt: 1_000,
   };
 

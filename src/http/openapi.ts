@@ -1239,7 +1239,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         MessageSummary: {
           type: "object",
           description: "A message without its payload or per-endpoint deliveries (list/accept view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "createdAt"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "createdAt"],
           properties: {
             id: { type: "string", examples: ["msg_2Yx9..."] },
             appId: { type: "string" },
@@ -1253,19 +1253,32 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Only endpoints whose `channel` is `null` (global) or matches this value receive the message.",
               examples: ["customer/user_42"],
             },
+            deliverAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description:
+                "Epoch-ms before which no delivery is attempted, or `null` for immediate delivery. " +
+                "Mirrors the `sendAt` field from the create request.",
+            },
             createdAt: epochMs("Creation time, epoch ms."),
           },
         },
         Message: {
           type: "object",
           description: "A message plus its per-endpoint delivery statuses (detail view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "payload", "createdAt", "deliveries"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "payload", "createdAt", "deliveries"],
           properties: {
             id: { type: "string" },
             appId: { type: "string" },
             eventType: { type: "string" },
             idempotencyKey: { type: ["string", "null"] },
             channel: { type: ["string", "null"], maxLength: 200 },
+            deliverAt: {
+              type: ["integer", "null"],
+              format: "int64",
+              description:
+                "Epoch-ms before which no delivery is attempted, or `null` for immediate delivery.",
+            },
             payload: {
               type: "string",
               description: "The exact serialized JSON body that was signed and delivered, byte-for-byte.",

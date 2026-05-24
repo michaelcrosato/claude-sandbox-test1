@@ -155,7 +155,7 @@ export interface FanoutResult {
  * source of a re-fan-out (a producer's idempotent retry).
  */
 export async function fanOut(
-  message: Pick<Message, "id" | "appId" | "eventType" | "payload" | "channel">,
+  message: Pick<Message, "id" | "appId" | "eventType" | "payload" | "channel" | "deliverAt">,
   deps: FanoutDeps,
   options: FanoutOptions = {},
 ): Promise<FanoutResult> {
@@ -168,7 +168,9 @@ export async function fanOut(
   }
   const selection = selectFanoutTargets(all, message.eventType, message.channel, parsedPayload);
 
-  const availableAt = options.availableAt ?? null;
+  // Explicit FanoutOptions.availableAt wins; otherwise fall back to the message's
+  // stored deliverAt so the outbox dispatcher honours the scheduled time too.
+  const availableAt = options.availableAt ?? message.deliverAt ?? null;
   const tasks: DeliveryTask[] = [];
   for (const endpoint of selection.matched) {
     tasks.push(

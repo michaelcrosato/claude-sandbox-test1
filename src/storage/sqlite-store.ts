@@ -80,6 +80,7 @@ interface MessageRow {
   readonly event_type: string;
   readonly payload: string;
   readonly channel: string | null;
+  readonly deliver_at: number | null;
   readonly created_at: number;
   /** Outbox marker: NULL while the message still owes a fan-out, else the time it was fanned out. */
   readonly fanned_out_at: number | null;
@@ -100,6 +101,7 @@ function rowToMessage(row: MessageRow): Message {
     eventType: row.event_type,
     payload: row.payload,
     channel: row.channel ?? null,
+    deliverAt: row.deliver_at ?? null,
     createdAt: row.created_at,
   };
 }
@@ -152,16 +154,19 @@ export class SqliteMessageStore implements MessageStore {
     // Likewise for the channel column. Existing rows default to NULL (untagged), which
     // is the correct semantic and preserves existing behaviour.
     this.#migrateChannelColumn();
+    // Add deliver_at for scheduled delivery. Existing rows default to NULL (immediate),
+    // which is the correct semantic for messages created before scheduling existed.
+    this.#migrateDeliverAtColumn();
     this.#db.exec(INDEXES);
 
     this.#selectMessage = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at FROM messages WHERE id = ?",
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at FROM messages WHERE id = ?",
     );
     this.#selectIdempotency = this.#db.prepare(
       "SELECT message_id, fingerprint, stored_at FROM idempotency_keys WHERE app_id = ? AND key = ?",
     );
     this.#insertMessage = this.#db.prepare(
-      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
     this.#insertIdempotency = this.#db.prepare(
       "INSERT INTO idempotency_keys (app_id, key, message_id, fingerprint, stored_at) VALUES (?, ?, ?, ?, ?)",
@@ -180,21 +185,21 @@ export class SqliteMessageStore implements MessageStore {
     // Oldest-first; the partial index on (created_at, id) WHERE fanned_out_at IS
     // NULL keeps this cheap even as `messages` grows unbounded.
     this.#listPendingFanout = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE fanned_out_at IS NULL AND created_at <= ?" +
         " ORDER BY created_at ASC, id ASC LIMIT ?",
     );
     // Newest-first page of a tenant's messages (first page). The DESC scan rides
     // idx_messages_app_created backwards; ORDER BY mirrors compareMessagesNewestFirst.
     this.#listByApp = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ?" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
     // Subsequent pages: the keyset predicate mirrors isMessageAfterCursor — every
     // row strictly older than the cursor's (created_at, id).
     this.#listByAppAfter = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -203,12 +208,12 @@ export class SqliteMessageStore implements MessageStore {
     // The idx_messages_app_event_created (app_id, event_type, created_at, id) index lets
     // the planner narrow straight to the matching event type before scanning.
     this.#listByAppFiltered = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND event_type = ?" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
     this.#listByAppAfterFiltered = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND event_type = ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -216,12 +221,12 @@ export class SqliteMessageStore implements MessageStore {
     // Channel-filtered variants: filter by channel IS NULL or channel = ?
     // The idx_messages_app_channel_created (app_id, channel, created_at, id) index covers this.
     this.#listByAppChannel = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND channel IS ?" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
     this.#listByAppAfterChannel = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND channel IS ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -254,6 +259,22 @@ export class SqliteMessageStore implements MessageStore {
   }
 
   /**
+   * Add the `deliver_at` column to a database created before scheduled delivery
+   * existed. Existing rows default to `NULL` (immediate delivery), which is the
+   * correct semantic. For a fresh database the column is in {@link SCHEMA} and
+   * this is a no-op.
+   */
+  #migrateDeliverAtColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(messages)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "deliver_at")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE messages ADD COLUMN deliver_at INTEGER");
+  }
+
+  /**
    * Ensure the `fanned_out_at` outbox column exists. A database created by a
    * pre-outbox build has the column missing (its `CREATE TABLE IF NOT EXISTS` is
    * a no-op on the existing table); add it, then backfill existing rows as
@@ -279,7 +300,7 @@ export class SqliteMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key, channel } =
+    const { appId, eventType, payload, idempotencyKey: key, channel, deliverAt } =
       normalizeNewMessage(input);
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
@@ -296,6 +317,7 @@ export class SqliteMessageStore implements MessageStore {
         fingerprint,
         nowMs,
         channel,
+        deliverAt,
       );
       this.#db.exec("COMMIT");
       return result;
@@ -317,6 +339,7 @@ export class SqliteMessageStore implements MessageStore {
     fingerprint: string,
     nowMs: number,
     channel: string | null,
+    deliverAt: number | null,
   ): CreateMessageResult {
     if (key !== null) {
       const existing = this.#selectIdempotency.get(appId, key) as
@@ -357,7 +380,7 @@ export class SqliteMessageStore implements MessageStore {
     // fanned_out_at is left unset (NULL) — the message owes a fan-out. Inserting
     // it in this same transaction as the message makes "accepted" and "needs
     // fan-out" a single atomic fact: the read side of the transactional outbox.
-    this.#insertMessage.run(id, appId, key, eventType, payload, channel, nowMs);
+    this.#insertMessage.run(id, appId, key, eventType, payload, channel, deliverAt, nowMs);
     if (key !== null) {
       this.#insertIdempotency.run(appId, key, id, fingerprint, nowMs);
     }
@@ -369,6 +392,7 @@ export class SqliteMessageStore implements MessageStore {
         eventType,
         payload,
         channel,
+        deliverAt,
         createdAt: nowMs,
       },
       deduplicated: false,
@@ -525,6 +549,7 @@ CREATE TABLE IF NOT EXISTS messages (
   event_type      TEXT    NOT NULL,
   payload         TEXT    NOT NULL,
   channel         TEXT,
+  deliver_at      INTEGER,
   created_at      INTEGER NOT NULL,
   fanned_out_at   INTEGER
 ) STRICT;

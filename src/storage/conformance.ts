@@ -736,6 +736,33 @@ export function describeMessageStoreContract(
           store.create({ appId: APP, eventType: "e", payload: "{}", channel: "bad\nvalue" }),
         ).rejects.toThrow(TypeError);
       });
+
+      it("stores and retrieves deliverAt when provided", async () => {
+        const deliverAt = clock.now() + 60_000;
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+          deliverAt,
+        });
+        expect(message.deliverAt).toBe(deliverAt);
+        expect((await store.get(message.id))!.deliverAt).toBe(deliverAt);
+      });
+
+      it("defaults deliverAt to null when omitted", async () => {
+        const { message } = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        expect(message.deliverAt).toBeNull();
+        expect((await store.get(message.id))!.deliverAt).toBeNull();
+      });
+
+      it("rejects a non-integer or negative deliverAt", async () => {
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", deliverAt: 1.5 }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", deliverAt: -1 }),
+        ).rejects.toThrow(TypeError);
+      });
     });
 
     describe("summarizeUsageByApp — per-tenant usage", () => {

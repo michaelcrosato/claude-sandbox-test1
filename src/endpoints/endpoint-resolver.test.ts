@@ -39,6 +39,7 @@ const FAKE_MESSAGE = {
   eventType: "user.created",
   payload: "{}",
   channel: null,
+  deliverAt: null,
   createdAt: 0,
 } as const;
 

@@ -209,7 +209,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://d.test/h", disabled: true }); // disabled
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
 
@@ -234,7 +234,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ disabled: true });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(0);
@@ -250,7 +250,7 @@ describe("fanOut", () => {
     await env.endpoints.create({ appId: "app_2", url: "https://other.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null, deliverAt: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(1);
@@ -264,12 +264,37 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://b.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: null },
       { endpoints: env.endpoints, queue: env.queue },
       { availableAt: 5_000 },
     );
     expect(result.tasks).toHaveLength(2);
     expect(result.tasks.every((t) => t.nextAttemptAt === 5_000)).toBe(true);
+  });
+
+  it("uses message.deliverAt as availableAt when no explicit options are passed", async () => {
+    const env = setup();
+    await env.addEndpoint({ url: "https://a.test/h" });
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000 },
+      { endpoints: env.endpoints, queue: env.queue },
+    );
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.nextAttemptAt).toBe(9_000);
+  });
+
+  it("explicit options.availableAt overrides message.deliverAt", async () => {
+    const env = setup();
+    await env.addEndpoint({ url: "https://a.test/h" });
+
+    const result = await fanOut(
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null, deliverAt: 9_000 },
+      { endpoints: env.endpoints, queue: env.queue },
+      { availableAt: 1_000 },
+    );
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.nextAttemptAt).toBe(1_000);
   });
 });
 

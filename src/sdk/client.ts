@@ -104,6 +104,11 @@ export interface MessageRef {
   readonly idempotencyKey: string | null;
   /** Channel tag, or `null` for an untagged message. */
   readonly channel: string | null;
+  /**
+   * Epoch-ms before which no delivery is attempted, or `null` for immediate
+   * delivery. Mirrors the `sendAt` field from the create request.
+   */
+  readonly deliverAt: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -442,6 +447,11 @@ export interface MessageWithDeliveries {
   readonly payload: string;
   /** Channel tag, or `null` for an untagged message. */
   readonly channel: string | null;
+  /**
+   * Epoch-ms before which no delivery is attempted, or `null` for immediate
+   * delivery. Mirrors the `sendAt` field from the create request.
+   */
+  readonly deliverAt: number | null;
   readonly createdAt: number;
   readonly deliveries: readonly DeliveryView[];
 }

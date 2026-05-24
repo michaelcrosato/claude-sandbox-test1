@@ -4,6 +4,68 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 64: Stored `deliverAt` — Completing Scheduled Delivery
+
+**Repo truth at start:** clean main @ `e56d3aa` (iter-63, endpoint message replay). Baseline
+verified: `tsc --noEmit` clean, vitest **1341/1341** (46 files), `npm run build` clean.
+
+**Problem:** `sendAt` (ISO 8601 wire field for scheduled / delayed delivery) was already parsed
+by the HTTP API and used to set `availableAt` on the inline fan-out call — so direct ingestion
+honoured the schedule. However, `deliverAt` was never stored in the `Message` model. The
+transactional outbox dispatcher (`FanoutDispatcher`) re-fans orphaned messages by calling
+`fanOut(message, ...)` with no explicit options; without `deliverAt` on the message, the
+dispatcher would enqueue orphaned scheduled messages as *immediately* deliverable, silently
+breaking the guarantee for any message that was recovered from the outbox.
+
+**Move chosen:** Store `deliverAt: number | null` (epoch-ms) in the `Message` model and thread
+it through all code paths so both the inline fan-out and the outbox recovery path honour the
+scheduled time.
+
+**Architecture:**
+
+1. **`src/storage/message-store.ts`** — Added `deliverAt: number | null` to `Message`,
+   `NewMessage`, `NormalizedNewMessage`, and validation in `normalizeNewMessage` (rejects
+   non-integer or negative values).
+
+2. **`src/storage/in-memory-store.ts`** — Extracts and stores `deliverAt` in the message
+   literal.
+
+3. **`src/storage/sqlite-store.ts`** — Added `deliver_at INTEGER` to schema; additive migration
+   via `PRAGMA table_info` + `ALTER TABLE ADD COLUMN`; all SELECT/INSERT statements updated;
+   `rowToMessage` maps `deliver_at ?? null`.
+
+4. **`src/storage/postgres-store.ts`** — Added `deliver_at BIGINT`; migration via
+   `ADD COLUMN IF NOT EXISTS`; Postgres returns BIGINT as string so `rowToMessage` calls
+   `Number(row.deliver_at)`.
+
+5. **`src/fanout/fanout.ts`** — `fanOut` signature extended to pick `deliverAt` from the
+   message; resolves `availableAt = options.availableAt ?? message.deliverAt ?? null` so
+   explicit callers (HTTP API) still win, and the outbox dispatcher picks up stored schedule.
+
+6. **`src/http/api.ts`** — Passes `deliverAt: sendAtMs` in `NewMessage` input; removed the
+   now-redundant `fanoutOptions`/`itemFanoutOptions` variables; list/detail views and create
+   responses include `deliverAt`.
+
+7. **`src/http/openapi.ts`** — `MessageSummary` and `Message` schemas include `deliverAt`
+   (`integer|null`, `int64`).
+
+8. **`src/sdk/client.ts`** — `MessageRef` and `MessageWithDeliveries` include `deliverAt`.
+
+9. **`src/portal/portal-handler.ts`, `src/http/api.ts` (test path), `src/worker/delivery-worker.test.ts`**
+   — Synthetic message literals updated with `deliverAt: null`.
+
+**Tests added / updated (9 new, many updated):**
+- `src/storage/conformance.ts`: 3 new cases — stores and retrieves `deliverAt`, defaults to
+  `null`, rejects invalid values.
+- `src/fanout/fanout.test.ts`: 2 new cases — `message.deliverAt` used as `availableAt`;
+  explicit `options.availableAt` overrides it. All existing message literals updated.
+- `src/http/api.test.ts`: 1 new case — `sendAt` stored and returned in response as `deliverAt`.
+- `src/endpoints/endpoint-resolver.test.ts`: `FAKE_MESSAGE` updated with `deliverAt: null`.
+
+**Validation:** `tsc --noEmit` clean → `npx vitest run` **1350/1350** (46 files) → `npm run build` clean.
+
+---
+
 ## 2026-05-24 — Iteration 63: Endpoint Message Replay
 
 **Repo truth at start:** clean main @ `3252f95` (iter-62, channel-based routing). Baseline

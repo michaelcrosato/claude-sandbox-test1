@@ -40,6 +40,14 @@ export interface Message {
    * plus all global endpoints.
    */
   readonly channel: string | null;
+  /**
+   * Epoch-ms before which no delivery attempt is made, or `null` for immediate
+   * delivery. Stored from the producer's `sendAt` field (ISO 8601 on the wire;
+   * epoch-ms here). Applied uniformly to every task in the fan-out — including
+   * the outbox recovery path — so the scheduled time survives a crash between
+   * message accept and fan-out.
+   */
+  readonly deliverAt: number | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -64,6 +72,12 @@ export interface NewMessage {
    * delivery to matching-channel and global endpoints only.
    */
   readonly channel?: string | null;
+  /**
+   * Epoch-ms before which no delivery attempt is made. Omit or pass `null` for
+   * immediate delivery. Past timestamps are treated as immediate. Stored on the
+   * message so the fan-out dispatcher honours it even after a crash.
+   */
+  readonly deliverAt?: number | null;
 }
 
 /** The outcome of {@link MessageStore.create}. */
@@ -281,6 +295,7 @@ export interface NormalizedNewMessage {
   readonly payload: string;
   readonly idempotencyKey: string | null;
   readonly channel: string | null;
+  readonly deliverAt: number | null;
 }
 
 /**
@@ -310,7 +325,11 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
     );
   }
   const channel = normalizeChannel("channel" in input ? input.channel : undefined);
-  return { appId, eventType, payload, idempotencyKey, channel };
+  const deliverAt = input.deliverAt ?? null;
+  if (deliverAt !== null && (!Number.isInteger(deliverAt) || deliverAt < 0)) {
+    throw new TypeError("deliverAt must be a non-negative integer");
+  }
+  return { appId, eventType, payload, idempotencyKey, channel, deliverAt };
 }
 
 /**
