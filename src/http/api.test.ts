@@ -410,6 +410,36 @@ describe("createApi — POST /v1/messages (ingest)", () => {
     );
     expect(body(nowRes).message.expiresAt).toBeNull();
   });
+
+  it("stores priority and returns it in the response", async () => {
+    let nowMs = 1_700_000_000_000;
+    const apps = new InMemoryAppStore();
+    const messages = new InMemoryMessageStore({ now: () => nowMs });
+    const queue = new InMemoryDeliveryQueue({ now: () => nowMs });
+    const endpoints = new InMemoryEndpointStore();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, now: () => nowMs });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+
+    const highRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, priority: "high" }, secret),
+    );
+    expect(highRes.status).toBe(202);
+    expect(body(highRes).message.priority).toBe("high");
+
+    const lowRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {}, priority: "low" }, secret),
+    );
+    expect(body(lowRes).message.priority).toBe("low");
+
+    // Default: normal when priority omitted.
+    const defaultRes = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    expect(body(defaultRes).message.priority).toBe("normal");
+  });
 });
 
 describe("createApi — POST /v1/messages monthly quota enforcement", () => {

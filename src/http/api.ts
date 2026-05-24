@@ -75,10 +75,12 @@ import {
   IdempotencyConflictError,
   MAX_LIST_MESSAGES_LIMIT,
   MAX_USAGE_RANGE_DAYS,
+  VALID_PRIORITIES,
   utcDayKey,
   utcMonthRange,
   type ListMessagesOptions,
   type Message,
+  type MessagePriority,
   type MessageStore,
   type NewMessage,
   type UsageRange,
@@ -387,6 +389,19 @@ function parseExpiresAt(v: unknown): number | null {
   return t;
 }
 
+/**
+ * Parse an optional `priority` field from a request body. Accepts `"high"`,
+ * `"normal"`, or `"low"`. Missing/undefined → `undefined` (store applies default).
+ * Throws `TypeError` on an invalid value so the global handler renders it as 400.
+ */
+function parsePriority(v: unknown): MessagePriority | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string" || !(VALID_PRIORITIES as readonly string[]).includes(v)) {
+    throw new TypeError(`priority must be one of: ${VALID_PRIORITIES.join(", ")}`);
+  }
+  return v as MessagePriority;
+}
+
 /** A required path parameter; absent only on a routing bug, surfaced as 500. */
 function requireParam(params: RouteParams, name: string): string {
   const value = params[name];
@@ -667,6 +682,7 @@ function messageListItemView(message: Message): Record<string, unknown> {
     eventType: message.eventType,
     idempotencyKey: message.idempotencyKey,
     channel: message.channel,
+    priority: message.priority,
     deliverAt: message.deliverAt,
     expiresAt: message.expiresAt,
     createdAt: message.createdAt,
@@ -686,6 +702,7 @@ function messageView(
     // The producer's own payload, echoed back so it can confirm what was sent.
     payload: message.payload,
     channel: message.channel,
+    priority: message.priority,
     deliverAt: message.deliverAt,
     expiresAt: message.expiresAt,
     createdAt: message.createdAt,
@@ -1021,6 +1038,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     // authenticated tenant — never read from the body.
     const sendAtMs = parseSendAt("sendAt" in body ? body["sendAt"] : undefined);
     const expiresAtMs = parseExpiresAt("expiresAt" in body ? body["expiresAt"] : undefined);
+    const priorityVal = parsePriority("priority" in body ? body["priority"] : undefined);
     const input: NewMessage = {
       appId: ctx.app.id,
       eventType: body["eventType"] as string,
@@ -1029,6 +1047,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { idempotencyKey: body["idempotencyKey"] as string | null }
         : {}),
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
+      ...(priorityVal !== undefined ? { priority: priorityVal } : {}),
       ...(sendAtMs !== null ? { deliverAt: sendAtMs } : {}),
       ...(expiresAtMs !== null ? { expiresAt: expiresAtMs } : {}),
     };
@@ -1045,6 +1064,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         eventType: result.message.eventType,
         idempotencyKey: result.message.idempotencyKey,
         channel: result.message.channel,
+        priority: result.message.priority,
         deliverAt: result.message.deliverAt,
         expiresAt: result.message.expiresAt,
         createdAt: result.message.createdAt,
@@ -1131,6 +1151,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       try {
         const itemSendAtMs = parseSendAt("sendAt" in msg ? msg["sendAt"] : undefined);
         const itemExpiresAtMs = parseExpiresAt("expiresAt" in msg ? msg["expiresAt"] : undefined);
+        const itemPriorityVal = parsePriority("priority" in msg ? msg["priority"] : undefined);
         const input: NewMessage = {
           appId: ctx.app.id,
           eventType: msg["eventType"] as string,
@@ -1139,6 +1160,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             ? { idempotencyKey: msg["idempotencyKey"] as string | null }
             : {}),
           ...("channel" in msg ? { channel: msg["channel"] as string | null } : {}),
+          ...(itemPriorityVal !== undefined ? { priority: itemPriorityVal } : {}),
           ...(itemSendAtMs !== null ? { deliverAt: itemSendAtMs } : {}),
           ...(itemExpiresAtMs !== null ? { expiresAt: itemExpiresAtMs } : {}),
         };
@@ -1159,6 +1181,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             eventType: result.message.eventType,
             idempotencyKey: result.message.idempotencyKey,
             channel: result.message.channel,
+            priority: result.message.priority,
             deliverAt: result.message.deliverAt,
             expiresAt: result.message.expiresAt,
             createdAt: result.message.createdAt,

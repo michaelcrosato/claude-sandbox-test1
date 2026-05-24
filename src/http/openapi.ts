@@ -1239,7 +1239,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         MessageSummary: {
           type: "object",
           description: "A message without its payload or per-endpoint deliveries (list/accept view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "expiresAt", "createdAt"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "priority", "deliverAt", "expiresAt", "createdAt"],
           properties: {
             id: { type: "string", examples: ["msg_2Yx9..."] },
             appId: { type: "string" },
@@ -1252,6 +1252,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "The routing channel, or `null` for an untagged message. " +
                 "Only endpoints whose `channel` is `null` (global) or matches this value receive the message.",
               examples: ["customer/user_42"],
+            },
+            priority: {
+              type: "string",
+              enum: ["high", "normal", "low"],
+              description:
+                "Delivery priority. Higher-priority messages are claimed from the queue before lower-priority ones " +
+                "when multiple tasks are due at the same time. Defaults to `normal`.",
             },
             deliverAt: {
               type: ["integer", "null"],
@@ -1273,13 +1280,20 @@ export function buildOpenApiDocument(): OpenApiDocument {
         Message: {
           type: "object",
           description: "A message plus its per-endpoint delivery statuses (detail view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "deliverAt", "expiresAt", "payload", "createdAt", "deliveries"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "priority", "deliverAt", "expiresAt", "payload", "createdAt", "deliveries"],
           properties: {
             id: { type: "string" },
             appId: { type: "string" },
             eventType: { type: "string" },
             idempotencyKey: { type: ["string", "null"] },
             channel: { type: ["string", "null"], maxLength: 200 },
+            priority: {
+              type: "string",
+              enum: ["high", "normal", "low"],
+              description:
+                "Delivery priority. Higher-priority messages are claimed from the queue before lower-priority ones " +
+                "when multiple tasks are due at the same time. Defaults to `normal`.",
+            },
             deliverAt: {
               type: ["integer", "null"],
               format: "int64",
@@ -1607,6 +1621,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "matches this exact value will receive the message. Omit or pass `null` for an untagged broadcast " +
                 "(received only by global endpoints).",
               examples: ["customer/user_42"],
+            },
+            priority: {
+              type: "string",
+              enum: ["high", "normal", "low"],
+              description:
+                "Delivery priority. Higher-priority messages are claimed from the queue before lower-priority ones " +
+                "when multiple tasks are due at the same time. Defaults to `normal` when omitted.",
             },
           },
         },

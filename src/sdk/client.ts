@@ -100,6 +100,12 @@ export interface SendMessageInput {
    * Omit or pass `null` for an untagged message (only global endpoints receive it).
    */
   readonly channel?: string | null;
+  /**
+   * Delivery priority. Higher-priority messages are claimed from the queue before
+   * lower-priority ones when multiple tasks are due at the same time. Defaults to
+   * `"normal"` when omitted.
+   */
+  readonly priority?: "high" | "normal" | "low";
 }
 
 /** The reference to a message returned by {@link PosthornClient.sendMessage}. */
@@ -110,6 +116,8 @@ export interface MessageRef {
   readonly idempotencyKey: string | null;
   /** Channel tag, or `null` for an untagged message. */
   readonly channel: string | null;
+  /** Delivery priority (`"high"`, `"normal"`, or `"low"`). */
+  readonly priority: "high" | "normal" | "low";
   /**
    * Epoch-ms before which no delivery is attempted, or `null` for immediate
    * delivery. Mirrors the `sendAt` field from the create request.
@@ -455,6 +463,8 @@ export interface MessageWithDeliveries {
   readonly payload: string;
   /** Channel tag, or `null` for an untagged message. */
   readonly channel: string | null;
+  /** Delivery priority (`"high"`, `"normal"`, or `"low"`). */
+  readonly priority: "high" | "normal" | "low";
   /**
    * Epoch-ms before which no delivery is attempted, or `null` for immediate
    * delivery. Mirrors the `sendAt` field from the create request.
@@ -825,6 +835,7 @@ export class PosthornClient {
     if (input.sendAt !== undefined) body["sendAt"] = input.sendAt;
     if (input.expiresAt !== undefined) body["expiresAt"] = input.expiresAt;
     if (input.channel !== undefined) body["channel"] = input.channel;
+    if (input.priority !== undefined) body["priority"] = input.priority;
     return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
   }
 
@@ -840,6 +851,7 @@ export class PosthornClient {
       if (m.sendAt !== undefined) item["sendAt"] = m.sendAt;
       if (m.expiresAt !== undefined) item["expiresAt"] = m.expiresAt;
       if (m.channel !== undefined) item["channel"] = m.channel;
+      if (m.priority !== undefined) item["priority"] = m.priority;
       return item;
     });
     return this.#transport.request<BatchResults>("POST", "/v1/messages/batch", { messages: items });

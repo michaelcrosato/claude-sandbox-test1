@@ -890,6 +890,36 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     await client.sendMessage({ eventType: "e", payload: {} });
     expect(Object.prototype.hasOwnProperty.call(seenBody, "expiresAt")).toBe(false);
   });
+
+  it("sendMessage serializes priority into the request body", async () => {
+    let seenBody: unknown;
+    const stub = {
+      id: "m1", appId: "a1", eventType: "e", idempotencyKey: null, createdAt: 1,
+    };
+    const client = fakeClient((_, init) => {
+      seenBody = JSON.parse(init.body as string);
+      return Promise.resolve(
+        fakeResponse(202, JSON.stringify({ message: stub, deduplicated: false, fanout: null })),
+      );
+    });
+    await client.sendMessage({ eventType: "e", payload: {}, priority: "high" });
+    expect((seenBody as any).priority).toBe("high");
+  });
+
+  it("sendMessage omits priority when not provided", async () => {
+    let seenBody: unknown;
+    const stub = {
+      id: "m1", appId: "a1", eventType: "e", idempotencyKey: null, createdAt: 1,
+    };
+    const client = fakeClient((_, init) => {
+      seenBody = JSON.parse(init.body as string);
+      return Promise.resolve(
+        fakeResponse(202, JSON.stringify({ message: stub, deduplicated: false, fanout: null })),
+      );
+    });
+    await client.sendMessage({ eventType: "e", payload: {} });
+    expect(Object.prototype.hasOwnProperty.call(seenBody, "priority")).toBe(false);
+  });
 });
 
 describe("PosthornClient end-to-end via a running gateway", () => {
