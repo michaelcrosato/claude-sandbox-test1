@@ -4,6 +4,97 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 52: Endpoint Delivery Statistics (`GET /v1/endpoints/:id/stats`)
+
+**Repo truth at start:** clean main @ `43bd2ab` (iter-51, Retry-After header support). Baseline verified:
+`tsc --noEmit` clean, vitest **1120/1120** (44 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** `GET /v1/endpoints/:id/stats` — endpoint delivery
+statistics. The attempts log already records `outcome`, `durationMs`, and `endpointId` on every
+HTTP delivery attempt; no new data was needed. What was missing was an aggregate read path: to
+answer "how is my endpoint performing?", an operator previously had to (1) list delivery tasks for
+the endpoint, (2) paginate through `GET /v1/messages/:id/attempts` for each, and (3) compute
+success rates by hand. A single `GET /v1/endpoints/:id/stats?days=7` replaces all of that with a
+bounded range scan. Every serious webhook platform (Svix, Hookdeck, Convoy) exposes endpoint-level
+health analytics as a first-class feature; Posthorn now does too.
+
+**Architecture (additive, zero blast radius):**
+
+Pure reads only — no writes, no new tables, no schema changes. The attempts table already had the
+data; the only missing piece was a `(endpoint_id, attempted_at)` index and an aggregate query.
+
+1. **`EndpointStatsDay` + `EndpointStats`** — new interfaces in `delivery-attempt.ts`. `EndpointStats`
+   carries `total`, `succeeded`, `failed`, `successRate` (null when 0 total), `avgDurationMs` (null
+   when 0 total), and a per-UTC-day `daily` breakdown. `successRate` is `succeeded / total` rounded
+   to 4 decimal places. `avgDurationMs` covers all attempts (succeeded + failed) — a long failed-avg
+   means timeouts. `MAX_STATS_DAYS = 30`, `DEFAULT_STATS_DAYS = 7`.
+
+2. **`DeliveryAttemptStore.statsByEndpoint(endpointId, range)`** — new method on the interface,
+   backed by a `(endpoint_id, attempted_at)` range scan grouped by UTC day.
+
+3. **`InMemoryDeliveryAttemptStore.statsByEndpoint`** — iterates `#attempts`, filters by
+   `endpointId` and the half-open `[fromMs, toMs)` range, groups by `utcDayKey`, accumulates
+   `totalDurationMs` for the weighted avg. Identical logic to `summarizeAttemptsByApp` but scoped
+   to one endpoint.
+
+4. **`SqliteDeliveryAttemptStore.statsByEndpoint`** — new `#statsByEndpoint` prepared statement:
+   `GROUP BY date(attempted_at/1000,'unixepoch')` + `SUM(duration_ms)` for the avg. A new
+   `idx_delivery_attempts_endpoint ON (endpoint_id, attempted_at)` index is created idempotently
+   after migrations (same safe pattern as `idx_delivery_attempts_app`), making the range scan O(k)
+   where k = attempts in window.
+
+5. **`GET /v1/endpoints/:id/stats`** in `api.ts` — parses `?days=N` (integer 1–30, default 7;
+   400 on violation), performs the ownership check (another tenant's endpoint is 404, consistent
+   with every other endpoint sub-route), converts days to a `UsageRange` via `now() - days *
+   USAGE_DAY_MS` → `now()`, and calls `deps.attempts.statsByEndpoint`.
+
+6. **OpenAPI** — new `EndpointStatsDay` and `EndpointStats` component schemas; new
+   `/v1/endpoints/{id}/stats` GET path. Both forced by the bidirectional drift + orphan-schema
+   tests that have kept the spec honest since iter-1.
+
+7. **SDK** — `EndpointStatsDayView`, `EndpointStatsView`, `GetEndpointStatsParams` interfaces;
+   `getEndpointStats(id, params?)` method sends `GET /v1/endpoints/{id}/stats?days=N`.
+
+**Built this tick:**
+
+- **`src/attempts/delivery-attempt.ts`** — `EndpointStatsDay`, `EndpointStats`, `MAX_STATS_DAYS`,
+  `DEFAULT_STATS_DAYS` (constants exported); `statsByEndpoint` added to `DeliveryAttemptStore`.
+- **`src/attempts/in-memory-attempt-store.ts`** — `statsByEndpoint` implemented (iterator + day
+  bucketing + duration accumulation); imports `EndpointStats`, `EndpointStatsDay`.
+- **`src/attempts/sqlite-attempt-store.ts`** — `#statsByEndpoint` prepared statement + field;
+  `idx_delivery_attempts_endpoint` index created after schema; `statsByEndpoint` implemented
+  (row → typed cast → accumulate → compute rates). Imports `EndpointStats`, `EndpointStatsDay`.
+- **`src/attempts/conformance.ts`** — `describe("statsByEndpoint")` block: 3 test cases × 2
+  backends = 6 conformance tests: zeros when no attempts, counts/rates/avg correct (3 succeeded
+  + 1 failed, mixed durations), endpoint isolation (ep_A and ep_B never mix).
+- **`src/http/api.ts`** — imported `DEFAULT_STATS_DAYS`, `MAX_STATS_DAYS`, `EndpointStats`;
+  `getEndpointStats` handler; `"GET /v1/endpoints/:id/stats"` added to `API_ROUTE_KEYS` and
+  the handlers record.
+- **`src/http/openapi.ts`** — imported `DEFAULT_STATS_DAYS`, `MAX_STATS_DAYS`; `EndpointStatsDay`
+  and `EndpointStats` component schemas; `/v1/endpoints/{id}/stats` path.
+- **`src/sdk/client.ts`** — `GetEndpointStatsParams`, `EndpointStatsDayView`, `EndpointStatsView`
+  interfaces; `getEndpointStats(id, params?)` method.
+- **`src/sdk/client.test.ts`** — 2 new transport-layer tests: GET to correct URL + full payload
+  round-trip; `days` param included in query string when provided.
+- **`src/http/api.test.ts`** — `describe("createApi — GET /v1/endpoints/:id/stats")`: 4 tests:
+  401 unauthenticated; 404 unknown endpoint; 200 with zero stats when no attempts; 200 with correct
+  counts, successRate=0.75, avgDurationMs=125 after 3 succeeded (100ms each) + 1 failed (200ms);
+  400 on `?days=0`.
+- **`src/index.ts`** — exported `EndpointStats`, `EndpointStatsDay`, `DEFAULT_STATS_DAYS`,
+  `MAX_STATS_DAYS`.
+
+**Tests (+13 over baseline):**
+- **`src/attempts/conformance.ts`** (+3 × 2 backends = 6): zeros on empty, counts/rates, isolation.
+- **`src/sdk/client.test.ts`** (+2): GET URL + payload round-trip; `days` param.
+- **`src/http/api.test.ts`** (+5): 401, 404, zero stats, correct totals/rates/avg, 400 on bad days.
+
+**Validation:** `tsc --noEmit` clean. vitest **1133/1133** (44 files, +13). `npm run build` clean.
+
+**State:** GREEN → committed to main @ `a8b4a37` (iter-52). Next tick: assess next highest-leverage gap.
+
+---
+
 ## 2026-05-24 — Iteration 51: `Retry-After` Header Support
 
 **Repo truth at start:** clean main @ `a262fff` (iter-50, bulk delivery retry). Baseline verified:
