@@ -566,6 +566,24 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(res.hasMore).toBe(false);
   });
 
+  it("cancelMessage sends POST /v1/messages/:id/cancel and returns { id, cancelled, deliveries }", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ id: "m/1", cancelled: 1, deliveries: [] })),
+      );
+    });
+    const res = await client.cancelMessage("m/1");
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toBe("http://example.test/v1/messages/m%2F1/cancel");
+    expect(res.id).toBe("m/1");
+    expect(res.cancelled).toBe(1);
+    expect(res.deliveries).toEqual([]);
+  });
+
   it("raises PosthornTimeoutError when a request exceeds the timeout", async () => {
     // A fetch that never settles until its abort signal fires.
     const hanging: PosthornFetch = (_url, init) =>

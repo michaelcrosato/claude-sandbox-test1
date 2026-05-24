@@ -1458,6 +1458,88 @@ describe("createApi — POST /v1/messages/:id/retry (replay)", () => {
   });
 });
 
+describe("createApi — POST /v1/messages/:id/cancel", () => {
+  /** Like setup(), but the queue dead-letters on the first failed attempt. */
+  async function setupNoRetry(): Promise<Fixture> {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes: new InMemoryEventTypeStore() });
+    const app = await apps.create({ name: "Acme" });
+    const { secret } = await apps.createApiKey(app.id);
+    return { apps, endpoints, messages, queue, attempts, api, appId: app.id, secret };
+  }
+
+  it("rejects unauthenticated with 401", async () => {
+    const { api } = await setupNoRetry();
+    const res = await api(request({ method: "POST", path: "/v1/messages/msg_1/cancel" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown message", async () => {
+    const { api, secret } = await setupNoRetry();
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/messages/msg_missing/cancel",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("hides another tenant's message behind 404", async () => {
+    const { api, apps } = await setupNoRetry();
+    const a = await apps.create({ name: "A" });
+    const b = await apps.create({ name: "B" });
+    const aKey = (await apps.createApiKey(a.id)).secret;
+    const bKey = (await apps.createApiKey(b.id)).secret;
+    const ing = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, aKey),
+    );
+    const id = body(ing).message.id;
+
+    // B cannot cancel A's message — 404, not 403.
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/messages/${id}/cancel`,
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("cancels pending deliveries and returns cancelled count + refreshed statuses", async () => {
+    const { api, secret } = await setupNoRetry();
+    await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const ing = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    const id = body(ing).message.id;
+
+    const res = await api(
+      request({
+        method: "POST",
+        path: `/v1/messages/${id}/cancel`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).id).toBe(id);
+    expect(body(res).cancelled).toBe(1);
+    expect(body(res).deliveries).toHaveLength(1);
+    expect(body(res).deliveries[0].status).toBe("cancelled");
+    // Internal queue plumbing is never exposed.
+    expect(body(res).deliveries[0]).not.toHaveProperty("leaseToken");
+  });
+});
+
 describe("createApi — GET /v1/messages (list)", () => {
   /** Send `n` messages and return their refs ({ id, createdAt }) in send order. */
   async function send(

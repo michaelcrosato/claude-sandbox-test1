@@ -373,6 +373,16 @@ export interface RetryMessageResponse {
   readonly deliveries: readonly DeliveryView[];
 }
 
+/** The result of {@link PosthornClient.cancelMessage}. */
+export interface CancelMessageResponse {
+  /** The message whose pending deliveries were cancelled. */
+  readonly id: string;
+  /** How many pending deliveries were cancelled. */
+  readonly cancelled: number;
+  /** The refreshed per-endpoint delivery statuses (cancelled ones now `cancelled`). */
+  readonly deliveries: readonly DeliveryView[];
+}
+
 /** A message plus its per-endpoint delivery statuses ({@link PosthornClient.getMessage}). */
 export interface MessageWithDeliveries {
   readonly id: string;
@@ -786,6 +796,19 @@ export class PosthornClient {
     return this.#transport.request<RetryMessageResponse>(
       "POST",
       `/v1/messages/${encodeURIComponent(id)}/retry`,
+    );
+  }
+
+  /**
+   * Cancel a message's **pending** deliveries — `POST /v1/messages/:id/cancel`.
+   * Aborts scheduled/queued deliveries that have not fired yet. In-flight,
+   * succeeded, and dead-lettered deliveries are left untouched. Returns the
+   * count cancelled and the refreshed per-endpoint statuses.
+   */
+  async cancelMessage(id: string): Promise<CancelMessageResponse> {
+    return this.#transport.request<CancelMessageResponse>(
+      "POST",
+      `/v1/messages/${encodeURIComponent(id)}/cancel`,
     );
   }
 

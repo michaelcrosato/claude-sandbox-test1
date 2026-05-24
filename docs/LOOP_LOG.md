@@ -4,6 +4,54 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 58: Cancel Delivery HTTP API + SDK
+
+**Repo truth at start:** clean main @ `a25b17f` (iter-57, delivery cancellation). Baseline
+verified: `tsc --noEmit` clean, vitest **1203/1203** (44 files), `npm run build` clean.
+
+**High-leverage move chosen:** Surface `DeliveryQueue.cancel()` to the HTTP API and SDK.
+The queue method existed but was reachable only programmatically — no tenant-facing route, no SDK
+method, no OpenAPI entry. This iter adds the complete operator abort path end-to-end.
+
+**Architecture (additive, zero blast radius):**
+
+1. **`src/queue/cancel-message.ts`** (new) — thin orchestration layer, structural twin of
+   `retry-message.ts`. Lists a message's delivery tasks and cancels the pending ones via
+   `queue.cancel()`; absorbs `DeliveryStateError` / `UnknownDeliveryTaskError` (concurrent cancel
+   safety); re-lists after cancellation so returned snapshots show `cancelled` status.
+
+2. **`src/queue/cancel-message.test.ts`** (new) — 4 tests: cancel a pending delivery (status →
+   `cancelled`), only-pending filter (succeeded/dead_letter left alone), no-op when nothing pending,
+   and empty result for unknown message.
+
+3. **`src/http/api.ts`** — `"POST /v1/messages/:id/cancel"` added to `API_ROUTE_KEYS`; import of
+   `cancelMessageDeliveries`; `cancelMessage` authed handler (same tenant-ownership check as
+   `retryMessage`); entry in the exhaustive `handlers` Record.
+
+4. **`src/http/openapi.ts`** — `/v1/messages/{id}/cancel` path + `post` operation; `CancelResult`
+   schema (after `RetryResult`); `Delivery.status` enum and the `?status=` query-param enum both
+   updated to include `"cancelled"` (iter-57 omission).
+
+5. **`src/sdk/client.ts`** — `CancelMessageResponse` interface; `cancelMessage(id)` method after
+   `retryMessage`, identical transport pattern (`POST /v1/messages/:id/cancel`).
+
+6. **`src/http/api.test.ts`** — new `describe("createApi — POST /v1/messages/:id/cancel")` block:
+   4 tests (401 unauthenticated, 404 unknown, 404 cross-tenant, cancels pending + returns count +
+   refreshed statuses).
+
+7. **`src/sdk/client.test.ts`** — 1 new test: `cancelMessage` sends the right URL/method and
+   returns `{ id, cancelled, deliveries }`.
+
+**Validation:**
+- `tsc --noEmit` — clean.
+- `vitest run` — **1212/1212** (45 files, 6 Postgres files skipped), up from 1203. All 9 new tests
+  green.
+- `npm run build` — clean.
+
+**Commit:** iter-58 — 7 files changed.
+
+---
+
 ## 2026-05-24 — Iteration 57: Delivery Cancellation
 
 **Repo truth at start:** interrupted tick — 3 files modified (delivery-state.ts, delivery-queue.ts,

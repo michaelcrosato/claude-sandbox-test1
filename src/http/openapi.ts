@@ -381,6 +381,25 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/messages/{id}/cancel": {
+        post: {
+          operationId: "cancelMessage",
+          tags: ["Messages"],
+          summary: "Cancel a message's pending deliveries",
+          description:
+            "Abort the pending (scheduled/queued) deliveries for this message — " +
+            "the operator's abort path when an endpoint was disabled or misconfigured " +
+            "before the delivery fired. Only `pending` deliveries are cancelled; " +
+            "in-flight (`delivering`), succeeded, and dead-lettered deliveries are " +
+            "left untouched. Returns the count cancelled and the refreshed per-endpoint statuses.",
+          parameters: [idParam("The message id.")],
+          responses: {
+            "200": jsonResponse("The deliveries after the cancellation.", ref("CancelResult")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("No such message for this tenant."),
+          },
+        },
+      },
       "/v1/endpoints": {
         get: {
           operationId: "listEndpoints",
@@ -601,7 +620,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
               required: false,
               schema: {
                 type: "string",
-                enum: ["pending", "delivering", "succeeded", "dead_letter"],
+                enum: ["pending", "delivering", "succeeded", "dead_letter", "cancelled"],
               },
               description:
                 "Filter by delivery status. Omit to return all statuses.",
@@ -1128,8 +1147,8 @@ export function buildOpenApiDocument(): OpenApiDocument {
             endpointId: { type: ["string", "null"] },
             status: {
               type: "string",
-              enum: ["pending", "delivering", "succeeded", "dead_letter"],
-              description: "`dead_letter` is terminal until an operator retry revives it.",
+              enum: ["pending", "delivering", "succeeded", "dead_letter", "cancelled"],
+              description: "`dead_letter` is terminal until an operator retry revives it. `cancelled` is terminal (operator abort).",
             },
             attempts: { type: "integer", minimum: 0, description: "Attempts started so far." },
             nextAttemptAt: {
@@ -1599,6 +1618,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
           properties: {
             id: { type: "string" },
             retried: { type: "integer", minimum: 0, description: "How many dead-lettered deliveries were revived." },
+            deliveries: { type: "array", items: ref("Delivery") },
+          },
+        },
+        CancelResult: {
+          type: "object",
+          description: "The result of cancelling a message's pending deliveries.",
+          required: ["id", "cancelled", "deliveries"],
+          properties: {
+            id: { type: "string" },
+            cancelled: { type: "integer", minimum: 0, description: "How many pending deliveries were cancelled." },
             deliveries: { type: "array", items: ref("Delivery") },
           },
         },

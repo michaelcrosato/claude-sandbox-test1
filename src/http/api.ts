@@ -109,6 +109,7 @@ import {
 } from "../queue/delivery-queue.js";
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
+import { cancelMessageDeliveries } from "../queue/cancel-message.js";
 import { retryAppDeliveries, type BulkRetryResult } from "../queue/retry-app.js";
 import {
   DEFAULT_STATS_DAYS,
@@ -805,6 +806,7 @@ export const API_ROUTE_KEYS = [
   "GET /v1/messages/:id",
   "GET /v1/messages/:id/attempts",
   "POST /v1/messages/:id/retry",
+  "POST /v1/messages/:id/cancel",
   "GET /v1/endpoints",
   "POST /v1/endpoints",
   "GET /v1/endpoints/:id",
@@ -1198,6 +1200,20 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(200, {
       id: message.id,
       retried: result.retried,
+      deliveries: result.tasks.map(deliveryView),
+    });
+  };
+
+  const cancelMessage: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const message = await deps.messages.get(id);
+    if (message === null || message.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no message with id "${id}"`);
+    }
+    const result = await cancelMessageDeliveries(id, { queue: deps.queue });
+    return json(200, {
+      id: message.id,
+      cancelled: result.cancelled,
       deliveries: result.tasks.map(deliveryView),
     });
   };
@@ -1694,6 +1710,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /v1/messages/:id": authed(getMessage),
     "GET /v1/messages/:id/attempts": authed(listMessageAttempts),
     "POST /v1/messages/:id/retry": authed(retryMessage),
+    "POST /v1/messages/:id/cancel": authed(cancelMessage),
     "GET /v1/endpoints": authed(listEndpoints),
     "POST /v1/endpoints": authed(createEndpoint),
     "GET /v1/endpoints/:id": authed(getEndpoint),
