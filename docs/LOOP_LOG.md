@@ -4,6 +4,56 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 47: Scheduled Delivery (sendAt)
+
+**Repo truth at start:** clean main @ `6a5a562` (iter-46 LOOP_LOG commit). The iter-46
+implementation commit was `f1e9d3c`; the docs commit had not yet landed when the context
+window closed — reconcile-and-land was the first act of this tick per
+[[interrupted-tick-reconcile-pattern]].
+Baseline verified: `tsc --noEmit` clean, vitest **1044/1044** (42 files), `npm run build` clean.
+
+**High-leverage move chosen (checklist #3):** Scheduled delivery — expose `FanoutOptions.availableAt`
+through the HTTP surface via a `sendAt` field on `POST /v1/messages` and each item of
+`POST /v1/messages/batch`. The internal infrastructure was fully built: `FanoutOptions.availableAt`
+existed in `fanout.ts`, `EnqueueInput.availableAt` existed in the queue, and `claimDue` already
+filtered on `nextAttemptAt`. The HTTP handlers simply never passed it. Pattern mirrors iter-46
+(custom delivery headers): wiring pre-built infrastructure to the API surface is the
+fastest path to competitive parity without incurring design risk.
+
+**Built this tick:**
+
+- **`src/http/api.ts`** — Imported `FanoutOptions` alongside `ingest`; added `parseSendAt(v:
+  unknown): number | null` helper (accepts ISO 8601 string, converts to epoch-ms via `Date.parse`;
+  throws `TypeError` on non-string or `NaN` result — the global `toErrorResponse` handler converts
+  those to `400 invalid_request`); updated `createMessage` handler to read `sendAt` from the request
+  body and pass it as `{ availableAt: sendAtMs }` in `FanoutOptions`; updated `batchSendMessages`
+  handler to do the same per-item, so each message in a batch can carry its own `sendAt` independently.
+
+- **`src/http/openapi.ts`** — Added `sendAt` to the `NewMessage` schema (`type: ["string","null"]`,
+  `format: "date-time"`, description notes that past timestamps are treated as immediate and that
+  the delay is applied uniformly to every endpoint in the fan-out). `BatchMessageInput.items` reuses
+  `ref("NewMessage")` so the field appears automatically.
+
+- **`src/sdk/client.ts`** — Added `readonly sendAt?: string | null` to `SendMessageInput`;
+  updated `sendMessage()` to include `body["sendAt"] = input.sendAt` iff `!== undefined`;
+  updated `sendMessageBatch()` item-mapper to do the same per message.
+
+**Tests (+9 over baseline):**
+- **`src/http/api.test.ts`** (+7): `POST /v1/messages`: `sendAt` in the future gates delivery
+  (clock-controllable queue, claim at `nowMs` → 0, advance 10s → 1); non-string `sendAt` → 400;
+  invalid date string → 400; `null` sendAt → immediate. `POST /v1/messages/batch`: per-item `sendAt`
+  gates only that item (immediate task claims first, scheduled unlocks after clock advance); malformed
+  per-item `sendAt` returns per-item `invalid_request` without aborting the rest.
+- **`src/sdk/client.test.ts`** (+3): `sendMessage` serializes `sendAt` into body; omits it when
+  absent; `sendMessageBatch` serializes per-item `sendAt`, omits on items that don't set it.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**1053/1053, 42 files** (+9 over baseline). `npm run build` clean.
+
+**State:** GREEN → committed to main @ iter-47 (`66942f1`).
+
+---
+
 ## 2026-05-24 — Iteration 46: Custom Delivery Headers
 
 **Repo truth at start:** clean main @ `b1837ab` (iter-45, batch message sending).
