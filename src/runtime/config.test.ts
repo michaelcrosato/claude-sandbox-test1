@@ -9,6 +9,7 @@ import {
   loadConfig,
   type Env,
 } from "./config.js";
+import { MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
 import { DEFAULT_MAX_BODY_BYTES } from "../http/server.js";
 import {
   DEFAULT_IDLE_POLL_MS,
@@ -42,6 +43,7 @@ describe("loadConfig", () => {
         visibilityTimeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
       },
       retentionDays: 0,
+      defaultRateLimit: null,
       fanout: {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
@@ -226,6 +228,45 @@ describe("loadConfig", () => {
       expect(() =>
         loadConfig({ POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: "1.5" }),
       ).toThrow(ConfigError);
+    });
+  });
+
+  describe("POSTHORN_DEFAULT_RATE_LIMIT", () => {
+    it("defaults to null (no gateway-wide rate limit) when unset or blank", () => {
+      expect(loadConfig({}).defaultRateLimit).toBeNull();
+      expect(loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "   " }).defaultRateLimit).toBeNull();
+    });
+
+    it("accepts a valid positive integer", () => {
+      expect(loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "60" }).defaultRateLimit).toBe(60);
+      expect(loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "1" }).defaultRateLimit).toBe(1);
+      expect(
+        loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: String(MAX_RATE_LIMIT) }).defaultRateLimit,
+      ).toBe(MAX_RATE_LIMIT);
+    });
+
+    it("rejects 0 (not a valid rate limit)", () => {
+      expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "0" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "0" })).toThrow(
+        /POSTHORN_DEFAULT_RATE_LIMIT must be between/,
+      );
+    });
+
+    it("rejects a negative value", () => {
+      expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "-1" })).toThrow(ConfigError);
+    });
+
+    it("rejects a value exceeding MAX_RATE_LIMIT", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: String(MAX_RATE_LIMIT + 1) }),
+      ).toThrow(ConfigError);
+    });
+
+    it("rejects a non-integer", () => {
+      expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "1.5" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "abc" })).toThrow(
+        /POSTHORN_DEFAULT_RATE_LIMIT must be an integer/,
+      );
     });
   });
 });

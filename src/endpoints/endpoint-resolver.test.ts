@@ -104,6 +104,26 @@ describe("endpointToDeliveryTarget", () => {
     const target = endpointToDeliveryTarget(BASE_EP, 1_000);
     expect(target.headers).toBeUndefined();
   });
+
+  it("omits rateLimit when the endpoint has none and no default is given", () => {
+    const target = endpointToDeliveryTarget(BASE_EP, 1_000);
+    expect(target.rateLimit).toBeUndefined();
+  });
+
+  it("uses the endpoint rateLimit when set, ignoring the default", () => {
+    const target = endpointToDeliveryTarget({ ...BASE_EP, rateLimit: 100 }, 1_000, 50);
+    expect(target.rateLimit).toBe(100);
+  });
+
+  it("falls back to the gateway default when the endpoint rateLimit is null", () => {
+    const target = endpointToDeliveryTarget(BASE_EP, 1_000, 75);
+    expect(target.rateLimit).toBe(75);
+  });
+
+  it("omits rateLimit when both endpoint rateLimit and default are null", () => {
+    const target = endpointToDeliveryTarget(BASE_EP, 1_000, null);
+    expect(target.rateLimit).toBeUndefined();
+  });
 });
 
 describe("storeBackedResolver", () => {
@@ -140,6 +160,31 @@ describe("storeBackedResolver", () => {
     });
     const resolver = storeBackedResolver(store);
     expect(await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE)).toBeNull();
+  });
+
+  it("applies the gateway defaultRateLimit for endpoints with no explicit rateLimit", async () => {
+    const store = new InMemoryEndpointStore();
+    const ep = await store.create({
+      appId: "app_1",
+      url: "https://x.test/hook",
+      secret: "whsec_abc",
+    });
+    const resolver = storeBackedResolver(store, { defaultRateLimit: 120 });
+    const target = await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE);
+    expect(target?.rateLimit).toBe(120);
+  });
+
+  it("does not apply the gateway defaultRateLimit when the endpoint has an explicit rateLimit", async () => {
+    const store = new InMemoryEndpointStore();
+    const ep = await store.create({
+      appId: "app_1",
+      url: "https://x.test/hook",
+      secret: "whsec_abc",
+      rateLimit: 30,
+    });
+    const resolver = storeBackedResolver(store, { defaultRateLimit: 120 });
+    const target = await resolver(taskWithEndpoint(ep.id), FAKE_MESSAGE);
+    expect(target?.rateLimit).toBe(30);
   });
 
   it("forwards a rotation-overlap secret as additionalSecrets, honoring its clock", async () => {

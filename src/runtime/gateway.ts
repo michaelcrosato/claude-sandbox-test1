@@ -191,7 +191,9 @@ export function createGateway(config: GatewayConfig): Gateway {
   const worker = new DeliveryWorker({
     queue,
     store: messages,
-    resolveEndpoint: storeBackedResolver(endpoints),
+    resolveEndpoint: storeBackedResolver(endpoints, {
+      defaultRateLimit: config.defaultRateLimit,
+    }),
     batchSize: config.worker.batchSize,
     concurrency: config.worker.concurrency,
     requestTimeoutMs: config.worker.requestTimeoutMs,

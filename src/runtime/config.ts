@@ -25,7 +25,7 @@ import {
   DEFAULT_FANOUT_IDLE_POLL_MS,
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
-import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
+import { DEFAULT_AUTO_DISABLE_AFTER_MS, MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
 
 /**
  * Default bind host. `0.0.0.0` is the right default for the headline deployment
@@ -110,6 +110,13 @@ export interface GatewayConfig {
    * See `POSTHORN_RETENTION_DAYS`.
    */
   readonly retentionDays: number;
+  /**
+   * Gateway-wide default rate limit (deliveries per minute) applied to any
+   * endpoint whose per-endpoint `rateLimit` is `null`. `null` means no gateway
+   * default — only explicitly-configured endpoints are rate-limited.
+   * See `POSTHORN_DEFAULT_RATE_LIMIT`.
+   */
+  readonly defaultRateLimit: number | null;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -178,6 +185,30 @@ function readString(env: Env, key: string, fallback: string): string {
 export const MIN_ADMIN_TOKEN_LENGTH = 16;
 
 /**
+ * Read the optional gateway-wide default rate limit. Unset or blank yields `null`
+ * (no default — endpoints without an explicit limit are unrestricted). When set,
+ * must be a positive integer in `[1, MAX_RATE_LIMIT]`.
+ */
+function readDefaultRateLimit(env: Env): number | null {
+  const raw = env["POSTHORN_DEFAULT_RATE_LIMIT"];
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const value = Number(trimmed);
+  if (!Number.isInteger(value)) {
+    throw new ConfigError(
+      `POSTHORN_DEFAULT_RATE_LIMIT must be an integer, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (value < 1 || value > MAX_RATE_LIMIT) {
+    throw new ConfigError(
+      `POSTHORN_DEFAULT_RATE_LIMIT must be between 1 and ${MAX_RATE_LIMIT}, got ${value}`,
+    );
+  }
+  return value;
+}
+
+/**
  * Read the optional admin-API bootstrap token. Unset or blank yields `null` (the
  * admin API stays disabled — every `/v1/admin/*` route is `404`). A present token
  * is trimmed and must be at least {@link MIN_ADMIN_TOKEN_LENGTH} characters, else
@@ -215,7 +246,8 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
  * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
  * `POSTHORN_FANOUT_IDLE_POLL_MS`,
- * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default).
+ * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default),
+ * `POSTHORN_DEFAULT_RATE_LIMIT` (gateway-wide deliveries/min cap for endpoints without an explicit limit; unset = no default).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -262,6 +294,7 @@ export function loadConfig(env: Env): GatewayConfig {
       ),
     }),
     retentionDays: readInt(env, "POSTHORN_RETENTION_DAYS", 0, { min: 0 }),
+    defaultRateLimit: readDefaultRateLimit(env),
     fanout: Object.freeze<FanoutConfig>({
       graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
         min: 0,

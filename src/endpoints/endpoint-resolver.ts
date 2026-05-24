@@ -36,17 +36,20 @@ import {
 export function endpointToDeliveryTarget(
   endpoint: Endpoint,
   nowMs: number,
+  defaultRateLimit?: number | null,
 ): DeliveryTarget {
   // activeSigningSecrets returns [primary, ...still-active retirees]; the primary
   // is `secret`, the rest (if any) are the rotation-overlap extras.
   const additionalSecrets = activeSigningSecrets(endpoint, nowMs).slice(1);
+  // Per-endpoint rateLimit wins; fall back to the gateway default when null.
+  const effectiveRateLimit = endpoint.rateLimit ?? defaultRateLimit ?? null;
   return {
     url: endpoint.url,
     secret: endpoint.secret,
     ...(additionalSecrets.length > 0 ? { additionalSecrets } : {}),
     ...(endpoint.headers ? { headers: endpoint.headers } : {}),
     ...(endpoint.retryPolicy !== null ? { retryPolicy: endpoint.retryPolicy } : {}),
-    ...(endpoint.rateLimit !== null ? { rateLimit: endpoint.rateLimit } : {}),
+    ...(effectiveRateLimit !== null ? { rateLimit: effectiveRateLimit } : {}),
   };
 }
 
@@ -58,6 +61,12 @@ export interface StoreBackedResolverOptions {
    * inject a fake clock in tests.
    */
   readonly now?: () => number;
+  /**
+   * Gateway-wide default rate limit (deliveries per minute) to apply when an
+   * endpoint's own `rateLimit` is `null`. `null` or omitted means no gateway
+   * default — the endpoint is unrestricted. See `POSTHORN_DEFAULT_RATE_LIMIT`.
+   */
+  readonly defaultRateLimit?: number | null;
 }
 
 /**
@@ -78,6 +87,7 @@ export function storeBackedResolver(
   options: StoreBackedResolverOptions = {},
 ): EndpointResolver {
   const now = options.now ?? Date.now;
+  const defaultRateLimit = options.defaultRateLimit ?? null;
   return async (task) => {
     if (task.endpointId === null) {
       return null;
@@ -86,6 +96,6 @@ export function storeBackedResolver(
     if (endpoint === null || endpoint.disabled) {
       return null;
     }
-    return endpointToDeliveryTarget(endpoint, now());
+    return endpointToDeliveryTarget(endpoint, now(), defaultRateLimit);
   };
 }
