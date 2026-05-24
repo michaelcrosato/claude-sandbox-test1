@@ -94,8 +94,10 @@ import {
   type DeliveryPage,
   type DeliveryQueue,
   type DeliveryTask,
+  type ListByAppOptions,
   type ListDeliveriesOptions,
 } from "../queue/delivery-queue.js";
+import type { DeliveryStatus } from "../delivery/delivery-state.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import {
   MAX_LIST_ATTEMPTS_LIMIT,
@@ -368,6 +370,29 @@ function parseListDeliveriesParams(
     options.cursor = rawCursor;
   }
   return options;
+}
+
+/**
+ * Parse the `?limit=`, `?cursor=`, and `?status=` query of the app deliveries
+ * route into store options. `?status=` is optional; an unrecognised value is a 400.
+ */
+function parseListByAppParams(
+  query: Readonly<Record<string, string | undefined>>,
+): ListByAppOptions {
+  const base = parseListDeliveriesParams(query);
+  const rawStatus = query["status"];
+  if (rawStatus === undefined || rawStatus.length === 0) {
+    return base;
+  }
+  const validStatuses: readonly string[] = ["pending", "delivering", "succeeded", "dead_letter"];
+  if (!validStatuses.includes(rawStatus)) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `status must be one of: ${validStatuses.join(", ")}`,
+    );
+  }
+  return { ...base, status: rawStatus as DeliveryStatus };
 }
 
 /**
@@ -719,6 +744,7 @@ export const API_ROUTE_KEYS = [
   "DELETE /v1/endpoints/:id",
   "POST /v1/endpoints/:id/rotate-secret",
   "GET /v1/endpoints/:id/deliveries",
+  "GET /v1/deliveries",
   "GET /v1/usage",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
@@ -1065,6 +1091,17 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const getAppDeliveries: AuthedHandler = async (ctx) => {
+    const page = await deps.queue.listByApp(
+      ctx.app.id,
+      parseListByAppParams(ctx.req.query),
+    );
+    return json(200, {
+      data: page.deliveries.map(endpointDeliveryView),
+      nextCursor: page.nextCursor,
+    });
+  };
+
   const getUsage: AuthedHandler = async (ctx) => {
     // The tenant's *own* usage + live quota status — the self-service counterpart to
     // the admin metering route (`GET /v1/admin/apps/:id/usage`), scoped to the key's
@@ -1229,6 +1266,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "DELETE /v1/endpoints/:id": authed(deleteEndpoint),
     "POST /v1/endpoints/:id/rotate-secret": authed(rotateEndpointSecret),
     "GET /v1/endpoints/:id/deliveries": authed(getEndpointDeliveries),
+    "GET /v1/deliveries": authed(getAppDeliveries),
     "GET /v1/usage": authed(getUsage),
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),

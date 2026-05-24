@@ -90,6 +90,7 @@ export {
   type ClaimOptions,
   type FailInput,
   type ListDeliveriesOptions,
+  type ListByAppOptions,
   type DeliveryPage,
   type DeliveryCursor,
 } from "./queue/delivery-queue.js";

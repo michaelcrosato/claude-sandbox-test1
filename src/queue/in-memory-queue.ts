@@ -40,6 +40,7 @@ import {
   type DeliveryTask,
   type EnqueueInput,
   type FailInput,
+  type ListByAppOptions,
   type ListDeliveriesOptions,
 } from "./delivery-queue.js";
 import {
@@ -102,7 +103,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, endpointId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, appId, availableAt } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     if (this.#tasks.has(id)) {
@@ -112,6 +113,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
       id,
       messageId,
       endpointId,
+      appId,
       status: "pending",
       attempts: 0,
       nextAttemptAt: availableAt,
@@ -197,6 +199,29 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     // Sort newest-first (createdAt DESC, id DESC) — mirrors the SQLite ORDER BY.
     const ordered = [...this.#tasks.values()]
       .filter((t) => t.endpointId === endpointId)
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+        return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+      });
+    const after =
+      cursor === null
+        ? ordered
+        : ordered.filter((t) => isDeliveryAfterCursor(t, cursor));
+    const hasMore = after.length > limit;
+    const deliveries = after.slice(0, limit);
+    const last = deliveries[deliveries.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
+    return { deliveries, nextCursor };
+  }
+
+  async listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage> {
+    const { limit, cursor } = resolveListDeliveriesQuery(options);
+    const status = options?.status ?? null;
+    // Sort newest-first (createdAt DESC, id DESC) — mirrors the SQLite ORDER BY.
+    const ordered = [...this.#tasks.values()]
+      .filter((t) => t.appId === appId)
+      .filter((t) => status === null || t.status === status)
       .sort((a, b) => {
         if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
         return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;

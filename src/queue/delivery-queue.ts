@@ -55,6 +55,13 @@ export interface DeliveryTask {
    * sets it, creating one task per (message, endpoint) pair.
    */
   readonly endpointId: string | null;
+  /**
+   * The tenant (app) this delivery belongs to, or `null` for tasks enqueued
+   * before per-app tracking was added (pre-migration rows). Denormalized from
+   * the message at enqueue time — the same pattern as {@link DeliveryAttempt.appId}
+   * — so per-tenant listing is a single indexed scan rather than a join.
+   */
+  readonly appId: string | null;
   /** Current delivery status (shared vocabulary with the delivery FSM). */
   readonly status: DeliveryStatus;
   /** Count of attempts started so far (incremented on each claim). */
@@ -93,6 +100,13 @@ export interface EnqueueInput {
    * Must be a non-empty string when provided.
    */
   readonly endpointId?: string | null;
+  /**
+   * The tenant (app) this delivery belongs to. Pass `message.appId` at fan-out
+   * time so the task can be found via {@link DeliveryQueue.listByApp}. Omit (or
+   * pass `null`) when the tenant is not known (e.g. legacy code paths without
+   * per-app tracking). Must be a non-empty string when provided.
+   */
+  readonly appId?: string | null;
   /**
    * Epoch-ms before which the task is not claimable. Omit (or `null`) to make
    * it deliverable immediately. Useful for scheduled/delayed first delivery.
@@ -144,6 +158,18 @@ export interface ListDeliveriesOptions {
    * `null`) for the first page. A malformed cursor throws {@link TypeError}.
    */
   readonly cursor?: string | null;
+}
+
+/**
+ * Options for {@link DeliveryQueue.listByApp} — extends the base pagination
+ * options with an optional status filter.
+ */
+export interface ListByAppOptions extends ListDeliveriesOptions {
+  /**
+   * When set, only return deliveries with this status. Omit (or `null`) to
+   * return deliveries in all statuses (the default).
+   */
+  readonly status?: DeliveryStatus | null;
 }
 
 /** One page of {@link DeliveryQueue.listByEndpoint}, newest-first. */
@@ -313,6 +339,16 @@ export interface DeliveryQueue {
     options?: ListDeliveriesOptions,
   ): Promise<DeliveryPage>;
   /**
+   * List delivery tasks for `appId`, newest-first (enqueue-time descending),
+   * keyset-paginated, with an optional `status` filter. Returns an empty page
+   * when the app has no tasks. A pure read: never mutates, never throws on an
+   * unknown app id. This is the tenant-wide cross-endpoint view: "show me all
+   * my deliveries" (or just the dead-lettered ones). Only tasks enqueued with
+   * `appId` set appear; tasks without an `appId` (pre-migration rows) are
+   * silently excluded — honest, since the attribution data was never recorded.
+   */
+  listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage>;
+  /**
    * Count tasks grouped by delivery status — the point-in-time backlog/health
    * gauge behind the metrics surface ("how much is queued / in flight / stuck in
    * dead_letter right now?"). Always returns every status key (zero when none),
@@ -388,6 +424,7 @@ export function assertValidVisibilityTimeout(visibilityTimeoutMs: number): void 
 export interface NormalizedEnqueue {
   readonly messageId: string;
   readonly endpointId: string | null;
+  readonly appId: string | null;
   readonly availableAt: number | null;
 }
 
@@ -407,11 +444,18 @@ export function normalizeEnqueueInput(input: EnqueueInput): NormalizedEnqueue {
   ) {
     throw new TypeError("endpointId must be a non-empty string when provided");
   }
+  const appId = input.appId ?? null;
+  if (
+    appId !== null &&
+    (typeof appId !== "string" || appId.length === 0)
+  ) {
+    throw new TypeError("appId must be a non-empty string when provided");
+  }
   const availableAt = input.availableAt ?? null;
   if (availableAt !== null && !Number.isFinite(availableAt)) {
     throw new TypeError("availableAt must be a finite epoch-ms timestamp or null");
   }
-  return { messageId, endpointId, availableAt };
+  return { messageId, endpointId, appId, availableAt };
 }
 
 /** Validate {@link ClaimOptions} and resolve the effective limit. */

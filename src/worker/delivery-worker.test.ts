@@ -491,6 +491,7 @@ describe("DeliveryWorker.processOnce", () => {
       id: "dtask_x",
       messageId: message.id,
       endpointId: null,
+      appId: null,
       status: "delivering",
       attempts: 1,
       nextAttemptAt: null,
@@ -514,6 +515,7 @@ describe("DeliveryWorker.processOnce", () => {
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
+      listByApp: async () => ({ deliveries: [], nextCursor: null }),
       countByStatus: async () => ({
         pending: 0,
         delivering: 1,
@@ -1136,6 +1138,7 @@ describe("DeliveryWorker.run", () => {
       get: async () => null,
       listByMessage: async () => [],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
+      listByApp: async () => ({ deliveries: [], nextCursor: null }),
       countByStatus: async () => ({
         pending: 0,
         delivering: 0,

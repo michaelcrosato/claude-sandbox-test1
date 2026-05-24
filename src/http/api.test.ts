@@ -2201,3 +2201,170 @@ describe("createApi — GET /v1/endpoints/:id/deliveries (endpoint delivery hist
     expect(body(res).error.code).toBe("invalid_request");
   });
 });
+
+describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/deliveries" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns an empty page when the tenant has no deliveries", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({ method: "GET", path: "/v1/deliveries", headers: { authorization: `Bearer ${secret}` } }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ data: [], nextCursor: null });
+  });
+
+  it("lists deliveries with messageId and endpointId present", async () => {
+    const { api, secret } = await setup();
+    const ep = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const epId: string = body(ep).id;
+    const msg = await api(
+      jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret),
+    );
+    const msgId: string = body(msg).message.id;
+
+    const res = await api(
+      request({ method: "GET", path: "/v1/deliveries", headers: { authorization: `Bearer ${secret}` } }),
+    );
+    expect(res.status).toBe(200);
+    const data = body(res).data as Record<string, unknown>[];
+    expect(data).toHaveLength(1);
+    expect(data[0]).toMatchObject({ messageId: msgId, endpointId: epId });
+    expect(data[0]).toHaveProperty("status");
+    expect(data[0]).toHaveProperty("attempts");
+    expect(body(res).nextCursor).toBeNull();
+  });
+
+  it("filters by status — dead_letter only, pending empty", async () => {
+    // Use a 0-retry queue so one fail → dead_letter immediately.
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts });
+    const app = await apps.create({ name: "Test" });
+    const { secret } = await apps.createApiKey(app.id);
+
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+
+    // One claim + fail = dead_letter with 0 retries.
+    const nowMs = Date.now();
+    const batch = await queue.claimDue({ nowMs });
+    for (const t of batch) {
+      await queue.fail(t.id, t.leaseToken!, { error: "x", nowMs });
+    }
+
+    const dead = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { status: "dead_letter" },
+      }),
+    );
+    expect(dead.status).toBe(200);
+    const deadData = body(dead).data as Record<string, unknown>[];
+    expect(deadData.length).toBe(1);
+    expect(deadData[0]!["status"]).toBe("dead_letter");
+
+    const pending = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { status: "pending" },
+      }),
+    );
+    expect(pending.status).toBe(200);
+    expect((body(pending).data as unknown[]).length).toBe(0);
+  });
+
+  it("paginates correctly via cursor", async () => {
+    const { api, secret } = await setup();
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://b.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://c.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+
+    const first = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "2" },
+      }),
+    );
+    expect(first.status).toBe(200);
+    expect((body(first).data as unknown[]).length).toBe(2);
+    expect(body(first).nextCursor).not.toBeNull();
+
+    const second = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "2", cursor: body(first).nextCursor as string },
+      }),
+    );
+    expect(second.status).toBe(200);
+    expect((body(second).data as unknown[]).length).toBe(1);
+    expect(body(second).nextCursor).toBeNull();
+  });
+
+  it("tenant isolation — tenant B sees no deliveries from tenant A", async () => {
+    const { apps, api } = await setup();
+    const aApp = await apps.create({ name: "A" });
+    const { secret: aKey } = await apps.createApiKey(aApp.id);
+    const bApp = await apps.create({ name: "B" });
+    const { secret: bKey } = await apps.createApiKey(bApp.id);
+
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, aKey));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, aKey));
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ data: [], nextCursor: null });
+  });
+
+  it("returns 400 for an invalid limit", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { limit: "0" },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("returns 400 for an unrecognised status value", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { status: "nope" },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});

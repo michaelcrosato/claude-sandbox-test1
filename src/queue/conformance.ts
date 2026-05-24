@@ -18,6 +18,7 @@ import {
   StaleLeaseError,
   UnknownDeliveryTaskError,
   type DeliveryQueue,
+  type ListByAppOptions,
 } from "./delivery-queue.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
@@ -553,6 +554,173 @@ export function describeDeliveryQueueContract(
         // A continuation with the last cursor returns empty + null.
         const manualCursor = encodeDeliveryCursor(t1);
         const second = await queue.listByEndpoint("ep_1", {
+          limit: 2,
+          cursor: manualCursor,
+        });
+        expect(second.deliveries).toEqual([]);
+        expect(second.nextCursor).toBeNull();
+      });
+    });
+
+    describe("listByApp", () => {
+      it("returns empty page for an app with no tasks", async () => {
+        await queue.enqueue({ messageId: "m-other", appId: "app_other" });
+        const page = await queue.listByApp("app_unknown");
+        expect(page.deliveries).toEqual([]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("returns tasks newest-first, scoped to the app (cross-app isolation)", async () => {
+        const t1 = await queue.enqueue({ messageId: "m-a", appId: "app_1" });
+        clock.advance(1_000);
+        await queue.enqueue({ messageId: "m-b", appId: "app_2" });
+        clock.advance(1_000);
+        const t3 = await queue.enqueue({ messageId: "m-c", appId: "app_1" });
+
+        const page = await queue.listByApp("app_1");
+        expect(page.deliveries.map((t) => t.id)).toEqual([t3.id, t1.id]);
+        expect(page.deliveries.every((t) => t.appId === "app_1")).toBe(true);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("filters by status when requested", async () => {
+        // Two tasks for app_1: one will succeed, one will dead-letter.
+        const tOk = await queue.enqueue({ messageId: "m-ok", appId: "app_1" });
+        clock.advance(1_000);
+        const tBad = await queue.enqueue({ messageId: "m-bad", appId: "app_1" });
+        // Succeed tOk.
+        const [claimedOk] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.complete(claimedOk!.id, claimedOk!.leaseToken!);
+        // Dead-letter tBad (exhaust retries: 2-retry policy = 3 fails).
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.fail(t!.id, t!.leaseToken!, { error: "x", nowMs: clock.now() });
+        }
+        expect((await queue.get(tBad.id))?.status).toBe("dead_letter");
+
+        // No filter → both tasks.
+        const all = await queue.listByApp("app_1");
+        expect(all.deliveries.map((t) => t.id).sort()).toEqual(
+          [tOk.id, tBad.id].sort(),
+        );
+
+        // Filter by dead_letter → only tBad.
+        const deadOnly = await queue.listByApp("app_1", { status: "dead_letter" });
+        expect(deadOnly.deliveries).toHaveLength(1);
+        expect(deadOnly.deliveries[0]!.id).toBe(tBad.id);
+        expect(deadOnly.nextCursor).toBeNull();
+
+        // Filter by succeeded → only tOk.
+        const okOnly = await queue.listByApp("app_1", { status: "succeeded" });
+        expect(okOnly.deliveries).toHaveLength(1);
+        expect(okOnly.deliveries[0]!.id).toBe(tOk.id);
+      });
+
+      it("reflects a task's current state after a transition", async () => {
+        await queue.enqueue({ messageId: "m", appId: "app_1" });
+        const [claimed] = await queue.claimDue({ nowMs: clock.now() });
+        const done = await queue.complete(claimed!.id, claimed!.leaseToken!);
+
+        const page = await queue.listByApp("app_1");
+        expect(page.deliveries).toHaveLength(1);
+        expect(page.deliveries[0]).toEqual(done);
+        expect(page.deliveries[0]!.status).toBe("succeeded");
+      });
+
+      it("paginates correctly: cursor advances the page, nextCursor signals more", async () => {
+        const t1 = await queue.enqueue({ messageId: "m1", appId: "app_1" });
+        clock.advance(1_000);
+        const t2 = await queue.enqueue({ messageId: "m2", appId: "app_1" });
+        clock.advance(1_000);
+        const t3 = await queue.enqueue({ messageId: "m3", appId: "app_1" });
+
+        const first = await queue.listByApp("app_1", { limit: 2 });
+        expect(first.deliveries.map((t) => t.id)).toEqual([t3.id, t2.id]);
+        expect(first.nextCursor).not.toBeNull();
+
+        const second = await queue.listByApp("app_1", {
+          limit: 2,
+          cursor: first.nextCursor!,
+        });
+        expect(second.deliveries.map((t) => t.id)).toEqual([t1.id]);
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it("paginates a status-filtered result correctly", async () => {
+        // Enqueue 3 tasks for app_1, dead-letter two of them.
+        const t1 = await queue.enqueue({ messageId: "m1", appId: "app_1" });
+        clock.advance(1_000);
+        await queue.enqueue({ messageId: "m-ok", appId: "app_1" });
+        clock.advance(1_000);
+        const t3 = await queue.enqueue({ messageId: "m3", appId: "app_1" });
+        // Succeed the middle task.
+        const [mid] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.complete(mid!.id, mid!.leaseToken!);
+        // Dead-letter t1 and t3.
+        for (const task of [t1, t3]) {
+          for (const delay of [0, 1_000, 2_000]) {
+            clock.advance(delay);
+            const [cl] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+            if (!cl || cl.id !== task.id) continue;
+            await queue.fail(cl.id, cl.leaseToken!, { error: "x", nowMs: clock.now() });
+          }
+        }
+        // Drain any remaining claimable tasks in order for t3 to dead-letter too.
+        // Use a broader loop to ensure both t1/t3 reach dead_letter.
+        let safety = 0;
+        while (safety++ < 10) {
+          clock.advance(2_000);
+          const batch = await queue.claimDue({ nowMs: clock.now(), limit: 10 });
+          if (batch.length === 0) break;
+          for (const t of batch) {
+            await queue.fail(t.id, t.leaseToken!, { error: "x", nowMs: clock.now() });
+          }
+        }
+
+        const opts: ListByAppOptions = { status: "dead_letter", limit: 1 };
+        const first = await queue.listByApp("app_1", opts);
+        expect(first.deliveries).toHaveLength(1);
+        expect(first.nextCursor).not.toBeNull();
+
+        const second = await queue.listByApp("app_1", {
+          ...opts,
+          cursor: first.nextCursor!,
+        });
+        expect(second.deliveries).toHaveLength(1);
+        expect(second.nextCursor).toBeNull();
+
+        const all = [...first.deliveries, ...second.deliveries];
+        expect(all.map((t) => t.status).every((s) => s === "dead_letter")).toBe(true);
+      });
+
+      it("rejects an invalid limit", async () => {
+        await expect(queue.listByApp("app_1", { limit: 0 })).rejects.toThrow(RangeError);
+        await expect(queue.listByApp("app_1", { limit: -1 })).rejects.toThrow(RangeError);
+        await expect(queue.listByApp("app_1", { limit: 1.5 })).rejects.toThrow(RangeError);
+        await expect(queue.listByApp("app_1", { limit: 201 })).rejects.toThrow(RangeError);
+      });
+
+      it("rejects a malformed cursor", async () => {
+        await expect(
+          queue.listByApp("app_1", { cursor: "not-valid!!" }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          queue.listByApp("app_1", { cursor: "" }),
+        ).rejects.toThrow(TypeError);
+      });
+
+      it("terminates cleanly on exact-multiple page boundary", async () => {
+        const t1 = await queue.enqueue({ messageId: "m1", appId: "app_1" });
+        clock.advance(1_000);
+        const t2 = await queue.enqueue({ messageId: "m2", appId: "app_1" });
+
+        const first = await queue.listByApp("app_1", { limit: 2 });
+        expect(first.deliveries.map((t) => t.id)).toEqual([t2.id, t1.id]);
+        expect(first.nextCursor).toBeNull();
+
+        const manualCursor = encodeDeliveryCursor(t1);
+        const second = await queue.listByApp("app_1", {
           limit: 2,
           cursor: manualCursor,
         });

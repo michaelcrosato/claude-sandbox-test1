@@ -44,6 +44,7 @@ import {
   type DeliveryTask,
   type EnqueueInput,
   type FailInput,
+  type ListByAppOptions,
   type ListDeliveriesOptions,
 } from "./delivery-queue.js";
 import {
@@ -91,6 +92,7 @@ interface TaskRow {
   readonly id: string;
   readonly message_id: string;
   readonly endpoint_id: string | null;
+  readonly app_id: string | null;
   readonly status: string;
   readonly attempts: number;
   readonly next_attempt_at: number | null;
@@ -106,6 +108,7 @@ function rowToTask(row: TaskRow): DeliveryTask {
     id: row.id,
     messageId: row.message_id,
     endpointId: row.endpoint_id,
+    appId: row.app_id,
     status: row.status as DeliveryStatus,
     attempts: Number(row.attempts),
     nextAttemptAt: row.next_attempt_at === null ? null : Number(row.next_attempt_at),
@@ -132,6 +135,10 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   readonly #selectByMessage: StatementSync;
   readonly #selectByEndpoint: StatementSync;
   readonly #selectByEndpointAfter: StatementSync;
+  readonly #selectByApp: StatementSync;
+  readonly #selectByAppAfter: StatementSync;
+  readonly #selectByAppFiltered: StatementSync;
+  readonly #selectByAppFilteredAfter: StatementSync;
   readonly #selectClaimable: StatementSync;
   readonly #insertTask: StatementSync;
   readonly #updateTask: StatementSync;
@@ -162,6 +169,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#db.exec("PRAGMA journal_mode = WAL");
     this.#db.exec("PRAGMA synchronous = NORMAL");
     this.#db.exec(SCHEMA);
+    // Ensure app_id column + indexes exist (idempotent; handles pre-migration DBs).
+    this.#migrateAppIdColumn();
 
     this.#selectTask = this.#db.prepare(
       "SELECT * FROM delivery_tasks WHERE id = ?",
@@ -188,6 +197,34 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
     );
+    // App-wide listing, newest-first — backed by idx_delivery_tasks_app.
+    this.#selectByApp = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE app_id = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    this.#selectByAppAfter = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE app_id = ?
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    // Status-filtered app listing — backed by idx_delivery_tasks_app_status.
+    this.#selectByAppFiltered = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE app_id = ? AND status = ?
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
+    this.#selectByAppFilteredAfter = this.#db.prepare(
+      `SELECT * FROM delivery_tasks
+       WHERE app_id = ? AND status = ?
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    );
     // Claimable = due pending OR delivering with a lapsed lease. rowid order
     // claims oldest-first; the partial-ish index keeps the scan cheap.
     this.#selectClaimable = this.#db.prepare(
@@ -201,9 +238,9 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     );
     this.#insertTask = this.#db.prepare(
       `INSERT INTO delivery_tasks
-         (id, message_id, endpoint_id, status, attempts, next_attempt_at,
+         (id, message_id, endpoint_id, app_id, status, attempts, next_attempt_at,
           lease_expires_at, lease_token, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateTask = this.#db.prepare(
       `UPDATE delivery_tasks
@@ -220,19 +257,54 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     );
   }
 
+  /**
+   * Ensure the `app_id` column and its per-tenant indexes exist. A database
+   * created by a pre-app-listing build has the column missing (its
+   * `CREATE TABLE IF NOT EXISTS` was a no-op); add it nullable so the upgrade is
+   * seamless. Existing rows keep `app_id = NULL` — they predate per-tenant
+   * delivery listing and are simply excluded from `listByApp` (honest: the
+   * attribution data was never recorded). For a fresh database the column is
+   * already in {@link SCHEMA} and the ALTER is skipped.
+   *
+   * The companion indexes are created unconditionally and idempotently *after*
+   * the column is guaranteed to exist — they reference `app_id`, so they must
+   * come after any ALTER, not inside SCHEMA.
+   */
+  #migrateAppIdColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_tasks)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "app_id")) {
+      this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN app_id TEXT");
+    }
+    // Unfiltered app listing: (app_id, created_at, id) — drives ORDER BY without a sort.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_tasks_app" +
+        " ON delivery_tasks (app_id, created_at, id)" +
+        " WHERE app_id IS NOT NULL",
+    );
+    // Status-filtered listing: (app_id, status, created_at, id) — covers WHERE app_id = ? AND status = ?.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_tasks_app_status" +
+        " ON delivery_tasks (app_id, status, created_at, id)" +
+        " WHERE app_id IS NOT NULL",
+    );
+  }
+
   /** Number of tasks currently held (terminal ones are never pruned). */
   get size(): number {
     return Number((this.#countTasks.get() as { n: number }).n);
   }
 
   async enqueue(input: EnqueueInput): Promise<DeliveryTask> {
-    const { messageId, endpointId, availableAt } = normalizeEnqueueInput(input);
+    const { messageId, endpointId, appId, availableAt } = normalizeEnqueueInput(input);
     const nowMs = this.#now();
     const id = this.#generateId();
     const task: DeliveryTask = {
       id,
       messageId,
       endpointId,
+      appId,
       status: "pending",
       attempts: 0,
       nextAttemptAt: availableAt,
@@ -247,6 +319,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       task.id,
       task.messageId,
       task.endpointId,
+      task.appId,
       task.status,
       task.attempts,
       task.nextAttemptAt,
@@ -357,6 +430,44 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     return { deliveries, nextCursor };
   }
 
+  async listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage> {
+    const { limit, cursor } = resolveListDeliveriesQuery(options);
+    const status = options?.status ?? null;
+    // Fetch one extra to detect whether a further page exists.
+    const fetchLimit = limit + 1;
+    let rows: unknown[];
+    if (status === null) {
+      rows =
+        cursor === null
+          ? this.#selectByApp.all(appId, fetchLimit)
+          : this.#selectByAppAfter.all(
+              appId,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            );
+    } else {
+      rows =
+        cursor === null
+          ? this.#selectByAppFiltered.all(appId, status, fetchLimit)
+          : this.#selectByAppFilteredAfter.all(
+              appId,
+              status,
+              cursor.createdAt,
+              cursor.createdAt,
+              cursor.id,
+              fetchLimit,
+            );
+    }
+    const hasMore = rows.length > limit;
+    const deliveries = (rows as unknown as TaskRow[]).slice(0, limit).map(rowToTask);
+    const last = deliveries[deliveries.length - 1];
+    const nextCursor =
+      hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
+    return { deliveries, nextCursor };
+  }
+
   async countByStatus(): Promise<DeliveryCountsByStatus> {
     const counts = zeroDeliveryCounts();
     const rows = this.#countByStatus.all() as unknown as {
@@ -433,6 +544,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
   id               TEXT    PRIMARY KEY,
   message_id       TEXT    NOT NULL,
   endpoint_id      TEXT,
+  app_id           TEXT,
   status           TEXT    NOT NULL,
   attempts         INTEGER NOT NULL,
   next_attempt_at  INTEGER,

@@ -139,6 +139,7 @@ export async function fanOut(
       await deps.queue.enqueue({
         messageId: message.id,
         endpointId: endpoint.id,
+        appId: message.appId,
         ...(availableAt !== null ? { availableAt } : {}),
       }),
     );

@@ -464,6 +464,58 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/deliveries": {
+        get: {
+          operationId: "listDeliveries",
+          tags: ["Deliveries"],
+          summary: "List the tenant's deliveries across all messages and endpoints",
+          description:
+            "List all deliveries for the authenticated tenant, newest-first — the " +
+            "app-wide cross-endpoint view that complements `GET /v1/endpoints/{id}/deliveries` " +
+            "(one endpoint) and `GET /v1/messages/{id}` (one message). Optionally filter by " +
+            "`?status=` to surface only, e.g., `dead_letter` deliveries. Each entry carries " +
+            "both `messageId` and `endpointId` so you can navigate to either detail view. " +
+            "Only deliveries that were enqueued with an `appId` appear; deliveries created " +
+            "before per-tenant tracking was added are silently excluded. Keyset-paginated: " +
+            "pass `nextCursor` back as `?cursor=` to page forward.",
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            {
+              name: "status",
+              in: "query",
+              required: false,
+              schema: {
+                type: "string",
+                enum: ["pending", "delivering", "succeeded", "dead_letter"],
+              },
+              description:
+                "Filter by delivery status. Omit to return all statuses.",
+            },
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: MAX_LIST_DELIVERIES_LIMIT },
+              description: `Page size, 1–${MAX_LIST_DELIVERIES_LIMIT}. Defaults to 50.`,
+            },
+            {
+              name: "cursor",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description: "Opaque cursor from a prior page's `nextCursor`.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse(
+              "A page of deliveries for the tenant, newest-first.",
+              ref("AppDeliveryList"),
+            ),
+            "400": errorResponse("Malformed `?status=`, `?limit=`, or `?cursor=` parameter."),
+            "401": errorResponse("Missing or invalid API key."),
+          },
+        },
+      },
       "/v1/usage": {
         get: {
           operationId: "getUsage",
@@ -1050,6 +1102,36 @@ export function buildOpenApiDocument(): OpenApiDocument {
           required: ["data", "nextCursor"],
           properties: {
             data: { type: "array", items: ref("EndpointDelivery") },
+            nextCursor: {
+              type: ["string", "null"],
+              description: "Opaque cursor for the next page, or null when this is the last page.",
+            },
+          },
+        },
+        AppDelivery: {
+          allOf: [
+            ref("Delivery"),
+            {
+              type: "object",
+              description:
+                "A delivery in the tenant's app-wide list — extends Delivery with " +
+                "`messageId` and `endpointId` so you can navigate to either detail view.",
+              required: ["messageId"],
+              properties: {
+                messageId: { type: "string", description: "The message this delivery belongs to." },
+              },
+            },
+          ],
+        },
+        AppDeliveryList: {
+          type: "object",
+          description:
+            "A keyset-paginated page of the tenant's deliveries across all messages and " +
+            "endpoints, newest-first. Pass `nextCursor` as `?cursor=` to fetch the next page; " +
+            "`null` on the last page.",
+          required: ["data", "nextCursor"],
+          properties: {
+            data: { type: "array", items: ref("AppDelivery") },
             nextCursor: {
               type: ["string", "null"],
               description: "Opaque cursor for the next page, or null when this is the last page.",

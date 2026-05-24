@@ -207,6 +207,49 @@ export interface EndpointDeliveryListPage {
   readonly nextCursor: string | null;
 }
 
+/** Options for {@link PosthornClient.listDeliveries}. */
+export interface ListDeliveriesParams {
+  /** Page size, 1..200. Defaults to the gateway's default (50). */
+  readonly limit?: number;
+  /**
+   * Opaque cursor from a prior page's {@link AppDeliveryListPage.nextCursor};
+   * omit (or `null`) for the first page.
+   */
+  readonly cursor?: string | null;
+  /**
+   * Filter to deliveries with this status. Omit (or `null`) to return all
+   * statuses. Common debugging use: `"dead_letter"` to surface failed deliveries.
+   */
+  readonly status?: "pending" | "delivering" | "succeeded" | "dead_letter" | null;
+}
+
+/**
+ * One delivery in the tenant's app-wide list — the current state of one
+ * (message, endpoint) delivery, with both `messageId` and `endpointId` so you
+ * can navigate to either detail view.
+ */
+export interface AppDeliveryView {
+  readonly id: string;
+  readonly messageId: string;
+  readonly endpointId: string | null;
+  readonly status: DeliveryStatus;
+  readonly attempts: number;
+  readonly nextAttemptAt: number | null;
+  readonly lastError: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+/**
+ * One page of {@link PosthornClient.listDeliveries}: a newest-first slice of
+ * the tenant's deliveries across all messages and endpoints.
+ */
+export interface AppDeliveryListPage {
+  readonly data: readonly AppDeliveryView[];
+  /** Pass back as {@link ListDeliveriesParams.cursor}; `null` on the last page. */
+  readonly nextCursor: string | null;
+}
+
 /** Options for {@link PosthornClient.listMessages}. */
 export interface ListMessagesParams {
   /** Page size, 1..200. Defaults to the gateway's default (50). */
@@ -615,6 +658,27 @@ export class PosthornClient {
     return this.#transport.request<EndpointDeliveryListPage>(
       "GET",
       `/v1/endpoints/${encodeURIComponent(id)}/deliveries${qs.length > 0 ? `?${qs}` : ""}`,
+    );
+  }
+
+  /**
+   * List all deliveries for the authenticated tenant, newest-first —
+   * `GET /v1/deliveries`. The app-wide cross-endpoint view: every (message,
+   * endpoint) delivery pair with `status`, `attempts`, `lastError`, `messageId`,
+   * and `endpointId`. Filter by `?status=dead_letter` to surface all failed
+   * deliveries at a glance — the canonical "what broke?" debugging view.
+   * Keyset-paginated: pass the returned {@link AppDeliveryListPage.nextCursor}
+   * back as {@link ListDeliveriesParams.cursor} (`null` = last page).
+   */
+  async listDeliveries(params: ListDeliveriesParams = {}): Promise<AppDeliveryListPage> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.cursor !== undefined && params.cursor !== null) query.set("cursor", params.cursor);
+    if (params.status !== undefined && params.status !== null) query.set("status", params.status);
+    const qs = query.toString();
+    return this.#transport.request<AppDeliveryListPage>(
+      "GET",
+      `/v1/deliveries${qs.length > 0 ? `?${qs}` : ""}`,
     );
   }
 

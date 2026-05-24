@@ -20,6 +20,7 @@ function taskWithEndpoint(endpointId: string | null): DeliveryTask {
     id: "dtask_1",
     messageId: "msg_1",
     endpointId,
+    appId: null,
     status: "delivering",
     attempts: 1,
     nextAttemptAt: null,
