@@ -4,6 +4,60 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 60: Endpoint Payload Filters
+
+**Repo truth at start:** clean main @ `879d1d1` (iter-59, per-endpoint bulk retry). Baseline
+verified: `tsc --noEmit` clean, vitest **1228/1228** (45 files), `npm run build` clean.
+
+**Problem:** Fan-out had no way to gate a delivery on *payload content* — every subscribed,
+enabled endpoint received every matching event type regardless of what was inside the JSON body.
+Production webhook platforms (Svix, Hookdeck) all offer per-endpoint payload filters.
+
+**Move chosen:** Endpoint payload filter DSL — composable, DSL-gated fan-out delivery.
+Highest operator value: lets tenants precisely target endpoints without spamming low-traffic
+receivers with irrelevant events. Fits cleanly into `selectFanoutTargets` (pure function, new
+`skippedFiltered` bucket) without touching the worker or delivery path.
+
+**What landed (15 files, +750 / −26):**
+
+- `src/endpoints/endpoint.ts` — `FieldFilter`, `AndFilter`, `OrFilter`, `NotFilter`,
+  `EndpointFilter` union; `MAX_FILTER_NODES=20`, `MAX_FILTER_DEPTH=5`; `normalizeEndpointFilter()`
+  (validates DSL, rejects depth/size overflows), `getPathValue()` (dot-path accessor),
+  `matchesFilter()` (pure evaluator). `Endpoint.filter`, `NewEndpoint.filter`,
+  `EndpointUpdate.filter` added; `normalizeNewEndpoint` and `applyEndpointUpdate` wired.
+- `src/endpoints/in-memory-endpoint-store.ts` — `filter: normalized.filter` on create.
+- `src/endpoints/sqlite-endpoint-store.ts` — `filter TEXT` column; additive migration
+  (`#migrateFilterColumn`); INSERT/UPDATE statements updated.
+- `src/endpoints/postgres-endpoint-store.ts` — `filter TEXT` column; INSERT/UPDATE updated.
+- `src/fanout/fanout.ts` — `selectFanoutTargets` gains `skippedFiltered` bucket (4th priority
+  after disabled > unsubscribed > filter-mismatch); `fanOut` parses `message.payload` and
+  propagates `skippedFiltered` count; `FanoutSelection` and `FanoutResult` updated.
+- `src/http/api.ts` — `endpointView` exposes `filter`; create/update handlers parse `filter`
+  from body; fan-out summary includes `skippedFiltered`.
+- `src/http/openapi.ts` — `FieldFilter`, `LogicalFilter`, `NotFilter`, `EndpointFilter` schemas
+  (recursive via `$ref`); `Endpoint`/`NewEndpoint`/`EndpointUpdate` schemas carry `filter`;
+  `FanoutSummary` carries `skippedFiltered`.
+- `src/sdk/client.ts` — `EndpointFilterView` recursive type alias; `EndpointView.filter`,
+  `CreateEndpointInput.filter`, `UpdateEndpointInput.filter`; `createEndpoint` / `updateEndpoint`
+  serialize filter; `FanoutSummary.skippedFiltered` added.
+- `src/index.ts` — exports `matchesFilter`, `normalizeEndpointFilter`, `MAX_FILTER_NODES`,
+  `MAX_FILTER_DEPTH`, `EndpointFilter`, `FieldFilter`, `AndFilter`, `OrFilter`, `NotFilter`,
+  `RetryPolicyView`, `EndpointFilterView`.
+
+**Tests (+132 cases, total 1262/1262 green):**
+- `endpoint.test.ts`: 25 new cases for `matchesFilter` and `normalizeEndpointFilter`.
+- `endpoint-resolver.test.ts`: added `filter: null` to BASE_EP fixture (tsc fix).
+- `conformance.ts`: `describe("filter")` block — 4 cases × 2 backends = 8.
+- `fanout.test.ts`: `filter: null` in helper; `skippedFiltered: []` in empty-bucket assertion;
+  `payload: "{}"` on 4 `fanOut()` calls; 4 new `selectFanoutTargets` filter tests.
+- `api.test.ts`: 3 new endpoint-CRUD filter tests (round-trip, update/clear, skippedFiltered).
+- `client.test.ts`: 1 new filter round-trip E2E test.
+
+**Validation:** `tsc --noEmit` clean → vitest **1262/1262** → `npm run build` clean → committed
+`b3c0438`.
+
+---
+
 ## 2026-05-24 — Iteration 59: Per-Endpoint Bulk Retry
 
 **Repo truth at start:** clean main @ `0b1df75` (iter-58, cancel delivery API+SDK). Baseline
