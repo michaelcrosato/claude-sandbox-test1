@@ -4,6 +4,53 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 57: Delivery Cancellation
+
+**Repo truth at start:** interrupted tick — 3 files modified (delivery-state.ts, delivery-queue.ts,
+in-memory-queue.ts) with no iter-57 LOOP_LOG entry; incomplete `cancel` implementation missing
+sqlite-queue, postgres-queue, conformance tests, and mock fixes. Reconcile-and-land pattern applied.
+
+**High-leverage move chosen:** Complete the in-progress delivery cancellation feature. Before this
+iteration, operators had no way to abort a scheduled or queued delivery — a message sent to an
+endpoint that was subsequently disabled or had its secret rotated would still fire. This adds a
+first-class `cancel` transition as the symmetrical abort path alongside `manualRetry`.
+
+**Architecture (additive, zero blast radius):**
+
+1. **`delivery-state.ts`** — new `cancelled` terminal `DeliveryStatus`; `cancel` event in the
+   `DeliveryEvent` union; `isTerminal()` updated; `reduce()` `case "cancel"` transitions `pending →
+   cancelled` (only valid from `pending` — an in-flight or terminal task cannot be cancelled).
+
+2. **`delivery-queue.ts`** — `zeroDeliveryCounts()` includes `cancelled: 0`; `DeliveryQueue`
+   interface gains `cancel(taskId): Promise<DeliveryTask>`; `applyCancel()` pure helper mirrors
+   `applyManualRetry()` — wraps the FSM reducer and stamps `updatedAt`, clears lease fields.
+
+3. **`in-memory-queue.ts`** — `InMemoryDeliveryQueue.cancel()` implemented.
+
+4. **`sqlite-queue.ts`** — `applyCancel` imported; `cancel()` method added (same transaction
+   pattern as `retry()`); `pruneTerminalTasks` now deletes `'cancelled'` rows too.
+
+5. **`postgres-queue.ts`** — same as SQLite: `applyCancel` imported; `cancel()` with
+   `BEGIN/COMMIT/ROLLBACK` + `FOR UPDATE`; `pruneTerminalTasks` includes `'cancelled'`.
+
+6. **`conformance.ts`** — `cancel (operator abort)` describe block: 4 tests covering the happy
+   path (pending → cancelled, not claimable), cancelled-then-retried resend, unknown-id error, and
+   rejection from non-pending states (delivering + succeeded). Three `countByStatus` `toEqual`
+   assertions updated to include `cancelled: 0`.
+
+7. **Test mock fixes** — `metrics.test.ts` and `delivery-worker.test.ts` (×3 mock objects) updated
+   to include `cancelled` in status count literals or as no-op `cancel` stubs.
+
+**Validation:**
+- `tsc --noEmit` — clean.
+- `vitest run` — **1203/1203** (44 files, 6 Postgres files skipped), up from 1195. The 8 new
+  conformance tests (4 cancel + 2 countByStatus `toEqual` fixes across 2 backends) all green.
+- `npm run build` — clean.
+
+**Commit:** `a25b17f` — 8 files changed, 197 insertions.
+
+---
+
 ## 2026-05-24 — Iteration 56: PostgreSQL Backend for All Six Stores
 
 **Repo truth at start:** clean main @ `132c8ad` (iter-55, non-retryable HTTP status codes). Baseline
