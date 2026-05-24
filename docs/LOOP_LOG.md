@@ -4,6 +4,105 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 43: Event Type Catalog
+
+**Repo truth at start:** clean main @ `4a0c1e2` (iter-42, portal delivery detail + manual retry).
+Baseline verified: `tsc --noEmit` clean, vitest **962/962** (40 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** Event Type Catalog — the primary differentiator Svix
+markets most heavily and the largest remaining competitive gap. Previously the endpoint `eventTypes`
+filter was a free-text array with no authoritative catalog; every incumbent (Svix, Hookdeck, Convoy)
+lets operators publish a structured catalog of event types so customers can discover and subscribe to
+exactly the right events. This closes that gap end-to-end: operators create named slugs
+(`user.created`, `payment.failed`) with human labels, descriptions, and optional JSON schema
+examples; the portal's endpoint create/edit forms now render checkboxes from the catalog instead of
+a free-text input when a catalog is populated; tenant isolation is strict (each app has its own
+catalog, cross-app access is null); archive (soft delete) follows Svix's convention — inactive types
+are hidden by default but visible with `?includeArchived=true`. Fully self-contained in the
+established store → HTTP → SDK chain, zero new runtime dependencies.
+
+**Built this tick:**
+
+- **`src/event-types/event-type.ts`** (new) — `EventType` interface (`id` slug, `appId`, `name`,
+  `description`, `schemaExample`, `archived`, timestamps); `EventTypeStore` interface (5 methods:
+  `create`, `get`, `list`, `update`, `archive`); `DuplicateEventTypeError` + `UnknownEventTypeError`;
+  `normalizeNewEventType` (validates id against `/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/` ≤100 chars, name
+  trimmed ≤200, description ≤1000, schemaExample must parse as JSON); `applyEventTypeUpdate(current,
+  patch, nowMs)` pure function using `"field" in patch` guards throughout.
+
+- **`src/event-types/in-memory-event-type-store.ts`** (new) — `Map<appId, Map<id, EventType>>`
+  backed, injectable clock, `list()` sorts by id ascending and filters archived unless
+  `includeArchived: true`.
+
+- **`src/event-types/sqlite-event-type-store.ts`** (new) — `createRequire("node:sqlite")` pattern;
+  WAL + synchronous=NORMAL + foreign_keys=ON; `STRICT` table; partial index
+  `idx_event_types_app (app_id, archived, id)`; prepared statements as private class fields; `create`
+  catches `UNIQUE constraint failed` → `DuplicateEventTypeError`; `archive` uses `WHERE archived = 0`
+  so re-archiving returns false; `close()` method.
+
+- **`src/event-types/conformance.ts`** (new) — 11 shared conformance cases (× 2 backends): create,
+  get null for unknown, get null cross-app, list empty, list excludes archived / includeArchived,
+  list sorted ascending, duplicate throws, update, update throws, archive + get, archive false for
+  unknown, cross-app isolation.
+
+- **`src/event-types/in-memory-event-type-store.test.ts`** + **`sqlite-event-type-store.test.ts`**
+  (new) — one-call conformance harness each.
+
+- **`src/http/api.ts`** — `eventTypes: EventTypeStore` added to `ApiDeps` (required); added
+  `DuplicateEventTypeError` → 409 and `UnknownEventTypeError` → 404 in `toErrorResponse`; 5 new
+  routes added to `API_ROUTE_KEYS`: `GET /v1/event-types`, `POST /v1/event-types`,
+  `GET /v1/event-types/:id`, `PATCH /v1/event-types/:id`, `DELETE /v1/event-types/:id`. Handlers:
+  `listEventTypes` (respects `?includeArchived=true`), `createEventType` (201, catches duplicate →
+  409), `getEventType` (404 if absent), `updateEventType` (catches `UnknownEventTypeError` → 404),
+  `archiveEventType` (always 204). `eventTypeView()` pure view function.
+
+- **`src/http/openapi.ts`** — `"EventTypes"` tag; `EventType`, `NewEventType`, `UpdateEventType`,
+  `EventTypeList` component schemas; all 5 paths with correct operationIds, request/response bodies,
+  400/401/404/409 error responses. The bidirectional drift test forced all additions.
+
+- **`src/sdk/client.ts`** — `EventTypeView`, `CreateEventTypeInput`, `UpdateEventTypeInput`,
+  `EventTypeListPage`, `ListEventTypesParams`; methods `listEventTypes`, `createEventType`,
+  `getEventType`, `updateEventType`, `archiveEventType`.
+
+- **`src/runtime/gateway.ts`** — `SqliteEventTypeStore` instantiated at `event-types.db`;
+  `eventTypes` wired into `createApi` deps and `createPortalHandler` deps; `eventTypes.close()` in
+  `stop()`; `eventTypes: EventTypeStore` exposed on `Gateway` interface; `resolveLocations` returns
+  `eventTypes` path.
+
+- **`src/portal/portal-handler.ts`** — `eventTypes?: EventTypeStore` added to `PortalDeps`; added
+  `parseFormAll(body)` for multi-value checkbox parsing; GET endpoints and endpoint-detail handlers
+  fetch the catalog and pass it to views; POST create/update handlers use `parseFormAll` then collect
+  `eventType[]` checkbox values when catalog is present, else fall back to comma-split free-text
+  `eventTypes`.
+
+- **`src/portal/portal-views.ts`** — `portalEndpointsPage` and `portalEndpointDetailPage` accept
+  optional `catalogTypes?: readonly { id: string; name: string }[]`; when non-empty, endpoint
+  create/edit forms render a `subscribeAll` checkbox + per-type `eventType` checkboxes pre-checked
+  against the endpoint's current `eventTypes`; free-text input kept as fallback when catalog absent.
+
+- **`src/index.ts`** — event-type domain types and SDK types added to public exports.
+
+- **`src/http/api.test.ts`** — `InMemoryEventTypeStore` wired into all `createApi` call sites; 8
+  new handler tests (list, create, get, update, archive, 404 unknown, 409 duplicate,
+  `?includeArchived=true`).
+
+- **`src/sdk/client.test.ts`** — 2 injected-fetch unit tests: `listEventTypes` omits
+  `includeArchived` by default, appends `includeArchived=true` when requested.
+
+**Fix applied:** `client.test.ts` agent-generated code used `typeof url === "string" ? url : url.toString()` but `PosthornFetch` types `url` as `string`, making the else-branch `never` (tsc error). Simplified to `capturedUrl = url`. `api.test.ts` `includeArchived` test passed query string in path string instead of `query` object (router matches `path` only, returns 404 for unmatched path); fixed to use `query: { includeArchived: "true" }`.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**997/997, 42 files** (+35 over baseline: +11 conformance × 2 backends, +8 handler, +2 SDK, +2
+tsc/path fixes). `npm run build` clean. **compiled-`dist` smoke** (15/15 checks through production
+ESM on `:memory:`): list empty; create 201; duplicate 409; sorted ascending; get 200; get unknown
+404; update 200; archive 204; archived excluded from list; `?includeArchived=true` returns 2;
+cross-tenant empty.
+
+**State:** GREEN → committed to main @ iter-43 (`af99750`).
+
+---
+
 ## 2026-05-23 — Iteration 42: Portal delivery detail + manual retry
 
 **Repo truth at start:** clean main @ `07a96b5` (iter-41, Consumer App Portal).
