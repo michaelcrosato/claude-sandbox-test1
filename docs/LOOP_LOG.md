@@ -4,6 +4,72 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-23 — Iteration 45: Batch Message Sending
+
+**Repo truth at start:** clean main @ `f01f9e0` (iter-44, test event delivery).
+Baseline verified: `tsc --noEmit` clean, vitest **1006/1006** (42 files), `npm run build` clean. No
+[[interrupted-tick-reconcile-pattern]] trigger.
+
+**High-leverage move chosen (checklist #3):** `POST /v1/messages/batch` — the production
+throughput feature that every high-volume producer eventually needs and that was the single
+named missing capability after iter-44 closed the last developer-facing debugging gap. A payment
+processor emitting `payment.created` for a hundred invoices in one job, a batch ETL writing a
+thousand `record.synced` events — these callers shouldn't pay N HTTP round-trips. Every incumbent
+platform advertises batch sending; Posthorn had it last.
+
+**Built this tick:**
+
+- **`src/http/api.ts`** — `export const MAX_BATCH_MESSAGES = 100`; added
+  `"POST /v1/messages/batch"` to `API_ROUTE_KEYS` (immediately after `"POST /v1/messages"`);
+  `batchSendMessages` `AuthedHandler`: validates `messages` is a non-empty array ≤ 100 items
+  (400 otherwise); pre-computes `quotaBudget = max(0, quota − usedThisMonth)` once for the
+  whole batch; iterates, per item: (a) validates it is a plain object with `payload` (→ per-item
+  `invalid_request`), (b) checks if an idempotency key is a replay before decrementing the budget
+  (replays are quota-exempt, matching the single-message behaviour), (c) calls `ingest` — catches
+  `IdempotencyConflictError` → per-item `idempotency_conflict` and `TypeError` → per-item
+  `invalid_request` without aborting the rest — (d) on success records metrics and increments
+  `consumed`. Returns `200 { results: [...] }` always; each result is `{ ok: true, message,
+  deduplicated, fanout }` or `{ ok: false, error: { code, message } }`. HTTP status 200 regardless
+  of partial failure so callers can reliably inspect the per-item `ok` field. The route is wired in
+  the exhaustive `Record<ApiRouteKey, RouteHandler>` handlers table, so omitting it would be a
+  compile error.
+
+- **`src/http/openapi.ts`** — `POST /v1/messages/batch` path operation (`sendMessageBatch`,
+  `Messages` tag); `BatchMessageInput` component schema (`messages` array of `NewMessage`,
+  `minItems:1`, `maxItems:100`); `BatchMessageOk` and `BatchMessageError` discriminated-object
+  schemas (tagged by `ok: true/false`); `BatchResults` schema (`results` array of
+  `anyOf[BatchMessageOk, BatchMessageError]`). The bidirectional drift test forced all four
+  schemas (orphan-schema check) and the path operation (route-count check).
+
+- **`src/sdk/client.ts`** — `BatchMessageOk`, `BatchMessageError`, `BatchMessageResult` (union),
+  and `BatchResults` wire types; `client.sendMessageBatch(messages: readonly SendMessageInput[]):
+  Promise<BatchResults>` maps each input to the wire object (omitting `idempotencyKey` when
+  undefined, matching `sendMessage`'s discipline) and POSTs to `/v1/messages/batch`.
+
+**Tests (+10 over baseline):**
+- **`src/http/api.test.ts`** (+9, new `describe`): accepts a batch, returns one result per
+  message; per-item errors (non-object, missing payload) without aborting; rejects empty array
+  (400); rejects non-array `messages` field (400); rejects a 101-item batch (400); deduplicates
+  idempotent messages within the same batch (second item → `deduplicated:true`, same message id);
+  stops accepting once monthly quota is reached (first 2 of 4 succeed, last 2 → `quota_exceeded`);
+  quota-exempt replay does not consume the budget (replay succeeds, following new message fails);
+  requires authentication (401 without Bearer).
+- **`src/sdk/client.test.ts`** (+1, injected-fetch): `sendMessageBatch` posts to the right path
+  with the serialized `messages` array (idempotencyKey present iff defined); returns typed
+  `BatchResults`.
+
+**README.md** — updated API routes table to reflect all routes added in iters 39–44 that were
+absent (test endpoint, endpoint deliveries, app-wide deliveries, portal sessions, event-types CRUD,
+admin rotate-system-secret, admin PATCH app); added `POST /v1/messages/batch` row; added
+`sendMessageBatch` SDK example; updated test count to ~1020.
+
+**Validation (manual gate, [[validation-gate-is-manual]]):** `tsc --noEmit` clean. vitest
+**1016/1016, 42 files** (+10 over baseline). `npm run build` clean.
+
+**State:** GREEN → committed to main @ iter-45 (`b1837ab`).
+
+---
+
 ## 2026-05-23 — Iteration 44: Test Event Delivery
 
 **Repo truth at start:** clean main @ `af99750` (iter-43, event type catalog).
