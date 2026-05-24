@@ -3,6 +3,7 @@ import { createPortalHandler } from "./portal-handler.js";
 import { InMemoryPortalSessionStore } from "./portal-session.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
+import { fixedSchedule } from "../delivery/retry-policy.js";
 import type { ApiRequest } from "../http/api.js";
 
 function req(partial: Partial<ApiRequest>): ApiRequest {
@@ -186,6 +187,146 @@ describe("createPortalHandler", () => {
     expect(res.headers?.["set-cookie"]).toContain("Max-Age=0");
     // Session is gone: the token no longer validates.
     expect(sessions.getSession(token, clock.t + 1)).toBeNull();
+  });
+
+  // ── Delivery detail ───────────────────────────────────────────────────────────
+
+  it("GET /portal/endpoints/:id/deliveries/:deliveryId returns 200 with delivery info", async () => {
+    const { endpoints, queue, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const task = await queue.enqueue({ messageId: "msg_123", endpointId: ep.id, appId: "app_1" });
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/deliveries/${task.id}` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("msg_123");
+    expect(html).toContain("pending");
+  });
+
+  it("GET delivery detail shows ?retried=1 success banner", async () => {
+    const { endpoints, queue, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const task = await queue.enqueue({ messageId: "msg_123", endpointId: ep.id, appId: "app_1" });
+    const r = withCookie(
+      req({ path: `/portal/endpoints/${ep.id}/deliveries/${task.id}`, query: { retried: "1" } }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toMatch(/retry|queued/i);
+  });
+
+  it("GET delivery detail returns 404 for unknown delivery id", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/deliveries/dtask_nonexistent` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET delivery detail returns 404 when delivery belongs to a different endpoint", async () => {
+    const { endpoints, queue, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep1 = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const ep2 = await endpoints.create({ appId: "app_1", url: "https://recv.example/b" });
+    const task = await queue.enqueue({ messageId: "msg_1", endpointId: ep2.id, appId: "app_1" });
+    // Request delivery via ep1's URL but the task belongs to ep2
+    const r = withCookie(req({ path: `/portal/endpoints/${ep1.id}/deliveries/${task.id}` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET delivery detail returns 404 for a cross-tenant endpoint", async () => {
+    const { endpoints, queue, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_2", url: "https://other.example/hook" });
+    const task = await queue.enqueue({ messageId: "msg_1", endpointId: ep.id, appId: "app_2" });
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/deliveries/${task.id}` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET delivery detail shows Retry button only for dead_letter status", async () => {
+    const endpoints = new InMemoryEndpointStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const sessions = new InMemoryPortalSessionStore();
+    const clock = { t: 1_000_000 };
+    const handler = createPortalHandler({ endpoints, queue, sessions, now: () => clock.t });
+
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const task = await queue.enqueue({ messageId: "msg_1", endpointId: ep.id, appId: "app_1" });
+    const claims = await queue.claimDue({ nowMs: clock.t });
+    const claimed = claims[0] as NonNullable<(typeof claims)[number]>;
+    await queue.fail(claimed.id, claimed.leaseToken!, { error: "timeout", nowMs: clock.t });
+
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/deliveries/${task.id}` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("dead letter");
+    expect(html).toContain("Retry delivery");
+  });
+
+  // ── Delivery retry ────────────────────────────────────────────────────────────
+
+  it("POST /portal/endpoints/:id/deliveries/:deliveryId/retry re-queues a dead-lettered delivery", async () => {
+    const endpoints = new InMemoryEndpointStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const sessions = new InMemoryPortalSessionStore();
+    const clock = { t: 1_000_000 };
+    const handler = createPortalHandler({ endpoints, queue, sessions, now: () => clock.t });
+
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const task = await queue.enqueue({ messageId: "msg_1", endpointId: ep.id, appId: "app_1" });
+    const claims2 = await queue.claimDue({ nowMs: clock.t });
+    const claimed2 = claims2[0] as NonNullable<(typeof claims2)[number]>;
+    await queue.fail(claimed2.id, claimed2.leaseToken!, { error: "boom", nowMs: clock.t });
+
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/deliveries/${task.id}/retry` }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(302);
+    expect(res.headers?.["location"]).toBe(`/portal/endpoints/${ep.id}/deliveries/${task.id}?retried=1`);
+    const revived = await queue.get(task.id);
+    expect(revived?.status).toBe("pending");
+  });
+
+  it("POST retry on a non-terminal delivery redirects to detail without ?retried", async () => {
+    const { endpoints, queue, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const task = await queue.enqueue({ messageId: "msg_1", endpointId: ep.id, appId: "app_1" });
+    // Task is pending (non-terminal) — retry should be rejected gracefully
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/deliveries/${task.id}/retry` }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(302);
+    expect(res.headers?.["location"]).toBe(`/portal/endpoints/${ep.id}/deliveries/${task.id}`);
+  });
+
+  it("POST retry returns 404 for unknown delivery", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const r = withCookie(
+      req({ method: "POST", path: `/portal/endpoints/${ep.id}/deliveries/dtask_nope/retry` }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(404);
   });
 
   // ── Unknown routes ────────────────────────────────────────────────────────────

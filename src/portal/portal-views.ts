@@ -239,7 +239,7 @@ export function portalEndpointDetailPage(
       : deliveries
           .map(
             (d) => `<tr>
-  <td class="mono meta trunc">${esc(d.messageId.slice(0, 20))}…</td>
+  <td class="mono meta trunc"><a href="/portal/endpoints/${esc(endpoint.id)}/deliveries/${esc(d.task.id)}">${esc(d.messageId.slice(0, 20))}…</a></td>
   <td>${statusPill(d.task.status)}</td>
   <td class="meta">${d.task.attempts}</td>
   <td class="meta">${fmtTime(d.task.createdAt)}</td>
@@ -317,6 +317,52 @@ ${rotateForm}
 ${deleteForm}`;
 
   return base(`Endpoint ${endpoint.id}`, body, `<a href="/portal/endpoints" style="color:#64748b;font-size:13px">← Endpoints</a>`);
+}
+
+/** Delivery detail page — status, last error, and a retry button for dead-lettered deliveries. */
+export function portalDeliveryDetailPage(
+  endpoint: Endpoint,
+  task: DeliveryTask,
+  retried = false,
+): string {
+  const retriedBanner = retried
+    ? `<div class="alert alert-ok">Delivery queued for retry. The worker will attempt delivery again shortly.</div>`
+    : "";
+
+  const lastErrorCell = task.lastError
+    ? `<td class="mono meta" style="max-width:400px;word-break:break-word">${esc(task.lastError)}</td>`
+    : `<td class="meta">—</td>`;
+
+  const retryForm =
+    task.status === "dead_letter"
+      ? `<div style="margin-top:16px">
+  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/deliveries/${esc(task.id)}/retry">
+    <button type="submit" class="btn btn-blue">Retry delivery</button>
+  </form>
+</div>`
+      : "";
+
+  const body = `<h2 style="margin-bottom:4px">
+  <a href="/portal/endpoints/${esc(endpoint.id)}" style="color:#64748b;font-weight:400;font-size:13px">← ${esc(endpoint.url)}</a>
+</h2>
+${retriedBanner}
+<div class="card" style="margin-top:12px">
+  <table style="width:auto">
+    <tr><td style="color:#64748b;padding-right:24px;white-space:nowrap">Message</td><td class="mono meta">${esc(task.messageId)}</td></tr>
+    <tr><td style="color:#64748b">Status</td><td>${statusPill(task.status)}</td></tr>
+    <tr><td style="color:#64748b">Attempts</td><td class="meta">${task.attempts}</td></tr>
+    <tr><td style="color:#64748b">Last error</td>${lastErrorCell}</tr>
+    <tr><td style="color:#64748b">Queued</td><td class="meta">${fmtTime(task.createdAt)}</td></tr>
+    <tr><td style="color:#64748b">Updated</td><td class="meta">${fmtTime(task.updatedAt)}</td></tr>
+  </table>
+  ${retryForm}
+</div>`;
+
+  return base(
+    `Delivery ${task.id.slice(0, 12)}`,
+    body,
+    `<a href="/portal/endpoints/${esc(endpoint.id)}" style="color:#64748b;font-size:13px">← Endpoint</a>`,
+  );
 }
 
 /** Page shown after rotating the secret — displays the new secret once. */

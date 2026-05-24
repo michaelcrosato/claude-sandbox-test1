@@ -32,10 +32,12 @@ import type { ApiRequest, ApiResponse, ApiHandler } from "../http/api.js";
 import type { EndpointStore, NewEndpoint, EndpointUpdate } from "../endpoints/endpoint.js";
 import type { DeliveryQueue } from "../queue/delivery-queue.js";
 import type { PortalSessionStore } from "./portal-session.js";
+import { DeliveryStateError } from "../delivery/delivery-state.js";
 import {
   portalExpiredPage,
   portalEndpointsPage,
   portalEndpointDetailPage,
+  portalDeliveryDetailPage,
   portalRotatedSecretPage,
   type DeliveryRow,
 } from "./portal-views.js";
@@ -127,7 +129,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
     const method = req.method.toUpperCase();
     const sub = req.path.replace(/^\/portal\/?/, "");
     const segs = sub.split("/").filter(Boolean);
-    const [s0, s1, s2] = segs;
+    const [s0, s1, s2, s3, s4] = segs;
 
     // ── GET /portal ────────────────────────────────────────────────────────────
     if (method === "GET" && segs.length === 0) {
@@ -263,6 +265,52 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
       await endpoints.delete(s1);
       return redirect("/portal/endpoints");
+    }
+
+    // ── GET /portal/endpoints/:id/deliveries/:deliveryId ──────────────────────
+    if (
+      method === "GET" &&
+      s0 === "endpoints" &&
+      s1 !== undefined &&
+      s2 === "deliveries" &&
+      s3 !== undefined &&
+      segs.length === 4
+    ) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      const ep = await endpoints.get(s1);
+      if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+      const task = await queue.get(s3);
+      if (task === null || task.endpointId !== s1) return NOT_FOUND;
+      const retried = req.query["retried"] === "1";
+      return html(200, portalDeliveryDetailPage(ep, task, retried));
+    }
+
+    // ── POST /portal/endpoints/:id/deliveries/:deliveryId/retry ───────────────
+    if (
+      method === "POST" &&
+      s0 === "endpoints" &&
+      s1 !== undefined &&
+      s2 === "deliveries" &&
+      s3 !== undefined &&
+      s4 === "retry"
+    ) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      const ep = await endpoints.get(s1);
+      if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+      const task = await queue.get(s3);
+      if (task === null || task.endpointId !== s1) return NOT_FOUND;
+      try {
+        await queue.retry(s3);
+      } catch (err) {
+        if (err instanceof DeliveryStateError) {
+          // Non-terminal task — already active; redirect back to detail page.
+          return redirect(`/portal/endpoints/${s1}/deliveries/${s3}`);
+        }
+        throw err;
+      }
+      return redirect(`/portal/endpoints/${s1}/deliveries/${s3}?retried=1`);
     }
 
     return NOT_FOUND;
