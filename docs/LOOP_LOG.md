@@ -4,6 +4,71 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 63: Endpoint Message Replay
+
+**Repo truth at start:** clean main @ `3252f95` (iter-62, channel-based routing). Baseline
+verified: `tsc --noEmit` clean, vitest **1311/1311** (45 files), `npm run build` clean.
+
+**Problem:** Posthorn could revive *dead-lettered* delivery tasks via `retryEndpointDeliveries`,
+but had no path for the complementary case: an endpoint added *after* messages were already
+accepted has no existing tasks to revive — it simply missed those messages. Likewise, an
+endpoint that needs to re-process a specific time window (e.g. after fixing a bug in the
+receiver) would have to be rebuilt externally. Svix charges for this capability as "Recovery"
+(a paid add-on); we ship it as a standard operator tool.
+
+**Move chosen:** `POST /v1/endpoints/:id/replay` — pages the tenant's message log, applies
+the endpoint's full routing rules, and enqueues a fresh delivery task for each matching
+message. Operators bound the scan with optional `since`/`until` epoch-ms timestamps; `limit`
+(default 100, max 1000) caps per-call work, and `hasMore` signals whether another call is
+needed to continue the scan. The receiver naturally deduplicates via the stable `webhook-id`
+on each delivery.
+
+**Architecture:**
+
+1. **`src/queue/replay-endpoint.ts`** (new) — `normalizeReplayLimit` (validates integer in
+   `[1, 1000]`, throws `RangeError` for out-of-range values), `replayEndpointMessages`
+   (pages `listByApp` newest-first with `SCAN_PAGE_SIZE=200`; skips messages newer than
+   `until`; breaks once below `since`; applies `selectFanoutTargets([endpoint], ...)`;
+   enqueues via `queue.enqueue`). `hasMore` is set only when a matching message is found
+   *beyond* the limit cap — the check runs before enqueuing so `hasMore: false` is returned
+   correctly when the limit equals the exact number of matches.
+
+2. **`src/http/api.ts`** — `replayEndpoint` handler added (optional body, same pattern as
+   `testEndpoint`); `"POST /v1/endpoints/:id/replay"` added to `API_ROUTE_KEYS` and the
+   route table. Also: `toErrorResponse` updated to map `RangeError` → 400 `invalid_request`
+   (previously only `TypeError` was mapped; out-of-range `limit` was silently 500).
+
+3. **`src/http/openapi.ts`** — `/v1/endpoints/{id}/replay` path added with `replayEndpoint`
+   operation; `ReplayRequest` (optional `since`, `until`, `limit` fields) and `ReplayResult`
+   (`enqueued`, `hasMore`) schemas added.
+
+4. **`src/sdk/client.ts`** — `ReplayEndpointInput` / `ReplayEndpointResponse` interfaces;
+   `replayEndpoint(endpointId, input?)` method (omits body when no input provided; URL-encodes
+   `endpointId`).
+
+5. **`src/index.ts`** — exports `replayEndpointMessages`, `normalizeReplayLimit`,
+   `DEFAULT_REPLAY_LIMIT`, `MAX_REPLAY_LIMIT`, `ReplayOptions`, `ReplayResult`, `ReplayDeps`
+   from `replay-endpoint.js`; `ReplayEndpointInput` and `ReplayEndpointResponse` from `client.js`.
+
+**Tests (+30 cases, total 1341/1341 green):**
+- `replay-endpoint.test.ts` (20 new): empty log → `{enqueued:0,hasMore:false}`; non-matching
+  subscription; matching + enqueue + correct task fields; tenant isolation; disabled endpoint;
+  eventType filter; channel filter; global endpoint receives all; `since` lower bound; `until`
+  upper bound; combined window; limit stops early (`hasMore:true`); limit equals total
+  (`hasMore:false`); default limit behavior.
+- `http/api.test.ts` (7 new): 401 unauthenticated; 404 unknown endpoint; 404 cross-tenant;
+  `{enqueued:0,hasMore:false}` no messages; enqueues task for matching message; respects
+  eventTypes filter; respects `since`/`until`; 400 for `limit=99999`.
+- `sdk/client.test.ts` (3 new): POSTs to correct URL with URL-encoded id; serializes
+  `{since, until, limit}`; omits body when no input provided.
+
+**Validation:** `tsc --noEmit` clean → vitest **1341/1341** (46 files, 6 Postgres skipped),
+up from 1311. All 30 new tests green. `npm run build` clean.
+
+**Commit:** `18e3224` — iter-63 — 8 files changed, 827 insertions, 5 deletions.
+
+---
+
 ## 2026-05-24 — Iteration 62: Channel-Based Message Routing
 
 **Repo truth at start:** clean main @ `c1684c5` (iter-61, direct delivery lookup). Baseline
