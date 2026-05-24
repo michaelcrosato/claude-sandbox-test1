@@ -390,7 +390,7 @@ function requireParam(params: RouteParams, name: string): string {
 function parseListMessagesParams(
   query: Readonly<Record<string, string | undefined>>,
 ): ListMessagesOptions {
-  const options: { limit?: number; cursor?: string; eventType?: string } = {};
+  const options: { limit?: number; cursor?: string; eventType?: string; channel?: string } = {};
   const rawLimit = query["limit"];
   if (rawLimit !== undefined) {
     const limit = Number(rawLimit);
@@ -410,6 +410,10 @@ function parseListMessagesParams(
   const rawEventType = query["eventType"];
   if (rawEventType !== undefined && rawEventType.length > 0) {
     options.eventType = rawEventType;
+  }
+  const rawChannel = query["channel"];
+  if (rawChannel !== undefined && rawChannel.length > 0) {
+    options.channel = rawChannel;
   }
   return options;
 }
@@ -557,6 +561,7 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     headers: endpoint.headers,
     retryPolicy: endpoint.retryPolicy,
     filter: endpoint.filter ?? null,
+    channel: endpoint.channel,
     disabled: endpoint.disabled,
     // Endpoint health (observability): a tenant can see how/why an endpoint became
     // unhealthy, and whether it was auto-disabled after sustained failure.
@@ -645,6 +650,7 @@ function messageListItemView(message: Message): Record<string, unknown> {
     appId: message.appId,
     eventType: message.eventType,
     idempotencyKey: message.idempotencyKey,
+    channel: message.channel,
     createdAt: message.createdAt,
   };
 }
@@ -661,6 +667,7 @@ function messageView(
     idempotencyKey: message.idempotencyKey,
     // The producer's own payload, echoed back so it can confirm what was sent.
     payload: message.payload,
+    channel: message.channel,
     createdAt: message.createdAt,
     deliveries: deliveries.map(deliveryView),
   };
@@ -999,6 +1006,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("idempotencyKey" in body
         ? { idempotencyKey: body["idempotencyKey"] as string | null }
         : {}),
+      ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
     };
     const fanoutOptions: FanoutOptions = sendAtMs !== null ? { availableAt: sendAtMs } : {};
     const result = await ingest(input, {
@@ -1013,6 +1021,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         appId: result.message.appId,
         eventType: result.message.eventType,
         idempotencyKey: result.message.idempotencyKey,
+        channel: result.message.channel,
         createdAt: result.message.createdAt,
       },
       deduplicated: result.deduplicated,
@@ -1023,6 +1032,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
               matched: result.fanout.matched,
               skippedDisabled: result.fanout.skippedDisabled,
               skippedUnsubscribed: result.fanout.skippedUnsubscribed,
+              skippedChannel: result.fanout.skippedChannel,
               skippedFiltered: result.fanout.skippedFiltered,
             },
     });
@@ -1102,6 +1112,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
           ...("idempotencyKey" in msg
             ? { idempotencyKey: msg["idempotencyKey"] as string | null }
             : {}),
+          ...("channel" in msg ? { channel: msg["channel"] as string | null } : {}),
         };
         const itemFanoutOptions: FanoutOptions =
           itemSendAtMs !== null ? { availableAt: itemSendAtMs } : {};
@@ -1121,6 +1132,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
             appId: result.message.appId,
             eventType: result.message.eventType,
             idempotencyKey: result.message.idempotencyKey,
+            channel: result.message.channel,
             createdAt: result.message.createdAt,
           },
           deduplicated: result.deduplicated,
@@ -1131,6 +1143,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
                   matched: result.fanout.matched,
                   skippedDisabled: result.fanout.skippedDisabled,
                   skippedUnsubscribed: result.fanout.skippedUnsubscribed,
+                  skippedChannel: result.fanout.skippedChannel,
                   skippedFiltered: result.fanout.skippedFiltered,
                 },
         });
@@ -1255,6 +1268,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("filter" in body
         ? { filter: body["filter"] as EndpointFilter | null }
         : {}),
+      ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
     };
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
@@ -1290,6 +1304,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("filter" in body
         ? { filter: body["filter"] as EndpointFilter | null }
         : {}),
+      ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
     };
     const updated = await deps.endpoints.update(id, patch);
     return json(200, endpointView(updated));
@@ -1351,6 +1366,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       eventType,
       payload,
       idempotencyKey: null,
+      channel: null,
       createdAt: now,
       fanoutPending: false,
     };

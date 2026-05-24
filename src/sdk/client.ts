@@ -88,6 +88,12 @@ export interface SendMessageInput {
    * Applied uniformly to every endpoint in the fan-out.
    */
   readonly sendAt?: string | null;
+  /**
+   * Channel tag for scoped delivery. An endpoint with a matching channel
+   * receives this message; a global endpoint (channel `null`) always receives it.
+   * Omit or pass `null` for an untagged message (only global endpoints receive it).
+   */
+  readonly channel?: string | null;
 }
 
 /** The reference to a message returned by {@link PosthornClient.sendMessage}. */
@@ -96,6 +102,8 @@ export interface MessageRef {
   readonly appId: string;
   readonly eventType: string;
   readonly idempotencyKey: string | null;
+  /** Channel tag, or `null` for an untagged message. */
+  readonly channel: string | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -105,6 +113,8 @@ export interface FanoutSummary {
   readonly matched: number;
   readonly skippedDisabled: number;
   readonly skippedUnsubscribed: number;
+  /** Endpoints skipped because their channel did not match the message channel. */
+  readonly skippedChannel: number;
   readonly skippedFiltered: number;
 }
 
@@ -339,6 +349,11 @@ export interface ListMessagesParams {
    * pass `null`) to return all event types.
    */
   readonly eventType?: string | null;
+  /**
+   * Filter to messages whose `channel` exactly matches this value. Omit (or
+   * pass `null`) to return messages from all channels.
+   */
+  readonly channel?: string | null;
 }
 
 /**
@@ -395,6 +410,8 @@ export interface MessageWithDeliveries {
    * JSON **string**; `JSON.parse` it to recover the value you sent.
    */
   readonly payload: string;
+  /** Channel tag, or `null` for an untagged message. */
+  readonly channel: string | null;
   readonly createdAt: number;
   readonly deliveries: readonly DeliveryView[];
 }
@@ -447,6 +464,12 @@ export interface EndpointView {
    * types are delivered regardless of payload content.
    */
   readonly filter: EndpointFilterView | null;
+  /**
+   * Channel scope. `null` (global) means this endpoint receives all messages
+   * regardless of channel. A non-null value means only messages tagged with the
+   * same channel are delivered here.
+   */
+  readonly channel: string | null;
   /**
    * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
    * automatically once it has been failing continuously (see
@@ -501,6 +524,11 @@ export interface CreateEndpointInput {
    * matching event types regardless of payload content).
    */
   readonly filter?: EndpointFilterView | null;
+  /**
+   * Channel scope. `null` (or omit) for a global endpoint that receives all
+   * messages. A string value scopes delivery to messages tagged with the same channel.
+   */
+  readonly channel?: string | null;
 }
 
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
@@ -522,6 +550,11 @@ export interface UpdateEndpointInput {
    * all matching event types regardless of payload content).
    */
   readonly filter?: EndpointFilterView | null;
+  /**
+   * Replace the channel scope. `null` makes the endpoint global (receives all
+   * messages); a string scopes it to messages with that channel.
+   */
+  readonly channel?: string | null;
 }
 
 /** Optional body of {@link PosthornClient.testEndpoint}. */
@@ -740,6 +773,7 @@ export class PosthornClient {
     };
     if (input.idempotencyKey !== undefined) body["idempotencyKey"] = input.idempotencyKey;
     if (input.sendAt !== undefined) body["sendAt"] = input.sendAt;
+    if (input.channel !== undefined) body["channel"] = input.channel;
     return this.#transport.request<SendMessageResult>("POST", "/v1/messages", body);
   }
 
@@ -753,6 +787,7 @@ export class PosthornClient {
       const item: Record<string, unknown> = { eventType: m.eventType, payload: m.payload };
       if (m.idempotencyKey !== undefined) item["idempotencyKey"] = m.idempotencyKey;
       if (m.sendAt !== undefined) item["sendAt"] = m.sendAt;
+      if (m.channel !== undefined) item["channel"] = m.channel;
       return item;
     });
     return this.#transport.request<BatchResults>("POST", "/v1/messages/batch", { messages: items });
@@ -774,6 +809,9 @@ export class PosthornClient {
     }
     if (params.eventType !== undefined && params.eventType !== null) {
       query.set("eventType", params.eventType);
+    }
+    if (params.channel !== undefined && params.channel !== null) {
+      query.set("channel", params.channel);
     }
     const qs = query.toString();
     return this.#transport.request<MessageListPage>(
@@ -884,6 +922,7 @@ export class PosthornClient {
     if (input.headers !== undefined) body["headers"] = input.headers;
     if (input.retryPolicy !== undefined) body["retryPolicy"] = input.retryPolicy;
     if (input.filter !== undefined) body["filter"] = input.filter;
+    if (input.channel !== undefined) body["channel"] = input.channel;
     return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
@@ -906,6 +945,7 @@ export class PosthornClient {
     if (patch.headers !== undefined) body["headers"] = patch.headers;
     if (patch.retryPolicy !== undefined) body["retryPolicy"] = patch.retryPolicy;
     if (patch.filter !== undefined) body["filter"] = patch.filter;
+    if (patch.channel !== undefined) body["channel"] = patch.channel;
     return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,

@@ -72,6 +72,7 @@ interface EndpointRow {
   readonly headers: string | null;
   readonly retry_policy: string | null;
   readonly filter: string | null;
+  readonly channel: string | null;
   readonly disabled: number;
   readonly consecutive_failures: number;
   readonly first_failure_at: number | null;
@@ -106,6 +107,7 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
       row.filter === null
         ? null
         : (JSON.parse(row.filter) as EndpointFilter),
+    channel: row.channel ?? null,
     disabled: row.disabled !== 0,
     consecutiveFailures: Number(row.consecutive_failures),
     firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
@@ -183,6 +185,9 @@ export class SqliteEndpointStore implements EndpointStore {
     // Likewise for the filter column. Existing rows default to NULL (no filter = deliver
     // all), which is the correct semantic and preserves existing behaviour.
     this.#migrateFilterColumn();
+    // Likewise for the channel column. Existing rows default to NULL (global endpoint),
+    // which is the correct semantic and preserves existing behaviour.
+    this.#migrateChannelColumn();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -194,14 +199,14 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
          (id, app_id, url, secret, previous_secrets, description, event_types, headers,
-          retry_policy, filter, disabled, consecutive_failures, first_failure_at, last_failure_at,
+          retry_policy, filter, channel, disabled, consecutive_failures, first_failure_at, last_failure_at,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
          SET url = ?, secret = ?, description = ?, event_types = ?, headers = ?,
-             retry_policy = ?, filter = ?, disabled = ?, consecutive_failures = ?,
+             retry_policy = ?, filter = ?, channel = ?, disabled = ?, consecutive_failures = ?,
              first_failure_at = ?, last_failure_at = ?, updated_at = ?
        WHERE id = ?`,
     );
@@ -313,6 +318,22 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#db.exec("ALTER TABLE endpoints ADD COLUMN filter TEXT");
   }
 
+  /**
+   * Add the `channel` column to a database created before channel-based routing existed.
+   * Existing rows default to `NULL` (global endpoint — receives all messages), which is
+   * the correct semantic and preserves existing behaviour. For a fresh database the column
+   * is in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateChannelColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "channel")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN channel TEXT");
+  }
+
   /** Number of endpoints currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countEndpoints.get() as { n: number }).n);
@@ -333,6 +354,7 @@ export class SqliteEndpointStore implements EndpointStore {
       headers: normalized.headers,
       retryPolicy: normalized.retryPolicy,
       filter: normalized.filter,
+      channel: normalized.channel,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,
@@ -352,6 +374,7 @@ export class SqliteEndpointStore implements EndpointStore {
       headersToColumn(endpoint.headers),
       retryPolicyToColumn(endpoint.retryPolicy),
       filterToColumn(endpoint.filter),
+      endpoint.channel,
       endpoint.disabled ? 1 : 0,
       endpoint.consecutiveFailures,
       endpoint.firstFailureAt,
@@ -387,6 +410,7 @@ export class SqliteEndpointStore implements EndpointStore {
         headersToColumn(next.headers),
         retryPolicyToColumn(next.retryPolicy),
         filterToColumn(next.filter),
+        next.channel,
         next.disabled ? 1 : 0,
         next.consecutiveFailures,
         next.firstFailureAt,
@@ -527,6 +551,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   headers          TEXT,
   retry_policy     TEXT,
   filter           TEXT,
+  channel          TEXT,
   disabled         INTEGER NOT NULL,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   first_failure_at     INTEGER,

@@ -117,6 +117,7 @@ describe("buildSignedRequest", () => {
     idempotencyKey: null,
     eventType: "user.created",
     payload: "BODY",
+    channel: null,
     createdAt: 1_000,
   };
 

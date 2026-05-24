@@ -569,5 +569,42 @@ export function describeEndpointStoreContract(
         expect(updated.filter).toEqual(filter);
       });
     });
+
+    describe("channel", () => {
+      it("defaults channel to null when not provided on create", async () => {
+        const e = await store.create(NEW);
+        expect(e.channel).toBeNull();
+        expect((await store.get(e.id))!.channel).toBeNull();
+      });
+
+      it("stores a channel on create and round-trips it via get", async () => {
+        const e = await store.create({ ...NEW, channel: "acme" });
+        expect(e.channel).toBe("acme");
+        expect((await store.get(e.id))!.channel).toBe("acme");
+      });
+
+      it("update can set, replace, and clear channel", async () => {
+        const e = await store.create({ ...NEW, channel: "acme" });
+        // Replace.
+        const replaced = await store.update(e.id, { channel: "beta" });
+        expect(replaced.channel).toBe("beta");
+        // Clear (null = global endpoint).
+        const cleared = await store.update(e.id, { channel: null });
+        expect(cleared.channel).toBeNull();
+        expect((await store.get(e.id))!.channel).toBeNull();
+      });
+
+      it("update preserves channel when channel is not in the patch", async () => {
+        const e = await store.create({ ...NEW, channel: "acme" });
+        const updated = await store.update(e.id, { description: "changed" });
+        expect(updated.channel).toBe("acme");
+      });
+
+      it("rejects empty, too-long, and control-character channels", async () => {
+        await expect(store.create({ ...NEW, channel: "" })).rejects.toThrow(TypeError);
+        await expect(store.create({ ...NEW, channel: "a".repeat(201) })).rejects.toThrow(TypeError);
+        await expect(store.create({ ...NEW, channel: "bad\nvalue" })).rejects.toThrow(TypeError);
+      });
+    });
   });
 }

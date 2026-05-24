@@ -83,6 +83,7 @@ export class InMemoryEndpointStore implements EndpointStore {
       headers: normalized.headers,
       retryPolicy: normalized.retryPolicy,
       filter: normalized.filter,
+      channel: normalized.channel,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,

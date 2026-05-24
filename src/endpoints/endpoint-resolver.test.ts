@@ -38,6 +38,7 @@ const FAKE_MESSAGE = {
   idempotencyKey: null,
   eventType: "user.created",
   payload: "{}",
+  channel: null,
   createdAt: 0,
 } as const;
 
@@ -53,6 +54,7 @@ describe("endpointToDeliveryTarget", () => {
     headers: null,
     retryPolicy: null,
     filter: null,
+    channel: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

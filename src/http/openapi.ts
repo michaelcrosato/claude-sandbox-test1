@@ -274,6 +274,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
               schema: { type: "string" },
               description: "Filter to messages whose `eventType` exactly matches this value. Omit for all event types.",
             },
+            {
+              name: "channel",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description:
+                "Filter to messages whose `channel` exactly matches this value. " +
+                "Omit to return messages across all channels.",
+            },
           ],
           responses: {
             "200": jsonResponse("A page of messages.", ref("MessageList")),
@@ -1199,24 +1208,33 @@ export function buildOpenApiDocument(): OpenApiDocument {
         MessageSummary: {
           type: "object",
           description: "A message without its payload or per-endpoint deliveries (list/accept view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "createdAt"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "createdAt"],
           properties: {
             id: { type: "string", examples: ["msg_2Yx9..."] },
             appId: { type: "string" },
             eventType: { type: "string", examples: ["user.created"] },
             idempotencyKey: { type: ["string", "null"] },
+            channel: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description:
+                "The routing channel, or `null` for an untagged message. " +
+                "Only endpoints whose `channel` is `null` (global) or matches this value receive the message.",
+              examples: ["customer/user_42"],
+            },
             createdAt: epochMs("Creation time, epoch ms."),
           },
         },
         Message: {
           type: "object",
           description: "A message plus its per-endpoint delivery statuses (detail view).",
-          required: ["id", "appId", "eventType", "idempotencyKey", "payload", "createdAt", "deliveries"],
+          required: ["id", "appId", "eventType", "idempotencyKey", "channel", "payload", "createdAt", "deliveries"],
           properties: {
             id: { type: "string" },
             appId: { type: "string" },
             eventType: { type: "string" },
             idempotencyKey: { type: ["string", "null"] },
+            channel: { type: ["string", "null"], maxLength: 200 },
             payload: {
               type: "string",
               description: "The exact serialized JSON body that was signed and delivered, byte-for-byte.",
@@ -1413,7 +1431,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
           required: [
-            "id", "appId", "url", "description", "eventTypes", "headers", "retryPolicy", "filter",
+            "id", "appId", "url", "description", "eventTypes", "channel", "headers", "retryPolicy", "filter",
             "disabled", "consecutiveFailures", "firstFailureAt", "lastFailureAt",
             "createdAt", "updatedAt",
           ],
@@ -1426,6 +1444,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["array", "null"],
               items: { type: "string" },
               description: "Subscription filter. `null` means all events; an array means exactly those types.",
+            },
+            channel: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description:
+                "The routing channel this endpoint is scoped to, or `null` for a global endpoint. " +
+                "A global endpoint receives every message regardless of the message's channel. " +
+                "A channel-scoped endpoint receives only messages whose `channel` exactly matches.",
             },
             headers: {
               type: ["object", "null"],
@@ -1507,6 +1533,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Past timestamps are treated as immediate. Each endpoint in the fan-out inherits the same delay.",
               examples: ["2026-06-01T09:00:00Z"],
             },
+            channel: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description:
+                "Optional routing channel. When set, only endpoints whose `channel` is `null` (global) or " +
+                "matches this exact value will receive the message. Omit or pass `null` for an untagged broadcast " +
+                "(received only by global endpoints).",
+              examples: ["customer/user_42"],
+            },
           },
         },
         NewEndpoint: {
@@ -1521,6 +1556,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: ["array", "null"],
               items: { type: "string" },
               description: "Subscription filter. Omit or pass `null` for all events.",
+            },
+            channel: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description:
+                "Routing channel. When set, this endpoint only receives messages whose `channel` matches. " +
+                "Omit or pass `null` for a global endpoint that receives all messages.",
+              examples: ["customer/user_42"],
             },
             disabled: { type: "boolean", description: "Whether the endpoint starts paused. Defaults to false." },
             headers: {
@@ -1552,6 +1595,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
             secret: { type: "string", description: "Hard-swap the signing secret (no overlap)." },
             description: { type: "string" },
             eventTypes: { type: ["array", "null"], items: { type: "string" } },
+            channel: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description: "Replace the routing channel. Pass `null` to make the endpoint global.",
+            },
             disabled: { type: "boolean" },
             headers: {
               type: ["object", "null"],
@@ -1632,7 +1680,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
         FanoutSummary: {
           type: "object",
           description: "How many endpoints a message fanned out to, and why others were skipped.",
-          required: ["matched", "skippedDisabled", "skippedUnsubscribed", "skippedFiltered"],
+          required: ["matched", "skippedDisabled", "skippedUnsubscribed", "skippedChannel", "skippedFiltered"],
           properties: {
             matched: { type: "integer", minimum: 0, description: "Endpoints a delivery was enqueued for." },
             skippedDisabled: { type: "integer", minimum: 0, description: "Endpoints skipped as disabled." },
@@ -1640,6 +1688,12 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: "integer",
               minimum: 0,
               description: "Endpoints skipped as not subscribed to the event type.",
+            },
+            skippedChannel: {
+              type: "integer",
+              minimum: 0,
+              description:
+                "Enabled, subscribed endpoints skipped because their channel did not match the message's channel.",
             },
             skippedFiltered: {
               type: "integer",

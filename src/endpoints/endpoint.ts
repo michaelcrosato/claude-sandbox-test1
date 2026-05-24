@@ -146,6 +146,14 @@ export interface Endpoint {
    */
   readonly filter: EndpointFilter | null;
   /**
+   * Channel this endpoint is scoped to. `null` = **global**: receives all messages
+   * regardless of channel. A string value = **channel-scoped**: receives only
+   * messages whose channel matches. Global endpoints also receive channel-tagged
+   * messages; channel endpoints never receive untagged (null-channel) messages
+   * unless their channel is null.
+   */
+  readonly channel: string | null;
+  /**
    * When `true`, the endpoint is administratively paused. Fan-out skips it, and a
    * resolver declines to resolve it (so an in-flight task fails rather than
    * delivers — see `endpoint-resolver.ts`).
@@ -212,6 +220,12 @@ export interface NewEndpoint {
    * trigger a delivery. See {@link EndpointFilter}.
    */
   readonly filter?: EndpointFilter | null;
+  /**
+   * Channel scope. Omit (or pass `null`) for a global endpoint that receives all
+   * messages. Set to a string to scope this endpoint to only messages tagged with
+   * the same channel.
+   */
+  readonly channel?: string | null;
 }
 
 /**
@@ -246,6 +260,10 @@ export interface EndpointUpdate {
    * {@link NewEndpoint.filter}.
    */
   readonly filter?: EndpointFilter | null;
+  /**
+   * Replace the channel scope. Pass `null` to make the endpoint global again.
+   */
+  readonly channel?: string | null;
 }
 
 /**
@@ -346,6 +364,24 @@ export class UnknownEndpointError extends Error {
  * size stored and the extra signing work done per delivery.
  */
 export const MAX_CUSTOM_HEADERS = 20;
+
+/** Maximum length of a channel string. */
+export const MAX_CHANNEL_LENGTH = 200;
+
+/**
+ * Validate and normalize a channel value. Returns `null` for absent/null input
+ * (no channel scoping). Throws {@link TypeError} on a non-string, empty string,
+ * oversized string, or a string containing control characters.
+ */
+export function normalizeChannel(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string") throw new TypeError("channel must be a string or null");
+  if (v.length === 0) throw new TypeError("channel must not be empty");
+  if (v.length > MAX_CHANNEL_LENGTH)
+    throw new TypeError(`channel must be at most ${MAX_CHANNEL_LENGTH} characters`);
+  if (/[\r\n\0]/.test(v)) throw new TypeError("channel must not contain control characters");
+  return v;
+}
 
 /**
  * Maximum number of retries in a custom per-endpoint retry policy. The total
@@ -506,6 +542,7 @@ export interface NormalizedNewEndpoint {
   readonly headers: Readonly<Record<string, string>> | null;
   readonly retryPolicy: RetryPolicy | null;
   readonly filter: EndpointFilter | null;
+  readonly channel: string | null;
 }
 
 /**
@@ -805,6 +842,7 @@ export function normalizeNewEndpoint(input: NewEndpoint): NormalizedNewEndpoint 
     headers: normalizeHeaders(input.headers),
     retryPolicy: normalizeRetryPolicy(input.retryPolicy),
     filter: normalizeEndpointFilter(input.filter),
+    channel: normalizeChannel(input.channel),
   };
 }
 
@@ -851,6 +889,10 @@ export function applyEndpointUpdate(
       "filter" in patch
         ? normalizeEndpointFilter(patch.filter)
         : current.filter,
+    channel:
+      "channel" in patch
+        ? normalizeChannel(patch.channel)
+        : current.channel,
     disabled: nextDisabled,
     consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
     firstFailureAt: reEnabled ? null : current.firstFailureAt,

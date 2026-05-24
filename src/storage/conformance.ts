@@ -695,6 +695,47 @@ export function describeMessageStoreContract(
         const pageNull = await store.listByApp(APP, { eventType: null });
         expect(pageNull.messages.map((m) => m.id)).toEqual([b.message.id, a.message.id]);
       });
+
+      it("stores and retrieves the channel field on a message", async () => {
+        const { message } = await store.create({
+          appId: APP,
+          eventType: "e",
+          payload: "{}",
+          channel: "acme",
+        });
+        expect(message.channel).toBe("acme");
+        expect((await store.get(message.id))!.channel).toBe("acme");
+      });
+
+      it("defaults channel to null when omitted", async () => {
+        const { message } = await store.create({ appId: APP, eventType: "e", payload: "{}" });
+        expect(message.channel).toBeNull();
+        expect((await store.get(message.id))!.channel).toBeNull();
+      });
+
+      it("filters by channel, returning only matching messages newest-first", async () => {
+        const a = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "acme" });
+        clock.advance(1);
+        const _b = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "beta" });
+        clock.advance(1);
+        const c = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "acme" });
+
+        const page = await store.listByApp(APP, { channel: "acme" });
+        expect(page.messages.map((m) => m.id)).toEqual([c.message.id, a.message.id]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("rejects empty, too-long, and control-character channel values on create", async () => {
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", channel: "" }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", channel: "a".repeat(201) }),
+        ).rejects.toThrow(TypeError);
+        await expect(
+          store.create({ appId: APP, eventType: "e", payload: "{}", channel: "bad\nvalue" }),
+        ).rejects.toThrow(TypeError);
+      });
     });
 
     describe("summarizeUsageByApp — per-tenant usage", () => {

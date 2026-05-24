@@ -370,6 +370,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         eventType: "test",
         payload: JSON.stringify({ test: true }),
         idempotencyKey: null,
+        channel: null,
         createdAt: now,
         fanoutPending: false,
       };

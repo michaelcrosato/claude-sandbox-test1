@@ -79,6 +79,7 @@ interface MessageRow {
   readonly idempotency_key: string | null;
   readonly event_type: string;
   readonly payload: string;
+  readonly channel: string | null;
   readonly created_at: number;
   /** Outbox marker: NULL while the message still owes a fan-out, else the time it was fanned out. */
   readonly fanned_out_at: number | null;
@@ -98,6 +99,7 @@ function rowToMessage(row: MessageRow): Message {
     idempotencyKey: row.idempotency_key,
     eventType: row.event_type,
     payload: row.payload,
+    channel: row.channel ?? null,
     createdAt: row.created_at,
   };
 }
@@ -121,6 +123,8 @@ export class SqliteMessageStore implements MessageStore {
   readonly #listByAppAfter: StatementSync;
   readonly #listByAppFiltered: StatementSync;
   readonly #listByAppAfterFiltered: StatementSync;
+  readonly #listByAppChannel: StatementSync;
+  readonly #listByAppAfterChannel: StatementSync;
   readonly #summarizeUsage: StatementSync;
 
   constructor(options: SqliteStoreOptions = {}) {
@@ -145,16 +149,19 @@ export class SqliteMessageStore implements MessageStore {
     // Bring a database created by a pre-outbox version up to schema, then build
     // the index that depends on the (now-guaranteed) outbox column.
     this.#migrateFanoutColumn();
+    // Likewise for the channel column. Existing rows default to NULL (untagged), which
+    // is the correct semantic and preserves existing behaviour.
+    this.#migrateChannelColumn();
     this.#db.exec(INDEXES);
 
     this.#selectMessage = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at FROM messages WHERE id = ?",
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at FROM messages WHERE id = ?",
     );
     this.#selectIdempotency = this.#db.prepare(
       "SELECT message_id, fingerprint, stored_at FROM idempotency_keys WHERE app_id = ? AND key = ?",
     );
     this.#insertMessage = this.#db.prepare(
-      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
     this.#insertIdempotency = this.#db.prepare(
       "INSERT INTO idempotency_keys (app_id, key, message_id, fingerprint, stored_at) VALUES (?, ?, ?, ?, ?)",
@@ -173,21 +180,21 @@ export class SqliteMessageStore implements MessageStore {
     // Oldest-first; the partial index on (created_at, id) WHERE fanned_out_at IS
     // NULL keeps this cheap even as `messages` grows unbounded.
     this.#listPendingFanout = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE fanned_out_at IS NULL AND created_at <= ?" +
         " ORDER BY created_at ASC, id ASC LIMIT ?",
     );
     // Newest-first page of a tenant's messages (first page). The DESC scan rides
     // idx_messages_app_created backwards; ORDER BY mirrors compareMessagesNewestFirst.
     this.#listByApp = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ?" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
     // Subsequent pages: the keyset predicate mirrors isMessageAfterCursor — every
     // row strictly older than the cursor's (created_at, id).
     this.#listByAppAfter = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -196,13 +203,26 @@ export class SqliteMessageStore implements MessageStore {
     // The idx_messages_app_event_created (app_id, event_type, created_at, id) index lets
     // the planner narrow straight to the matching event type before scanning.
     this.#listByAppFiltered = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND event_type = ?" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
     this.#listByAppAfterFiltered = this.#db.prepare(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE app_id = ? AND event_type = ?" +
+        " AND (created_at < ? OR (created_at = ? AND id < ?))" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    // Channel-filtered variants: filter by channel IS NULL or channel = ?
+    // The idx_messages_app_channel_created (app_id, channel, created_at, id) index covers this.
+    this.#listByAppChannel = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ? AND channel IS ?" +
+        " ORDER BY created_at DESC, id DESC LIMIT ?",
+    );
+    this.#listByAppAfterChannel = this.#db.prepare(
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
+        " FROM messages WHERE app_id = ? AND channel IS ?" +
         " AND (created_at < ? OR (created_at = ? AND id < ?))" +
         " ORDER BY created_at DESC, id DESC LIMIT ?",
     );
@@ -215,6 +235,22 @@ export class SqliteMessageStore implements MessageStore {
         " FROM messages WHERE app_id = ? AND created_at >= ? AND created_at < ?" +
         " GROUP BY day ORDER BY day ASC",
     );
+  }
+
+  /**
+   * Add the `channel` column to a database created before channel-based routing existed.
+   * Existing rows default to `NULL` (untagged message), which is the correct semantic
+   * and preserves existing behaviour. For a fresh database the column is in {@link SCHEMA}
+   * and this is a no-op.
+   */
+  #migrateChannelColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(messages)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "channel")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE messages ADD COLUMN channel TEXT");
   }
 
   /**
@@ -243,7 +279,7 @@ export class SqliteMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key } =
+    const { appId, eventType, payload, idempotencyKey: key, channel } =
       normalizeNewMessage(input);
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
@@ -259,6 +295,7 @@ export class SqliteMessageStore implements MessageStore {
         key,
         fingerprint,
         nowMs,
+        channel,
       );
       this.#db.exec("COMMIT");
       return result;
@@ -279,6 +316,7 @@ export class SqliteMessageStore implements MessageStore {
     key: string | null,
     fingerprint: string,
     nowMs: number,
+    channel: string | null,
   ): CreateMessageResult {
     if (key !== null) {
       const existing = this.#selectIdempotency.get(appId, key) as
@@ -319,7 +357,7 @@ export class SqliteMessageStore implements MessageStore {
     // fanned_out_at is left unset (NULL) — the message owes a fan-out. Inserting
     // it in this same transaction as the message makes "accepted" and "needs
     // fan-out" a single atomic fact: the read side of the transactional outbox.
-    this.#insertMessage.run(id, appId, key, eventType, payload, nowMs);
+    this.#insertMessage.run(id, appId, key, eventType, payload, channel, nowMs);
     if (key !== null) {
       this.#insertIdempotency.run(appId, key, id, fingerprint, nowMs);
     }
@@ -330,6 +368,7 @@ export class SqliteMessageStore implements MessageStore {
         idempotencyKey: key,
         eventType,
         payload,
+        channel,
         createdAt: nowMs,
       },
       deduplicated: false,
@@ -383,31 +422,43 @@ export class SqliteMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor, eventType } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
     // Fetch one extra row: its presence is exactly the signal that a further page
     // exists, without a second COUNT query.
     const fetchLimit = limit + 1;
     const rows = (
-      eventType === null
+      channel !== undefined
+        // Channel-filtered: use IS ? predicate (handles null correctly in SQLite)
         ? cursor === null
-          ? this.#listByApp.all(appId, fetchLimit)
-          : this.#listByAppAfter.all(
+          ? this.#listByAppChannel.all(appId, channel, fetchLimit)
+          : this.#listByAppAfterChannel.all(
               appId,
+              channel,
               cursor.createdAt,
               cursor.createdAt,
               cursor.id,
               fetchLimit,
             )
-        : cursor === null
-          ? this.#listByAppFiltered.all(appId, eventType, fetchLimit)
-          : this.#listByAppAfterFiltered.all(
-              appId,
-              eventType,
-              cursor.createdAt,
-              cursor.createdAt,
-              cursor.id,
-              fetchLimit,
-            )
+        : eventType === null
+          ? cursor === null
+            ? this.#listByApp.all(appId, fetchLimit)
+            : this.#listByAppAfter.all(
+                appId,
+                cursor.createdAt,
+                cursor.createdAt,
+                cursor.id,
+                fetchLimit,
+              )
+          : cursor === null
+            ? this.#listByAppFiltered.all(appId, eventType, fetchLimit)
+            : this.#listByAppAfterFiltered.all(
+                appId,
+                eventType,
+                cursor.createdAt,
+                cursor.createdAt,
+                cursor.id,
+                fetchLimit,
+              )
     ) as unknown as MessageRow[];
     const hasMore = rows.length > limit;
     const messages = (hasMore ? rows.slice(0, limit) : rows).map(rowToMessage);
@@ -473,6 +524,7 @@ CREATE TABLE IF NOT EXISTS messages (
   idempotency_key TEXT,
   event_type      TEXT    NOT NULL,
   payload         TEXT    NOT NULL,
+  channel         TEXT,
   created_at      INTEGER NOT NULL,
   fanned_out_at   INTEGER
 ) STRICT;
@@ -508,4 +560,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_app_created
 
 CREATE INDEX IF NOT EXISTS idx_messages_app_event_created
   ON messages (app_id, event_type, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_app_channel_created
+  ON messages (app_id, channel, created_at, id);
 `;

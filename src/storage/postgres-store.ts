@@ -60,6 +60,7 @@ interface MessageRow {
   readonly idempotency_key: string | null;
   readonly event_type: string;
   readonly payload: string;
+  readonly channel: string | null;
   readonly created_at: string; // pg returns BIGINT as string
   readonly fanned_out_at: string | null;
 }
@@ -77,6 +78,7 @@ function rowToMessage(row: MessageRow): Message {
     idempotencyKey: row.idempotency_key,
     eventType: row.event_type,
     payload: row.payload,
+    channel: row.channel ?? null,
     createdAt: Number(row.created_at),
   };
 }
@@ -117,7 +119,7 @@ export class PostgresMessageStore implements MessageStore {
   close(): void {}
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key } =
+    const { appId, eventType, payload, idempotencyKey: key, channel } =
       normalizeNewMessage(input);
     const nowMs = this.#now();
     const fingerprint = messageFingerprint(eventType, payload);
@@ -130,6 +132,7 @@ export class PostgresMessageStore implements MessageStore {
         appId,
         eventType,
         payload,
+        channel,
         key,
         fingerprint,
         nowMs,
@@ -153,6 +156,7 @@ export class PostgresMessageStore implements MessageStore {
     appId: string,
     eventType: string,
     payload: string,
+    channel: string | null,
     key: string | null,
     fingerprint: string,
     nowMs: number,
@@ -171,7 +175,7 @@ export class PostgresMessageStore implements MessageStore {
           throw new IdempotencyConflictError(key);
         }
         const { rows: msgRows } = await client.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at FROM messages WHERE id = $1",
+          "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at FROM messages WHERE id = $1",
           [existing.message_id],
         );
         const row = msgRows[0];
@@ -191,8 +195,8 @@ export class PostgresMessageStore implements MessageStore {
 
     const id = this.#generateId();
     await client.query(
-      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-      [id, appId, key, eventType, payload, nowMs],
+      "INSERT INTO messages (id, app_id, idempotency_key, event_type, payload, channel, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [id, appId, key, eventType, payload, channel, nowMs],
     );
     if (key !== null) {
       await client.query(
@@ -201,7 +205,7 @@ export class PostgresMessageStore implements MessageStore {
       );
     }
     return {
-      message: { id, appId, idempotencyKey: key, eventType, payload, createdAt: nowMs },
+      message: { id, appId, idempotencyKey: key, eventType, payload, channel, createdAt: nowMs },
       deduplicated: false,
       fanoutPending: true,
     };
@@ -209,7 +213,7 @@ export class PostgresMessageStore implements MessageStore {
 
   async get(id: string): Promise<Message | null> {
     const { rows } = await this.#pool.query<MessageRow>(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at FROM messages WHERE id = $1",
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at FROM messages WHERE id = $1",
       [id],
     );
     const row = rows[0];
@@ -244,7 +248,7 @@ export class PostgresMessageStore implements MessageStore {
       ? Math.floor(createdAtOrBefore)
       : Number.MAX_SAFE_INTEGER;
     const { rows } = await this.#pool.query<MessageRow>(
-      "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at" +
         " FROM messages WHERE fanned_out_at IS NULL AND created_at <= $1" +
         " ORDER BY created_at ASC, id ASC LIMIT $2",
       [cutoff, limit],
@@ -253,21 +257,53 @@ export class PostgresMessageStore implements MessageStore {
   }
 
   async listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage> {
-    const { limit, cursor, eventType } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
     const fetchLimit = limit + 1;
+    const sel = "SELECT id, app_id, idempotency_key, event_type, payload, channel, created_at, fanned_out_at FROM messages";
     let rows: MessageRow[];
 
-    if (eventType === null) {
+    if (channel !== undefined) {
+      // Channel filter: use IS NOT DISTINCT FROM to match both NULL and string values
+      if (eventType === null) {
+        if (cursor === null) {
+          ({ rows } = await this.#pool.query<MessageRow>(
+            sel + " WHERE app_id = $1 AND channel IS NOT DISTINCT FROM $2" +
+              " ORDER BY created_at DESC, id DESC LIMIT $3",
+            [appId, channel, fetchLimit],
+          ));
+        } else {
+          ({ rows } = await this.#pool.query<MessageRow>(
+            sel + " WHERE app_id = $1 AND channel IS NOT DISTINCT FROM $2" +
+              " AND (created_at < $3 OR (created_at = $4 AND id < $5))" +
+              " ORDER BY created_at DESC, id DESC LIMIT $6",
+            [appId, channel, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
+          ));
+        }
+      } else {
+        if (cursor === null) {
+          ({ rows } = await this.#pool.query<MessageRow>(
+            sel + " WHERE app_id = $1 AND event_type = $2 AND channel IS NOT DISTINCT FROM $3" +
+              " ORDER BY created_at DESC, id DESC LIMIT $4",
+            [appId, eventType, channel, fetchLimit],
+          ));
+        } else {
+          ({ rows } = await this.#pool.query<MessageRow>(
+            sel + " WHERE app_id = $1 AND event_type = $2 AND channel IS NOT DISTINCT FROM $3" +
+              " AND (created_at < $4 OR (created_at = $5 AND id < $6))" +
+              " ORDER BY created_at DESC, id DESC LIMIT $7",
+            [appId, eventType, channel, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
+          ));
+        }
+      }
+    } else if (eventType === null) {
       if (cursor === null) {
         ({ rows } = await this.#pool.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
-            " FROM messages WHERE app_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+          sel + " WHERE app_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
           [appId, fetchLimit],
         ));
       } else {
         ({ rows } = await this.#pool.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
-            " FROM messages WHERE app_id = $1" +
+          sel + " WHERE app_id = $1" +
             " AND (created_at < $2 OR (created_at = $3 AND id < $4))" +
             " ORDER BY created_at DESC, id DESC LIMIT $5",
           [appId, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
@@ -276,15 +312,13 @@ export class PostgresMessageStore implements MessageStore {
     } else {
       if (cursor === null) {
         ({ rows } = await this.#pool.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
-            " FROM messages WHERE app_id = $1 AND event_type = $2" +
+          sel + " WHERE app_id = $1 AND event_type = $2" +
             " ORDER BY created_at DESC, id DESC LIMIT $3",
           [appId, eventType, fetchLimit],
         ));
       } else {
         ({ rows } = await this.#pool.query<MessageRow>(
-          "SELECT id, app_id, idempotency_key, event_type, payload, created_at, fanned_out_at" +
-            " FROM messages WHERE app_id = $1 AND event_type = $2" +
+          sel + " WHERE app_id = $1 AND event_type = $2" +
             " AND (created_at < $3 OR (created_at = $4 AND id < $5))" +
             " ORDER BY created_at DESC, id DESC LIMIT $6",
           [appId, eventType, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
@@ -337,6 +371,7 @@ CREATE TABLE IF NOT EXISTS messages (
   idempotency_key TEXT,
   event_type      TEXT    NOT NULL,
   payload         TEXT    NOT NULL,
+  channel         TEXT,
   created_at      BIGINT  NOT NULL,
   fanned_out_at   BIGINT
 );
@@ -361,4 +396,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_app_created
 
 CREATE INDEX IF NOT EXISTS idx_messages_app_event_created
   ON messages (app_id, event_type, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_app_channel_created
+  ON messages (app_id, channel, created_at, id);
 `;

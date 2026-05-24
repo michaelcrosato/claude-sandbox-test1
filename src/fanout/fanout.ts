@@ -45,40 +45,59 @@ export interface FanoutSelection {
   readonly skippedUnsubscribed: readonly Endpoint[];
   /** Enabled, subscribed endpoints skipped because their payload filter did not match. */
   readonly skippedFiltered: readonly Endpoint[];
+  /** Enabled, subscribed endpoints skipped because their channel does not match the message's channel. */
+  readonly skippedChannel: readonly Endpoint[];
 }
 
 /**
- * Partition `endpoints` for delivery of `eventType` + `payload`: an endpoint
- * is `matched` only when it is **enabled**, **subscribes** to the type (see
- * {@link endpointSubscribesTo}), and its payload filter matches (see
- * {@link matchesFilter}). Otherwise it is skipped, with the reason recorded.
+ * Whether an endpoint's channel setting matches the message's channel.
+ * - A `null` endpoint channel is **global**: matches any message channel.
+ * - A string endpoint channel matches only when `messageChannel` is exactly equal.
+ */
+function channelMatchesEndpoint(
+  endpoint: Endpoint,
+  messageChannel: string | null,
+): boolean {
+  return endpoint.channel === null || endpoint.channel === messageChannel;
+}
+
+/**
+ * Partition `endpoints` for delivery of `eventType` + `channel` + `payload`: an
+ * endpoint is `matched` only when it is **enabled**, **subscribes** to the type (see
+ * {@link endpointSubscribesTo}), its **channel** matches (see {@link channelMatchesEndpoint}),
+ * and its payload filter matches (see {@link matchesFilter}). Otherwise it is
+ * skipped, with the reason recorded.
  * Pure and order-preserving (within each bucket, input order holds), so
  * fan-out routing is fully deterministic and unit-testable in isolation.
  *
- * Priority: disabled > unsubscribed > filter-mismatch > matched. A disabled
- * endpoint is always `skippedDisabled` regardless of subscription or filter.
+ * Priority: disabled > unsubscribed > channel-mismatch > filter-mismatch > matched.
+ * A disabled endpoint is always `skippedDisabled` regardless of subscription or channel.
  */
 export function selectFanoutTargets(
   endpoints: readonly Endpoint[],
   eventType: string,
+  channel: string | null = null,
   payload?: unknown,
 ): FanoutSelection {
   const matched: Endpoint[] = [];
   const skippedDisabled: Endpoint[] = [];
   const skippedUnsubscribed: Endpoint[] = [];
+  const skippedChannel: Endpoint[] = [];
   const skippedFiltered: Endpoint[] = [];
   for (const endpoint of endpoints) {
     if (endpoint.disabled) {
       skippedDisabled.push(endpoint);
     } else if (!endpointSubscribesTo(endpoint, eventType)) {
       skippedUnsubscribed.push(endpoint);
+    } else if (!channelMatchesEndpoint(endpoint, channel)) {
+      skippedChannel.push(endpoint);
     } else if (!matchesFilter(endpoint.filter, payload)) {
       skippedFiltered.push(endpoint);
     } else {
       matched.push(endpoint);
     }
   }
-  return { matched, skippedDisabled, skippedUnsubscribed, skippedFiltered };
+  return { matched, skippedDisabled, skippedUnsubscribed, skippedChannel, skippedFiltered };
 }
 
 /** The stores fan-out reads from and writes to. */
@@ -111,6 +130,8 @@ export interface FanoutResult {
   readonly skippedDisabled: number;
   /** Number of endpoints skipped because they do not subscribe to the event type. */
   readonly skippedUnsubscribed: number;
+  /** Number of enabled, subscribed endpoints skipped because their channel did not match. */
+  readonly skippedChannel: number;
   /** Number of enabled, subscribed endpoints skipped because their payload filter did not match. */
   readonly skippedFiltered: number;
 }
@@ -134,7 +155,7 @@ export interface FanoutResult {
  * source of a re-fan-out (a producer's idempotent retry).
  */
 export async function fanOut(
-  message: Pick<Message, "id" | "appId" | "eventType" | "payload">,
+  message: Pick<Message, "id" | "appId" | "eventType" | "payload" | "channel">,
   deps: FanoutDeps,
   options: FanoutOptions = {},
 ): Promise<FanoutResult> {
@@ -145,7 +166,7 @@ export async function fanOut(
   } catch {
     parsedPayload = null;
   }
-  const selection = selectFanoutTargets(all, message.eventType, parsedPayload);
+  const selection = selectFanoutTargets(all, message.eventType, message.channel, parsedPayload);
 
   const availableAt = options.availableAt ?? null;
   const tasks: DeliveryTask[] = [];
@@ -166,6 +187,7 @@ export async function fanOut(
     matched: selection.matched.length,
     skippedDisabled: selection.skippedDisabled.length,
     skippedUnsubscribed: selection.skippedUnsubscribed.length,
+    skippedChannel: selection.skippedChannel.length,
     skippedFiltered: selection.skippedFiltered.length,
   };
 }

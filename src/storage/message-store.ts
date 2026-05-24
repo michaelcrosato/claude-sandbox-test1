@@ -13,6 +13,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { normalizeChannel } from "../endpoints/endpoint.js";
 
 /** A message accepted for delivery. Immutable once created. */
 export interface Message {
@@ -33,6 +34,12 @@ export interface Message {
   readonly eventType: string;
   /** The exact serialized body to be signed and delivered, byte-for-byte. */
   readonly payload: string;
+  /**
+   * Channel tag for this message. `null` = untagged; only global (null-channel)
+   * endpoints receive it. A string scopes delivery to matching-channel endpoints
+   * plus all global endpoints.
+   */
+  readonly channel: string | null;
   /** Creation time, epoch ms. */
   readonly createdAt: number;
 }
@@ -52,6 +59,11 @@ export interface NewMessage {
   readonly eventType: string;
   /** The exact serialized body to deliver. */
   readonly payload: string;
+  /**
+   * Optional channel tag. `null` (or absent) = untagged. A string scopes
+   * delivery to matching-channel and global endpoints only.
+   */
+  readonly channel?: string | null;
 }
 
 /** The outcome of {@link MessageStore.create}. */
@@ -268,6 +280,7 @@ export interface NormalizedNewMessage {
   readonly eventType: string;
   readonly payload: string;
   readonly idempotencyKey: string | null;
+  readonly channel: string | null;
 }
 
 /**
@@ -296,7 +309,8 @@ export function normalizeNewMessage(input: NewMessage): NormalizedNewMessage {
       "idempotencyKey must be a non-empty string when provided",
     );
   }
-  return { appId, eventType, payload, idempotencyKey };
+  const channel = normalizeChannel("channel" in input ? input.channel : undefined);
+  return { appId, eventType, payload, idempotencyKey, channel };
 }
 
 /**
@@ -345,6 +359,12 @@ export interface ListMessagesOptions {
    * `null` or omitting the field means no filter — all event types are included.
    */
   readonly eventType?: string | null;
+  /**
+   * When set, only messages whose `channel` equals this value are returned.
+   * Pass `null` explicitly to return only untagged (null-channel) messages.
+   * Omitting the field entirely means no channel filter — all channels are included.
+   */
+  readonly channel?: string | null;
 }
 
 /** One page of {@link MessageStore.listByApp}, newest-first, plus the next cursor. */
@@ -407,7 +427,7 @@ export function decodeMessageCursor(cursor: string): MessageCursor {
  */
 export function resolveListMessagesQuery(
   options: ListMessagesOptions = {},
-): { limit: number; cursor: MessageCursor | null; eventType: string | null } {
+): { limit: number; cursor: MessageCursor | null; eventType: string | null; channel: string | null | undefined } {
   const limit = options.limit ?? DEFAULT_LIST_MESSAGES_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_MESSAGES_LIMIT) {
     throw new RangeError(
@@ -422,7 +442,9 @@ export function resolveListMessagesQuery(
     options.eventType === undefined || options.eventType === null || options.eventType === ""
       ? null
       : options.eventType;
-  return { limit, cursor, eventType };
+  // channel: undefined means "no filter"; null means "only null-channel messages"; string = exact match
+  const channel = "channel" in options ? options.channel ?? null : undefined;
+  return { limit, cursor, eventType, channel };
 }
 
 /**

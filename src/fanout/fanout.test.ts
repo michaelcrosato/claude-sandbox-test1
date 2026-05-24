@@ -30,6 +30,7 @@ function endpoint(overrides: Partial<Endpoint>): Endpoint {
     headers: null,
     retryPolicy: null,
     filter: null,
+    channel: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,
@@ -91,6 +92,7 @@ describe("selectFanoutTargets", () => {
       matched: [],
       skippedDisabled: [],
       skippedUnsubscribed: [],
+      skippedChannel: [],
       skippedFiltered: [],
     });
   });
@@ -101,7 +103,7 @@ describe("selectFanoutTargets", () => {
       filter: { op: "eq", path: "env", value: "prod" },
     });
     const unfiltered = endpoint({ id: "ep_b" });
-    const sel = selectFanoutTargets([filtered, unfiltered], "user.created", { env: "staging" });
+    const sel = selectFanoutTargets([filtered, unfiltered], "user.created", null, { env: "staging" });
     expect(sel.matched.map((e) => e.id)).toEqual(["ep_b"]);
     expect(sel.skippedFiltered.map((e) => e.id)).toEqual(["ep_a"]);
     expect(sel.skippedDisabled).toEqual([]);
@@ -112,16 +114,68 @@ describe("selectFanoutTargets", () => {
     const filtered = endpoint({
       filter: { op: "eq", path: "env", value: "prod" },
     });
-    const sel = selectFanoutTargets([filtered], "user.created", { env: "prod" });
+    const sel = selectFanoutTargets([filtered], "user.created", null, { env: "prod" });
     expect(sel.matched).toEqual([filtered]);
     expect(sel.skippedFiltered).toEqual([]);
   });
 
   it("disabled takes priority over filter mismatch", () => {
     const ep = endpoint({ disabled: true, filter: { op: "eq", path: "env", value: "prod" } });
-    const sel = selectFanoutTargets([ep], "user.created", { env: "staging" });
+    const sel = selectFanoutTargets([ep], "user.created", null, { env: "staging" });
     expect(sel.skippedDisabled).toEqual([ep]);
     expect(sel.skippedFiltered).toEqual([]);
+  });
+
+  // Channel routing tests
+  it("global endpoint (channel=null) matches a message with any channel", () => {
+    const ep = endpoint({ channel: null });
+    const sel = selectFanoutTargets([ep], "user.created", "acme");
+    expect(sel.matched).toEqual([ep]);
+    expect(sel.skippedChannel).toEqual([]);
+  });
+
+  it("global endpoint (channel=null) matches an untagged message (channel=null)", () => {
+    const ep = endpoint({ channel: null });
+    const sel = selectFanoutTargets([ep], "user.created", null);
+    expect(sel.matched).toEqual([ep]);
+    expect(sel.skippedChannel).toEqual([]);
+  });
+
+  it("scoped endpoint skips an untagged message (channel=null)", () => {
+    const ep = endpoint({ channel: "acme" });
+    const sel = selectFanoutTargets([ep], "user.created", null);
+    expect(sel.matched).toEqual([]);
+    expect(sel.skippedChannel).toEqual([ep]);
+  });
+
+  it("scoped endpoint matches a message with the same channel", () => {
+    const ep = endpoint({ channel: "acme" });
+    const sel = selectFanoutTargets([ep], "user.created", "acme");
+    expect(sel.matched).toEqual([ep]);
+    expect(sel.skippedChannel).toEqual([]);
+  });
+
+  it("scoped endpoint skips a message with a different channel", () => {
+    const epA = endpoint({ id: "ep_a", channel: "acme" });
+    const epB = endpoint({ id: "ep_b", channel: "beta" });
+    const global = endpoint({ id: "ep_g", channel: null });
+    const sel = selectFanoutTargets([epA, epB, global], "user.created", "acme");
+    expect(sel.matched.map((e) => e.id)).toEqual(["ep_a", "ep_g"]);
+    expect(sel.skippedChannel.map((e) => e.id)).toEqual(["ep_b"]);
+  });
+
+  it("disabled takes priority over channel mismatch", () => {
+    const ep = endpoint({ disabled: true, channel: "acme" });
+    const sel = selectFanoutTargets([ep], "user.created", "other");
+    expect(sel.skippedDisabled).toEqual([ep]);
+    expect(sel.skippedChannel).toEqual([]);
+  });
+
+  it("unsubscribed takes priority over channel mismatch", () => {
+    const ep = endpoint({ eventTypes: ["order.paid"], channel: "acme" });
+    const sel = selectFanoutTargets([ep], "user.created", "other");
+    expect(sel.skippedUnsubscribed).toEqual([ep]);
+    expect(sel.skippedChannel).toEqual([]);
   });
 });
 
@@ -155,7 +209,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://d.test/h", disabled: true }); // disabled
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
 
@@ -180,7 +234,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ disabled: true });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(0);
@@ -196,7 +250,7 @@ describe("fanOut", () => {
     await env.endpoints.create({ appId: "app_2", url: "https://other.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}" },
+      { id: "msg_1", appId: APP, eventType: "user.created", payload: "{}", channel: null },
       { endpoints: env.endpoints, queue: env.queue },
     );
     expect(result.matched).toBe(1);
@@ -210,7 +264,7 @@ describe("fanOut", () => {
     await env.addEndpoint({ url: "https://b.test/h" });
 
     const result = await fanOut(
-      { id: "msg_1", appId: APP, eventType: "e", payload: "{}" },
+      { id: "msg_1", appId: APP, eventType: "e", payload: "{}", channel: null },
       { endpoints: env.endpoints, queue: env.queue },
       { availableAt: 5_000 },
     );

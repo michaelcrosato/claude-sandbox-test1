@@ -96,7 +96,7 @@ export class InMemoryMessageStore implements MessageStore {
   }
 
   async create(input: NewMessage): Promise<CreateMessageResult> {
-    const { appId, eventType, payload, idempotencyKey: key } =
+    const { appId, eventType, payload, idempotencyKey: key, channel } =
       normalizeNewMessage(input);
 
     const nowMs = this.#now();
@@ -138,6 +138,7 @@ export class InMemoryMessageStore implements MessageStore {
       idempotencyKey: key,
       eventType,
       payload,
+      channel,
       createdAt: nowMs,
     };
     this.#messages.set(id, message);
@@ -184,12 +185,16 @@ export class InMemoryMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor, eventType } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
     // Sort by the shared newest-first comparator (not insertion order) so this
     // matches the SQLite backend exactly, including the id tiebreak when several
     // messages share a createdAt. #messages is never pruned, so this is total.
     const ordered = [...this.#messages.values()]
-      .filter((m) => m.appId === appId && (eventType === null || m.eventType === eventType))
+      .filter((m) =>
+        m.appId === appId &&
+        (eventType === null || m.eventType === eventType) &&
+        (channel === undefined || m.channel === channel)
+      )
       .sort(compareMessagesNewestFirst);
     const after =
       cursor === null
