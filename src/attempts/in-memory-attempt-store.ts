@@ -85,6 +85,24 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
     };
   }
 
+  async listByTask(taskId: string, options: ListAttemptsOptions = {}): Promise<AttemptPage> {
+    const { limit, cursor } = resolveListAttemptsQuery(options);
+    let candidates: DeliveryAttempt[] = [];
+    for (const attempt of this.#attempts.values()) {
+      if (attempt.taskId === taskId) candidates.push(attempt);
+    }
+    candidates.sort(compareAttemptsOldestFirst);
+    if (cursor !== null) {
+      candidates = candidates.filter((a) => isAttemptAfterCursor(a, cursor));
+    }
+    const hasMore = candidates.length > limit;
+    const page = candidates.slice(0, limit);
+    return {
+      data: page,
+      nextCursor: hasMore ? encodeAttemptCursor(page[page.length - 1]!) : null,
+    };
+  }
+
   async pruneOldAttempts(olderThanMs: number): Promise<number> {
     let deleted = 0;
     for (const [id, attempt] of this.#attempts) {

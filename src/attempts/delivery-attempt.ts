@@ -157,6 +157,15 @@ export interface DeliveryAttemptStore {
    */
   listByMessage(messageId: string, options?: ListAttemptsOptions): Promise<AttemptPage>;
   /**
+   * List attempts for `taskId` (a single `(message, endpoint)` delivery),
+   * **oldest-first** (`attemptedAt ASC, id ASC`), one page at a time. Returns an
+   * empty `data` array when the task has no recorded attempts or the id is
+   * unknown/empty. Keyset-paginated via the same cursor contract as
+   * {@link listByMessage}. This is the data primitive behind
+   * `GET /v1/deliveries/:id/attempts`.
+   */
+  listByTask(taskId: string, options?: ListAttemptsOptions): Promise<AttemptPage>;
+  /**
    * Delete delivery attempts whose `attemptedAt` is older than `olderThanMs` (epoch
    * ms). Returns the count of attempts deleted. Called by the data pruner when
    * `POSTHORN_RETENTION_DAYS` is set; the audit log is append-only during normal

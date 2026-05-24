@@ -311,6 +311,78 @@ export function describeDeliveryAttemptStoreContract(
       });
     });
 
+    describe("listByTask", () => {
+      it("returns an empty page for a task with no attempts", async () => {
+        const page = await store.listByTask("dtask_unknown");
+        expect(page.data).toEqual([]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("lists attempts oldest-first, scoped to that task, isolated from other tasks", async () => {
+        // Two tasks interleaved — one message, two endpoints.
+        const t1a1 = await store.record(
+          attemptInput({ taskId: "dtask_A", messageId: "msg_1", attemptNumber: 1, attemptedAt: 100 }),
+        );
+        const t2a1 = await store.record(
+          attemptInput({ taskId: "dtask_B", messageId: "msg_1", attemptNumber: 1, attemptedAt: 110 }),
+        );
+        const t1a2 = await store.record(
+          attemptInput({
+            taskId: "dtask_A",
+            messageId: "msg_1",
+            attemptNumber: 2,
+            outcome: "failed",
+            responseStatus: 500,
+            error: "boom",
+            attemptedAt: 200,
+          }),
+        );
+
+        const pageA = await store.listByTask("dtask_A");
+        expect(pageA.data.map((a) => a.id)).toEqual([t1a1.id, t1a2.id]);
+        expect(pageA.data.every((a) => a.taskId === "dtask_A")).toBe(true);
+        expect(pageA.nextCursor).toBeNull();
+
+        const pageB = await store.listByTask("dtask_B");
+        expect(pageB.data.map((a) => a.id)).toEqual([t2a1.id]);
+        expect(pageB.nextCursor).toBeNull();
+      });
+
+      it("paginates forward through a task's attempts (limit=2)", async () => {
+        for (let i = 1; i <= 3; i++) {
+          await store.record(attemptInput({ taskId: "dtask_P", messageId: "msg_p", attemptNumber: i, attemptedAt: i * 1_000 }));
+        }
+        const page1 = await store.listByTask("dtask_P", { limit: 2 });
+        expect(page1.data).toHaveLength(2);
+        expect(page1.data[0]!.attemptNumber).toBe(1);
+        expect(page1.data[1]!.attemptNumber).toBe(2);
+        expect(page1.nextCursor).not.toBeNull();
+
+        const page2 = await store.listByTask("dtask_P", { limit: 2, cursor: page1.nextCursor });
+        expect(page2.data).toHaveLength(1);
+        expect(page2.data[0]!.attemptNumber).toBe(3);
+        expect(page2.nextCursor).toBeNull();
+      });
+
+      it("nextCursor is null when all attempts fit on one page", async () => {
+        await store.record(attemptInput({ taskId: "dtask_Q", messageId: "msg_q", attemptNumber: 1, attemptedAt: 1_000 }));
+        await store.record(attemptInput({ taskId: "dtask_Q", messageId: "msg_q", attemptNumber: 2, attemptedAt: 2_000 }));
+        const page = await store.listByTask("dtask_Q", { limit: 5 });
+        expect(page.data).toHaveLength(2);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("rejects a limit of 0 with a RangeError", async () => {
+        await expect(store.listByTask("dtask_any", { limit: 0 })).rejects.toThrow(RangeError);
+      });
+
+      it("rejects a malformed cursor with a TypeError", async () => {
+        await expect(
+          store.listByTask("dtask_any", { cursor: "not-valid-base64url!!" }),
+        ).rejects.toThrow(TypeError);
+      });
+    });
+
     describe("summarizeAttemptsByApp", () => {
       const DAY_A = Date.UTC(2023, 10, 14); // 2023-11-14T00:00:00Z
       const DAY_B = Date.UTC(2023, 10, 15); // 2023-11-15T00:00:00Z

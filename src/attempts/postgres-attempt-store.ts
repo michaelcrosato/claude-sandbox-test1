@@ -137,6 +137,36 @@ export class PostgresDeliveryAttemptStore implements DeliveryAttemptStore {
     };
   }
 
+  async listByTask(taskId: string, options: ListAttemptsOptions = {}): Promise<AttemptPage> {
+    const { limit, cursor } = resolveListAttemptsQuery(options);
+    const fetchLimit = limit + 1;
+    let rows: AttemptRow[];
+    if (cursor === null) {
+      ({ rows } = await this.#pool.query<AttemptRow>(
+        "SELECT * FROM delivery_attempts WHERE task_id = $1" +
+          " ORDER BY attempted_at ASC, id ASC LIMIT $2",
+        [taskId, fetchLimit],
+      ));
+    } else {
+      ({ rows } = await this.#pool.query<AttemptRow>(
+        "SELECT * FROM delivery_attempts WHERE task_id = $1" +
+          " AND (attempted_at > $2 OR (attempted_at = $3 AND id > $4))" +
+          " ORDER BY attempted_at ASC, id ASC LIMIT $5",
+        [taskId, cursor.attemptedAt, cursor.attemptedAt, cursor.id, fetchLimit],
+      ));
+    }
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit).map(rowToAttempt);
+    const last = page[page.length - 1];
+    return {
+      data: page,
+      nextCursor:
+        hasMore && last !== undefined
+          ? encodeAttemptCursor({ attemptedAt: last.attemptedAt, id: last.id })
+          : null,
+    };
+  }
+
   async summarizeAttemptsByApp(
     appId: string,
     range: UsageRange,
@@ -248,6 +278,9 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
 const INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_delivery_attempts_message_paged
   ON delivery_attempts (message_id, attempted_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_task_paged
+  ON delivery_attempts (task_id, attempted_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_attempts_app
   ON delivery_attempts (app_id, attempted_at)

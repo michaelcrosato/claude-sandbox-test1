@@ -674,6 +674,78 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/deliveries/{id}": {
+        get: {
+          operationId: "getDelivery",
+          tags: ["Deliveries"],
+          summary: "Fetch a single delivery by ID",
+          description:
+            "Retrieve the current state of one `(message, endpoint)` delivery task by its " +
+            "ID. Returns the same shape as a row in `GET /v1/deliveries` — status, attempts, " +
+            "nextAttemptAt, lastError, messageId, and endpointId — letting you navigate to " +
+            "the full message or endpoint detail. Another tenant's (or unknown) delivery is " +
+            "`404`.",
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+              description: "The delivery task ID.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse("The delivery task.", ref("AppDelivery")),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("Delivery not found or belongs to another tenant."),
+          },
+        },
+      },
+      "/v1/deliveries/{id}/attempts": {
+        get: {
+          operationId: "listDeliveryAttempts",
+          tags: ["Deliveries"],
+          summary: "List attempts for a delivery",
+          description:
+            "Fetch the per-attempt HTTP history for a single delivery task — " +
+            "the same records surfaced by `GET /v1/messages/{id}/attempts` but scoped " +
+            "to one `(message, endpoint)` pair rather than all endpoints for a message. " +
+            "Each entry records the HTTP status, response body (up to 4 KB), error, " +
+            "and latency so you can diagnose exactly which attempt failed and why. " +
+            "Oldest-first. Keyset-paginated: pass `nextCursor` as `?cursor=`.",
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+              description: "The delivery task ID.",
+            },
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              schema: { type: "integer", minimum: 1, maximum: MAX_LIST_ATTEMPTS_LIMIT },
+              description: `Page size, 1–${MAX_LIST_ATTEMPTS_LIMIT}. Defaults to 50.`,
+            },
+            {
+              name: "cursor",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+              description: "Opaque cursor from a prior page's `nextCursor`.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse("A page of delivery attempts, oldest-first.", ref("DeliveryAttemptList")),
+            "400": errorResponse("Malformed `?limit=` or `?cursor=` parameter."),
+            "401": errorResponse("Missing or invalid API key."),
+            "404": errorResponse("Delivery not found or belongs to another tenant."),
+          },
+        },
+      },
       "/v1/deliveries/retry": {
         post: {
           operationId: "retryAllDeliveries",

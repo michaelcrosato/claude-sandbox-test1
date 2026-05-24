@@ -824,6 +824,8 @@ export const API_ROUTE_KEYS = [
   "POST /v1/endpoints/:id/deliveries/retry",
   "GET /v1/endpoints/:id/stats",
   "GET /v1/deliveries",
+  "GET /v1/deliveries/:id",
+  "GET /v1/deliveries/:id/attempts",
   "POST /v1/deliveries/retry",
   "GET /v1/usage",
   "POST /v1/portal/sessions",
@@ -1441,6 +1443,27 @@ export function createApi(deps: ApiDeps): ApiHandler {
     });
   };
 
+  const getDelivery: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const task = await deps.queue.get(id);
+    // Tenancy from the key; another tenant's (or absent) delivery is 404 — existence
+    // is never revealed, consistent with all other tenant-scoped resource routes.
+    if (task === null || task.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no delivery with id "${id}"`);
+    }
+    return json(200, endpointDeliveryView(task));
+  };
+
+  const listDeliveryAttempts: AuthedHandler = async (ctx) => {
+    const id = requireParam(ctx.params, "id");
+    const task = await deps.queue.get(id);
+    if (task === null || task.appId !== ctx.app.id) {
+      throw new HttpError(404, "not_found", `no delivery with id "${id}"`);
+    }
+    const page = await deps.attempts.listByTask(id, parseListAttemptsParams(ctx.req.query));
+    return json(200, { data: page.data.map(attemptView), nextCursor: page.nextCursor });
+  };
+
   const retryAllDeliveries: AuthedHandler = async (ctx) => {
     const result: BulkRetryResult = await retryAppDeliveries(ctx.app.id, {
       queue: deps.queue,
@@ -1746,6 +1769,8 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "POST /v1/endpoints/:id/deliveries/retry": authed(retryEndpointAllDeliveries),
     "GET /v1/endpoints/:id/stats": authed(getEndpointStats),
     "GET /v1/deliveries": authed(getAppDeliveries),
+    "GET /v1/deliveries/:id": authed(getDelivery),
+    "GET /v1/deliveries/:id/attempts": authed(listDeliveryAttempts),
     "POST /v1/deliveries/retry": authed(retryAllDeliveries),
     "GET /v1/usage": authed(getUsage),
     "POST /v1/portal/sessions": authed(createPortalSession),

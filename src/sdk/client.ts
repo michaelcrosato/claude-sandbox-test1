@@ -1028,6 +1028,39 @@ export class PosthornClient {
   }
 
   /**
+   * Fetch a single delivery by ID — `GET /v1/deliveries/:id`. Returns the current
+   * state of the `(message, endpoint)` delivery: status, attempts, next-retry time,
+   * last error, `messageId`, and `endpointId`. Another tenant's (or unknown) delivery
+   * is a `404` {@link PosthornApiError}.
+   */
+  async getDelivery(id: string): Promise<AppDeliveryView> {
+    return this.#transport.request<AppDeliveryView>(
+      "GET",
+      `/v1/deliveries/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * List the attempt history for a single delivery — `GET /v1/deliveries/:id/attempts`.
+   * Returns the same per-attempt records as {@link listMessageAttempts} but scoped to
+   * one `(message, endpoint)` pair. Oldest-first, keyset-paginated: pass
+   * {@link AttemptListPage.nextCursor} back as `cursor` (`null` = last page).
+   */
+  async listDeliveryAttempts(
+    id: string,
+    params: ListAttemptsParams = {},
+  ): Promise<AttemptListPage> {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.cursor !== undefined && params.cursor !== null) query.set("cursor", params.cursor);
+    const qs = query.toString();
+    return this.#transport.request<AttemptListPage>(
+      "GET",
+      `/v1/deliveries/${encodeURIComponent(id)}/attempts${qs.length > 0 ? `?${qs}` : ""}`,
+    );
+  }
+
+  /**
    * Read your own message usage and current-month quota status — `GET /v1/usage`.
    * Defaults to the current UTC month; pass `{ from, to }` (inclusive `YYYY-MM-DD`
    * UTC days) to pull a historical window. The returned {@link TenantUsage.quota}

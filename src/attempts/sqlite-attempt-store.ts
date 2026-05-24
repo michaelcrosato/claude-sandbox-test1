@@ -107,6 +107,10 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
    *  ORDER BY attempted_at ASC, id ASC LIMIT ?`
    */
   readonly #selectByMessageAfter: StatementSync;
+  /** First page for listByTask — same structure but keyed on task_id. */
+  readonly #selectByTaskFirst: StatementSync;
+  /** Subsequent pages for listByTask — same keyset predicate but keyed on task_id. */
+  readonly #selectByTaskAfter: StatementSync;
   readonly #countAll: StatementSync;
   readonly #summarizeByApp: StatementSync;
   readonly #statsByEndpoint: StatementSync;
@@ -134,6 +138,12 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
       "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_endpoint" +
         " ON delivery_attempts (endpoint_id, attempted_at)",
     );
+    // Covering index for paginated per-task reads (listByTask); mirrors the
+    // per-message index structure so pagination cost is identical.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_attempts_task_paged" +
+        " ON delivery_attempts (task_id, attempted_at, id)",
+    );
 
     this.#insert = this.#db.prepare(
       `INSERT INTO delivery_attempts
@@ -154,6 +164,18 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#selectByMessageAfter = this.#db.prepare(
       "SELECT * FROM delivery_attempts" +
         " WHERE message_id = ?" +
+        " AND (attempted_at > ? OR (attempted_at = ? AND id > ?))" +
+        " ORDER BY attempted_at ASC, id ASC LIMIT ?",
+    );
+    // Per-task pagination — structurally identical to per-message but keyed on task_id.
+    this.#selectByTaskFirst = this.#db.prepare(
+      "SELECT * FROM delivery_attempts" +
+        " WHERE task_id = ?" +
+        " ORDER BY attempted_at ASC, id ASC LIMIT ?",
+    );
+    this.#selectByTaskAfter = this.#db.prepare(
+      "SELECT * FROM delivery_attempts" +
+        " WHERE task_id = ?" +
         " AND (attempted_at > ? OR (attempted_at = ? AND id > ?))" +
         " ORDER BY attempted_at ASC, id ASC LIMIT ?",
     );
@@ -285,6 +307,32 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     }
     return this.#selectByMessageAfter.all(
       messageId,
+      cursor.attemptedAt,
+      cursor.attemptedAt,
+      cursor.id,
+      limit,
+    ) as unknown as AttemptRow[];
+  }
+
+  async listByTask(taskId: string, options: ListAttemptsOptions = {}): Promise<AttemptPage> {
+    const { limit, cursor } = resolveListAttemptsQuery(options);
+    const rows = this.#fetchTaskPage(taskId, cursor, limit + 1);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    return {
+      data: page.map(rowToAttempt),
+      nextCursor: hasMore
+        ? encodeAttemptCursor({ attemptedAt: Number(page[page.length - 1]!.attempted_at), id: page[page.length - 1]!.id })
+        : null,
+    };
+  }
+
+  #fetchTaskPage(taskId: string, cursor: AttemptCursor | null, limit: number): AttemptRow[] {
+    if (cursor === null) {
+      return this.#selectByTaskFirst.all(taskId, limit) as unknown as AttemptRow[];
+    }
+    return this.#selectByTaskAfter.all(
+      taskId,
       cursor.attemptedAt,
       cursor.attemptedAt,
       cursor.id,

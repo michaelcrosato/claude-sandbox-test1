@@ -3634,3 +3634,155 @@ describe("createApi — POST /v1/messages/batch", () => {
     expect((results[1] as any).ok).toBe(true);
   });
 });
+
+describe("createApi — GET /v1/deliveries/:id (fetch single delivery)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/deliveries/dtask_1" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown delivery id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries/dtask_unknown",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("returns 404 for another tenant's delivery", async () => {
+    const { api, apps, endpoints, messages, queue, attempts } = await setup();
+    const eventTypes = new InMemoryEventTypeStore();
+    // Tenant B's API talks to the same stores.
+    const appB = await apps.create({ name: "B" });
+    const bKey = (await apps.createApiKey(appB.id)).secret;
+    const apiB = createApi({ apps, endpoints, messages, queue, attempts, eventTypes });
+
+    // Tenant A registers an endpoint and sends a message to create a delivery.
+    const { secret: aKey } = await apps.createApiKey((await apps.create({ name: "A" })).id);
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, aKey));
+    const msgRes = await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, aKey));
+    const msgId: string = body(msgRes).message.id;
+    const tasks = await queue.listByMessage(msgId);
+    const taskId = tasks[0]!.id;
+
+    // Tenant B cannot see tenant A's delivery.
+    const res = await apiB(
+      request({
+        method: "GET",
+        path: `/v1/deliveries/${taskId}`,
+        headers: { authorization: `Bearer ${bKey}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns the delivery with status and messageId fields", async () => {
+    const { api, secret, queue } = await setup();
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret));
+    const msgRes = await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+    const msgId: string = body(msgRes).message.id;
+    const tasks = await queue.listByMessage(msgId);
+    const taskId = tasks[0]!.id;
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/deliveries/${taskId}`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const d = body(res) as Record<string, unknown>;
+    expect(d["id"]).toBe(taskId);
+    expect(d["messageId"]).toBe(msgId);
+    expect(d["status"]).toBe("pending");
+    expect(d).toHaveProperty("attempts");
+    expect(d).toHaveProperty("endpointId");
+    expect(d).not.toHaveProperty("leaseToken");
+    expect(d).not.toHaveProperty("leaseExpiresAt");
+  });
+});
+
+describe("createApi — GET /v1/deliveries/:id/attempts (delivery attempt history)", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/v1/deliveries/dtask_1/attempts" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 for an unknown delivery id", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries/dtask_unknown/attempts",
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns an empty page when the delivery has no recorded attempts", async () => {
+    const { api, secret, queue } = await setup();
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret));
+    const msgRes = await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+    const tasks = await queue.listByMessage(body(msgRes).message.id as string);
+    const taskId = tasks[0]!.id;
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/deliveries/${taskId}/attempts`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).data).toEqual([]);
+    expect(body(res).nextCursor).toBeNull();
+  });
+
+  it("returns recorded attempts for the delivery, scoped to that task", async () => {
+    const { api, secret, queue, attempts, endpoints } = await setup();
+    const epRes = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret));
+    const epId: string = body(epRes).id;
+    const msgRes = await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+    const msgId: string = body(msgRes).message.id;
+    const tasks = await queue.listByMessage(msgId);
+    const taskId = tasks[0]!.id;
+
+    // Record an attempt directly on the store.
+    await attempts.record({
+      taskId,
+      messageId: msgId,
+      appId: body(epRes).appId as string ?? null,
+      endpointId: epId,
+      attemptNumber: 1,
+      outcome: "failed",
+      responseStatus: 503,
+      error: "Service Unavailable",
+      durationMs: 120,
+      attemptedAt: Date.now(),
+    });
+
+    const res = await api(
+      request({
+        method: "GET",
+        path: `/v1/deliveries/${taskId}/attempts`,
+        headers: { authorization: `Bearer ${secret}` },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const data = body(res).data as Record<string, unknown>[];
+    expect(data).toHaveLength(1);
+    expect(data[0]!["taskId"]).toBe(taskId);
+    expect(data[0]!["outcome"]).toBe("failed");
+    expect(data[0]!["responseStatus"]).toBe(503);
+    expect(body(res).nextCursor).toBeNull();
+  });
+});

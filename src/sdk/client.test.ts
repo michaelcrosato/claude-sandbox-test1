@@ -1068,4 +1068,64 @@ describe("PosthornClient — testEndpoint", () => {
     expect(parsed).not.toHaveProperty("eventType");
     expect(parsed).not.toHaveProperty("payload");
   });
+
+  it("getDelivery GETs /v1/deliveries/{id} and returns the delivery", async () => {
+    let seenUrl = "";
+    let seenMethod = "";
+    const deliveryPayload = {
+      id: "dtask_1",
+      messageId: "msg_1",
+      endpointId: "ep_1",
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: null,
+      lastError: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    };
+    const client = fakeClient((url, init) => {
+      seenUrl = url;
+      seenMethod = init.method;
+      return Promise.resolve(fakeResponse(200, JSON.stringify(deliveryPayload)));
+    });
+    const res = await client.getDelivery("dtask_1");
+    expect(seenMethod).toBe("GET");
+    expect(seenUrl.endsWith("/v1/deliveries/dtask_1")).toBe(true);
+    expect(res.id).toBe("dtask_1");
+    expect(res.messageId).toBe("msg_1");
+    expect(res.status).toBe("pending");
+  });
+
+  it("getDelivery URL-encodes the delivery id", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(fakeResponse(200, JSON.stringify({ id: "dtask_x/y", messageId: "m", endpointId: null, status: "pending", attempts: 0, nextAttemptAt: null, lastError: null, createdAt: 0, updatedAt: 0 })));
+    });
+    await client.getDelivery("dtask_x/y");
+    expect(seenUrl).toContain("/v1/deliveries/dtask_x%2Fy");
+  });
+
+  it("listDeliveryAttempts GETs /v1/deliveries/{id}/attempts and returns the page", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })));
+    });
+    const res = await client.listDeliveryAttempts("dtask_1");
+    expect(seenUrl.endsWith("/v1/deliveries/dtask_1/attempts")).toBe(true);
+    expect(res.data).toEqual([]);
+    expect(res.nextCursor).toBeNull();
+  });
+
+  it("listDeliveryAttempts includes limit and cursor in the query string", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })));
+    });
+    await client.listDeliveryAttempts("dtask_1", { limit: 10, cursor: "c/3" });
+    expect(seenUrl).toContain("limit=10");
+    expect(seenUrl).toContain("cursor=c%2F3");
+  });
 });
