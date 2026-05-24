@@ -46,6 +46,7 @@ export function endpointToDeliveryTarget(
     ...(additionalSecrets.length > 0 ? { additionalSecrets } : {}),
     ...(endpoint.headers ? { headers: endpoint.headers } : {}),
     ...(endpoint.retryPolicy !== null ? { retryPolicy: endpoint.retryPolicy } : {}),
+    ...(endpoint.rateLimit !== null ? { rateLimit: endpoint.rateLimit } : {}),
   };
 }
 

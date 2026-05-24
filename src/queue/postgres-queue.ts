@@ -15,6 +15,7 @@ import {
   applyClaim,
   applyFailure,
   applyManualRetry,
+  applyPostpone,
   applySuccess,
   assertValidVisibilityTimeout,
   createLeaseToken,
@@ -289,6 +290,28 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
       }
       // applyCancel throws DeliveryStateError if the task is not pending.
       const next = applyCancel(rowToTask(row), this.#now());
+      await this.#persist(client, next);
+      await client.query("COMMIT");
+      return next;
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch { /* already aborted */ }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async postpone(
+    taskId: string,
+    leaseToken: string,
+    availableAt: number,
+    nowMs: number,
+  ): Promise<DeliveryTask> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const task = await this.#requireLeaseHolder(client, taskId, leaseToken);
+      const next = applyPostpone(task, availableAt, nowMs);
       await this.#persist(client, next);
       await client.query("COMMIT");
       return next;

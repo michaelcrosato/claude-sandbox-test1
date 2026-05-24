@@ -154,6 +154,14 @@ export interface Endpoint {
    */
   readonly channel: string | null;
   /**
+   * Maximum deliveries per minute to this endpoint, or `null` for no limit. When
+   * the rate is exceeded during a delivery tick the task is rescheduled
+   * (without consuming a retry attempt) so the backlog drains at the configured
+   * rate. Useful during high-volume replays or when a slow receiver has a strict
+   * inbound rate limit. Must be a positive integer ≤ {@link MAX_RATE_LIMIT}.
+   */
+  readonly rateLimit: number | null;
+  /**
    * When `true`, the endpoint is administratively paused. Fan-out skips it, and a
    * resolver declines to resolve it (so an in-flight task fails rather than
    * delivers — see `endpoint-resolver.ts`).
@@ -226,6 +234,11 @@ export interface NewEndpoint {
    * the same channel.
    */
   readonly channel?: string | null;
+  /**
+   * Maximum deliveries per minute. Omit (or pass `null`) for no limit.
+   * Must be a positive integer ≤ {@link MAX_RATE_LIMIT}.
+   */
+  readonly rateLimit?: number | null;
 }
 
 /**
@@ -264,6 +277,11 @@ export interface EndpointUpdate {
    * Replace the channel scope. Pass `null` to make the endpoint global again.
    */
   readonly channel?: string | null;
+  /**
+   * Replace the per-minute delivery rate limit. Pass `null` to remove the limit.
+   * Must be a positive integer ≤ {@link MAX_RATE_LIMIT}.
+   */
+  readonly rateLimit?: number | null;
 }
 
 /**
@@ -367,6 +385,30 @@ export const MAX_CUSTOM_HEADERS = 20;
 
 /** Maximum length of a channel string. */
 export const MAX_CHANNEL_LENGTH = 200;
+
+/**
+ * Maximum per-minute delivery rate for a rate-limited endpoint. A value above
+ * this would be functionally unlimited (the delivery worker never fires more
+ * than {@link DEFAULT_CLAIM_LIMIT} × ticks/s per endpoint anyway), so values
+ * above it are rejected as likely mis-configurations.
+ */
+export const MAX_RATE_LIMIT = 10_000;
+
+/**
+ * Validate and normalize a rate limit value. Returns `null` for absent/null input
+ * (no rate limit). Throws {@link TypeError} on a non-number or non-integer value,
+ * and {@link RangeError} when outside `[1, MAX_RATE_LIMIT]`.
+ */
+export function normalizeRateLimit(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "number" || !Number.isInteger(v)) {
+    throw new TypeError("rateLimit must be a positive integer or null");
+  }
+  if (v < 1 || v > MAX_RATE_LIMIT) {
+    throw new RangeError(`rateLimit must be between 1 and ${MAX_RATE_LIMIT}`);
+  }
+  return v;
+}
 
 /**
  * Validate and normalize a channel value. Returns `null` for absent/null input
@@ -543,6 +585,7 @@ export interface NormalizedNewEndpoint {
   readonly retryPolicy: RetryPolicy | null;
   readonly filter: EndpointFilter | null;
   readonly channel: string | null;
+  readonly rateLimit: number | null;
 }
 
 /**
@@ -843,6 +886,7 @@ export function normalizeNewEndpoint(input: NewEndpoint): NormalizedNewEndpoint 
     retryPolicy: normalizeRetryPolicy(input.retryPolicy),
     filter: normalizeEndpointFilter(input.filter),
     channel: normalizeChannel(input.channel),
+    rateLimit: normalizeRateLimit(input.rateLimit),
   };
 }
 
@@ -893,6 +937,10 @@ export function applyEndpointUpdate(
       "channel" in patch
         ? normalizeChannel(patch.channel)
         : current.channel,
+    rateLimit:
+      "rateLimit" in patch
+        ? normalizeRateLimit(patch.rateLimit)
+        : current.rateLimit,
     disabled: nextDisabled,
     consecutiveFailures: reEnabled ? 0 : current.consecutiveFailures,
     firstFailureAt: reEnabled ? null : current.firstFailureAt,

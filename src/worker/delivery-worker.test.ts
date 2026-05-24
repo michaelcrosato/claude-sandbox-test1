@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DeliveryWorker,
   MAX_RETRY_AFTER_MS,
+  RATE_LIMIT_WINDOW_MS,
+  SlidingWindowRateLimiter,
   buildSignedRequest,
   isSuccessStatus,
   type DeliveryWorkerOptions,
   type EndpointResolver,
   type HttpDeliveryRequest,
   type HttpDeliveryResponse,
+  type RateLimiter,
   type TickResult,
   type Transport,
 } from "./delivery-worker.js";
@@ -255,6 +258,7 @@ describe("DeliveryWorker.processOnce", () => {
       failed: 0,
       deadLettered: 0,
       stale: 0,
+      rateLimited: 0,
     });
     expect(requests).toHaveLength(0);
   });
@@ -557,6 +561,7 @@ describe("DeliveryWorker.processOnce", () => {
       },
       retry: async () => claimedTask,
       cancel: async () => claimedTask,
+      postpone: async () => claimedTask,
       get: async () => claimedTask,
       listByMessage: async () => [claimedTask],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
@@ -1685,6 +1690,9 @@ describe("DeliveryWorker.run", () => {
       cancel: async () => {
         throw boom;
       },
+      postpone: async () => {
+        throw boom;
+      },
       get: async () => null,
       listByMessage: async () => [],
       listByEndpoint: async () => ({ deliveries: [], nextCursor: null }),
@@ -1737,5 +1745,127 @@ describe("DeliveryWorker.run", () => {
     release();
     await first;
     expect(worker.running).toBe(false);
+  });
+
+  describe("rate limiting", () => {
+    describe("SlidingWindowRateLimiter", () => {
+      it("allows deliveries below the limit", () => {
+        const rl = new SlidingWindowRateLimiter();
+        const now = 1_000_000;
+        expect(rl.tryConsume("ep1", 3, now)).toEqual({ allowed: true });
+        expect(rl.tryConsume("ep1", 3, now)).toEqual({ allowed: true });
+        expect(rl.tryConsume("ep1", 3, now)).toEqual({ allowed: true });
+      });
+
+      it("denies the delivery that would exceed the limit", () => {
+        const rl = new SlidingWindowRateLimiter();
+        const now = 1_000_000;
+        rl.tryConsume("ep1", 2, now);
+        rl.tryConsume("ep1", 2, now);
+        const result = rl.tryConsume("ep1", 2, now);
+        expect(result.allowed).toBe(false);
+        if (!result.allowed) {
+          expect(result.retryAt).toBe(now + RATE_LIMIT_WINDOW_MS);
+        }
+      });
+
+      it("allows delivery after the oldest entry ages out of the window", () => {
+        const rl = new SlidingWindowRateLimiter();
+        const t0 = 1_000_000;
+        rl.tryConsume("ep1", 2, t0);
+        rl.tryConsume("ep1", 2, t0 + 1000);
+        // At the limit; check denied.
+        expect(rl.tryConsume("ep1", 2, t0 + 2000).allowed).toBe(false);
+        // Advance past t0 + WINDOW_MS — the first entry ages out.
+        const t1 = t0 + RATE_LIMIT_WINDOW_MS + 1;
+        expect(rl.tryConsume("ep1", 2, t1)).toEqual({ allowed: true });
+      });
+
+      it("allows everything when rateLimit is null", () => {
+        const rl = new SlidingWindowRateLimiter();
+        const now = 1_000_000;
+        for (let i = 0; i < 1000; i++) {
+          expect(rl.tryConsume("ep1", null, now)).toEqual({ allowed: true });
+        }
+      });
+
+      it("tracks endpoints independently", () => {
+        const rl = new SlidingWindowRateLimiter();
+        const now = 1_000_000;
+        rl.tryConsume("ep1", 1, now);
+        // ep1 is at limit; ep2 is not.
+        expect(rl.tryConsume("ep1", 1, now).allowed).toBe(false);
+        expect(rl.tryConsume("ep2", 1, now)).toEqual({ allowed: true });
+      });
+    });
+
+    it("postpones a rate-limited task without consuming a retry attempt", async () => {
+      const env = setup();
+      const { queue } = env;
+      const { message } = await env.store.create({ appId: "a", eventType: "e", payload: "{}" });
+      const task = await queue.enqueue({ messageId: message.id, endpointId: "ep1" });
+
+      // Resolver returns a rateLimit so the guard fires.
+      const resolveEndpoint: EndpointResolver = () => ({
+        url: TARGET_URL,
+        secret: SECRET,
+        rateLimit: 10,
+      });
+
+      // Deny first call, allow subsequent (so the second tick can succeed).
+      let calls = 0;
+      const rateLimiter: RateLimiter = {
+        tryConsume: () => {
+          calls++;
+          if (calls === 1) return { allowed: false, retryAt: env.now() + 5000 };
+          return { allowed: true };
+        },
+      };
+
+      const transport = recordingTransport();
+      const worker = makeWorker(env, {
+        resolveEndpoint,
+        rateLimiter,
+        transport: transport.transport,
+      });
+
+      const tick1 = await worker.processOnce();
+      expect(tick1.rateLimited).toBe(1);
+      expect(tick1.succeeded).toBe(0);
+      expect(transport.requests).toHaveLength(0); // no HTTP call made
+
+      // Task should be back in pending with attempts still 1.
+      const current = await queue.get(task.id);
+      expect(current!.status).toBe("pending");
+      expect(current!.attempts).toBe(1);
+
+      // Advance past retryAt so it can be claimed again.
+      env.setClock(env.now() + 5001);
+      const tick2 = await worker.processOnce();
+      expect(tick2.rateLimited).toBe(0);
+      expect(tick2.succeeded).toBe(1);
+    });
+
+    it("counts rateLimited tasks in TickResult", async () => {
+      const env = setup();
+      const { queue } = env;
+      const { message } = await env.store.create({ appId: "a", eventType: "e", payload: "{}" });
+      await queue.enqueue({ messageId: message.id, endpointId: "ep_x" });
+      await queue.enqueue({ messageId: message.id, endpointId: "ep_x" });
+
+      // Resolver returns a rateLimit so the guard fires.
+      const resolveEndpoint: EndpointResolver = () => ({
+        url: TARGET_URL,
+        secret: SECRET,
+        rateLimit: 1,
+      });
+      const rateLimiter: RateLimiter = {
+        tryConsume: () => ({ allowed: false, retryAt: env.now() + 60_000 }),
+      };
+      const worker = makeWorker(env, { resolveEndpoint, rateLimiter });
+      const tick = await worker.processOnce();
+      expect(tick.rateLimited).toBe(2);
+      expect(tick.claimed).toBe(2);
+    });
   });
 });

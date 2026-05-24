@@ -597,6 +597,64 @@ export function describeDeliveryQueueContract(
       });
     });
 
+    describe("postpone (rate-limit deferral)", () => {
+      it("reschedules a delivering task to pending at the given time without incrementing attempts", async () => {
+        await queue.enqueue({ messageId: "m" });
+        const [delivering] = await queue.claimDue({ nowMs: clock.now() });
+        expect(delivering!.status).toBe("delivering");
+        expect(delivering!.attempts).toBe(1);
+
+        const retryAt = clock.now() + 30_000;
+        const postponed = await queue.postpone(
+          delivering!.id,
+          delivering!.leaseToken!,
+          retryAt,
+          clock.now(),
+        );
+        expect(postponed.status).toBe("pending");
+        expect(postponed.nextAttemptAt).toBe(retryAt);
+        expect(postponed.attempts).toBe(1); // not incremented
+        expect(postponed.leaseToken).toBeNull();
+        expect(postponed.leaseExpiresAt).toBeNull();
+        expect(postponed.updatedAt).toBe(clock.now());
+        expect(await queue.get(delivering!.id)).toEqual(postponed);
+
+        // Not claimable before retryAt.
+        const early = await queue.claimDue({ nowMs: clock.now() });
+        expect(early).toHaveLength(0);
+
+        // Claimable at retryAt.
+        clock.advance(30_000);
+        const reclaimed = await queue.claimDue({ nowMs: clock.now() });
+        expect(reclaimed).toHaveLength(1);
+        expect(reclaimed[0]!.id).toBe(delivering!.id);
+        expect(reclaimed[0]!.attempts).toBe(2); // attempt incremented on re-claim
+      });
+
+      it("throws StaleLeaseError on a wrong/expired token", async () => {
+        await queue.enqueue({ messageId: "m" });
+        const [delivering] = await queue.claimDue({ nowMs: clock.now() });
+        await expect(
+          queue.postpone(delivering!.id, "wrong-token", clock.now() + 1, clock.now()),
+        ).rejects.toBeInstanceOf(StaleLeaseError);
+        expect((await queue.get(delivering!.id))?.status).toBe("delivering");
+      });
+
+      it("throws UnknownDeliveryTaskError for an unknown id", async () => {
+        await expect(
+          queue.postpone("dtask_nope", "tok", clock.now() + 1, clock.now()),
+        ).rejects.toBeInstanceOf(UnknownDeliveryTaskError);
+      });
+
+      it("throws StaleLeaseError when called on a pending task (no active lease)", async () => {
+        // A pending task has a null lease token; any supplied token is stale.
+        const enq = await queue.enqueue({ messageId: "m" });
+        await expect(
+          queue.postpone(enq.id, "tok", clock.now() + 1, clock.now()),
+        ).rejects.toBeInstanceOf(StaleLeaseError);
+      });
+    });
+
     describe("lease expiry (crash / stall recovery)", () => {
       it("reclaims a lapsed lease with a fresh token and invalidates the old one", async () => {
         await queue.enqueue({ messageId: "m" });

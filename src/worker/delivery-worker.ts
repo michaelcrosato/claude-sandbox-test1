@@ -89,6 +89,13 @@ export interface DeliveryTarget {
    * absent, the global policy applies. See {@link import("../delivery/retry-policy.js").RetryPolicy}.
    */
   readonly retryPolicy?: RetryPolicy;
+  /**
+   * Maximum deliveries per 60-second sliding window for this endpoint. The worker
+   * checks the in-process rate limiter before each send; when the limit is reached
+   * the task is postponed (`delivering → pending`) without consuming a retry attempt
+   * and the worker returns a `"rateLimited"` outcome. `null`/absent = no limit.
+   */
+  readonly rateLimit?: number | null;
 }
 
 /**
@@ -154,7 +161,8 @@ export type TaskOutcome =
   | "succeeded"
   | "failed"
   | "deadLettered"
-  | "stale";
+  | "stale"
+  | "rateLimited";
 
 /** Aggregate result of one {@link DeliveryWorker.processOnce} tick. */
 export interface TickResult {
@@ -168,6 +176,11 @@ export interface TickResult {
   readonly deadLettered: number;
   /** Settles abandoned because the lease had lapsed and been reclaimed. */
   readonly stale: number;
+  /**
+   * Tasks deferred because the endpoint's per-minute rate limit was reached.
+   * The task is rescheduled (`pending`) without consuming a retry attempt.
+   */
+  readonly rateLimited: number;
 }
 
 /** Default per-attempt HTTP timeout: 10s. */
@@ -299,6 +312,70 @@ function parseRetryAfterMs(
   return Math.min(delayMs, MAX_RETRY_AFTER_MS);
 }
 
+/** Duration of the sliding window used by {@link SlidingWindowRateLimiter}: 60 s. */
+export const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Per-endpoint delivery rate limiter. The worker calls {@link tryConsume} once
+ * per task before the HTTP send; when rate-limited the task is postponed rather
+ * than attempted.
+ */
+export interface RateLimiter {
+  /**
+   * Try to record a delivery for `endpointId`. When `rateLimit` is `null` or
+   * `undefined` the delivery is always allowed (no tracking). Otherwise, if the
+   * count of recorded deliveries in the last {@link RATE_LIMIT_WINDOW_MS} is
+   * below `rateLimit` the delivery is recorded and `{ allowed: true }` is
+   * returned; if at or above the limit, `{ allowed: false, retryAt }` is returned
+   * where `retryAt` is the epoch-ms at which the oldest in-window entry ages out.
+   */
+  tryConsume(
+    endpointId: string,
+    rateLimit: number | null | undefined,
+    nowMs: number,
+  ): { allowed: true } | { allowed: false; retryAt: number };
+}
+
+/**
+ * In-process sliding-window rate limiter. One instance per {@link DeliveryWorker};
+ * limits are per-process, not globally coordinated. For a multi-worker Postgres
+ * deployment each worker enforces its own window independently — the effective
+ * per-endpoint throughput is up to `rateLimit × workerCount`.
+ */
+export class SlidingWindowRateLimiter implements RateLimiter {
+  readonly #windows = new Map<string, number[]>();
+
+  tryConsume(
+    endpointId: string,
+    rateLimit: number | null | undefined,
+    nowMs: number,
+  ): { allowed: true } | { allowed: false; retryAt: number } {
+    if (rateLimit == null) {
+      return { allowed: true };
+    }
+    const windowStart = nowMs - RATE_LIMIT_WINDOW_MS;
+    let timestamps = this.#windows.get(endpointId);
+    if (timestamps === undefined) {
+      timestamps = [];
+      this.#windows.set(endpointId, timestamps);
+    }
+    // Evict entries that have fallen outside the window.
+    let evict = 0;
+    while (evict < timestamps.length && timestamps[evict]! <= windowStart) {
+      evict += 1;
+    }
+    if (evict > 0) {
+      timestamps.splice(0, evict);
+    }
+    if (timestamps.length < rateLimit) {
+      timestamps.push(nowMs);
+      return { allowed: true };
+    }
+    // At or over the limit: oldest entry ages out at timestamps[0] + WINDOW_MS.
+    return { allowed: false, retryAt: timestamps[0]! + RATE_LIMIT_WINDOW_MS };
+  }
+}
+
 /** Construction options for {@link DeliveryWorker}. */
 export interface DeliveryWorkerOptions {
   /** The durable queue tasks are claimed from and settled against. */
@@ -326,6 +403,11 @@ export interface DeliveryWorkerOptions {
   readonly idlePollMs?: number;
   /** Sleep used between idle polls. Injectable for tests. Defaults to a timer sleep. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * Per-endpoint delivery rate limiter. Defaults to a {@link SlidingWindowRateLimiter}.
+   * Inject a custom implementation or a no-op for tests.
+   */
+  readonly rateLimiter?: RateLimiter;
   /**
    * Observability hook for an *unexpected* error during a tick (e.g. a backend
    * failure while settling — not the expected {@link StaleLeaseError}). In
@@ -437,6 +519,7 @@ export class DeliveryWorker {
         nowMs: number,
       ) => void | Promise<void>)
     | undefined;
+  readonly #rateLimiter: RateLimiter;
 
   #stopped = false;
   #running = false;
@@ -453,6 +536,7 @@ export class DeliveryWorker {
       requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
       idlePollMs = DEFAULT_IDLE_POLL_MS,
       sleep = timerSleep,
+      rateLimiter = new SlidingWindowRateLimiter(),
     } = options;
     if (!Number.isInteger(batchSize) || batchSize < 1) {
       throw new RangeError("batchSize must be a positive integer");
@@ -481,6 +565,7 @@ export class DeliveryWorker {
     this.#recordAttempt = options.recordAttempt;
     this.#onDeliveryOutcome = options.onDeliveryOutcome;
     this.#onDeadLettered = options.onDeadLettered;
+    this.#rateLimiter = rateLimiter;
   }
 
   /** Whether {@link run} is currently looping. */
@@ -504,6 +589,7 @@ export class DeliveryWorker {
     let failed = 0;
     let deadLettered = 0;
     let stale = 0;
+    let rateLimited = 0;
     for (const outcome of outcomes) {
       switch (outcome) {
         case "succeeded":
@@ -518,6 +604,9 @@ export class DeliveryWorker {
         case "stale":
           stale += 1;
           break;
+        case "rateLimited":
+          rateLimited += 1;
+          break;
       }
     }
     const result: TickResult = {
@@ -526,6 +615,7 @@ export class DeliveryWorker {
       failed,
       deadLettered,
       stale,
+      rateLimited,
     };
     this.#onTick?.(result);
     return result;
@@ -661,6 +751,29 @@ export class DeliveryWorker {
           if (target === null) {
             failure = `no endpoint resolved for task "${task.id}"`;
           } else {
+            // Per-endpoint rate limit check. tryConsume does not record the delivery
+            // when rate-limited, so a postponed task does not count against the window.
+            if (task.endpointId !== null && target.rateLimit != null) {
+              const rl = this.#rateLimiter.tryConsume(
+                task.endpointId,
+                target.rateLimit,
+                nowMs,
+              );
+              if (!rl.allowed) {
+                try {
+                  await this.#queue.postpone(task.id, leaseToken, rl.retryAt, nowMs);
+                } catch (postponeError) {
+                  if (
+                    postponeError instanceof StaleLeaseError ||
+                    postponeError instanceof UnknownDeliveryTaskError
+                  ) {
+                    return "stale";
+                  }
+                  throw postponeError;
+                }
+                return "rateLimited";
+              }
+            }
             const sentAt = this.#now();
             try {
               const signedRequest = buildSignedRequest(message, target, nowMs);

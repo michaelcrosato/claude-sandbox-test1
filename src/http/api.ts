@@ -593,6 +593,7 @@ function endpointView(endpoint: Endpoint): Record<string, unknown> {
     retryPolicy: endpoint.retryPolicy,
     filter: endpoint.filter ?? null,
     channel: endpoint.channel,
+    rateLimit: endpoint.rateLimit,
     disabled: endpoint.disabled,
     // Endpoint health (observability): a tenant can see how/why an endpoint became
     // unhealthy, and whether it was auto-disabled after sustained failure.
@@ -1320,6 +1321,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { filter: body["filter"] as EndpointFilter | null }
         : {}),
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
+      ...("rateLimit" in body ? { rateLimit: body["rateLimit"] as number | null } : {}),
     };
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
@@ -1356,6 +1358,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
         ? { filter: body["filter"] as EndpointFilter | null }
         : {}),
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
+      ...("rateLimit" in body ? { rateLimit: body["rateLimit"] as number | null } : {}),
     };
     const updated = await deps.endpoints.update(id, patch);
     return json(200, endpointView(updated));

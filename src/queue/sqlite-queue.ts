@@ -24,6 +24,7 @@ import {
   applyClaim,
   applyFailure,
   applyManualRetry,
+  applyPostpone,
   applySuccess,
   assertValidVisibilityTimeout,
   createLeaseToken,
@@ -450,6 +451,20 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       }
       // applyCancel throws DeliveryStateError if the task is not pending.
       const next = applyCancel(rowToTask(row), this.#now());
+      this.#persist(next);
+      return next;
+    });
+  }
+
+  async postpone(
+    taskId: string,
+    leaseToken: string,
+    availableAt: number,
+    nowMs: number,
+  ): Promise<DeliveryTask> {
+    return this.#transaction(() => {
+      const task = this.#requireLeaseHolder(taskId, leaseToken);
+      const next = applyPostpone(task, availableAt, nowMs);
       this.#persist(next);
       return next;
     });

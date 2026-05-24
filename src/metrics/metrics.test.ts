@@ -15,6 +15,7 @@ function tick(partial: Partial<TickResult>): TickResult {
     failed: 0,
     deadLettered: 0,
     stale: 0,
+    rateLimited: 0,
     ...partial,
   };
 }

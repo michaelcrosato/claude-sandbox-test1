@@ -19,6 +19,7 @@ import {
   applyClaim,
   applyFailure,
   applyManualRetry,
+  applyPostpone,
   applySuccess,
   claimableState,
   createLeaseToken,
@@ -204,6 +205,18 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     }
     // applyCancel throws DeliveryStateError if the task is not pending.
     const next = applyCancel(task, this.#now());
+    this.#tasks.set(next.id, next);
+    return next;
+  }
+
+  async postpone(
+    taskId: string,
+    leaseToken: string,
+    availableAt: number,
+    nowMs: number,
+  ): Promise<DeliveryTask> {
+    const task = this.#requireLeaseHolder(taskId, leaseToken);
+    const next = applyPostpone(task, availableAt, nowMs);
     this.#tasks.set(next.id, next);
     return next;
   }

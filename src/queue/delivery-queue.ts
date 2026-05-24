@@ -27,6 +27,7 @@
 
 import { randomBytes } from "node:crypto";
 import {
+  DeliveryStateError,
   reduce,
   type DeliveryState,
   type DeliveryStatus,
@@ -353,6 +354,23 @@ export interface DeliveryQueue {
    * {@link StaleLeaseError}.
    */
   retry(taskId: string): Promise<DeliveryTask>;
+  /**
+   * Reschedule a leased task for delivery at `availableAt` **without** consuming a
+   * retry attempt — the rate-limit path. Moves the task from `delivering` back to
+   * `pending(availableAt)` and releases the lease so another claim cycle picks it up.
+   * Use when the worker decides to defer delivery (e.g. the endpoint's per-minute
+   * rate limit is saturated) without penalising the task's retry budget.
+   *
+   * Same error contract as {@link complete}:
+   * - {@link UnknownDeliveryTaskError} if the task id is unknown.
+   * - {@link StaleLeaseError} if `leaseToken` does not match the live lease.
+   */
+  postpone(
+    taskId: string,
+    leaseToken: string,
+    availableAt: number,
+    nowMs: number,
+  ): Promise<DeliveryTask>;
   /**
    * Cancel a `pending` delivery — the operator's abort path for a scheduled or
    * queued task that should not be sent. Moves the task to the terminal
@@ -722,6 +740,35 @@ export function applyCancel(task: DeliveryTask, nowMs: number): DeliveryTask {
     leaseExpiresAt: null,
     leaseToken: null,
     lastError: next.lastError,
+    updatedAt: nowMs,
+  };
+}
+
+/**
+ * Reschedule a `delivering` task back to `pending(availableAt)` **without**
+ * counting this as a failed attempt — the rate-limit path. Releases the lease
+ * so another claim can pick it up at `availableAt`. The attempt counter is
+ * deliberately preserved (not incremented), so the task retains its full retry
+ * budget for actual delivery failures.
+ *
+ * @throws `DeliveryStateError` when the task is not `delivering`.
+ */
+export function applyPostpone(
+  task: DeliveryTask,
+  availableAt: number,
+  nowMs: number,
+): DeliveryTask {
+  if (task.status !== "delivering") {
+    throw new DeliveryStateError(
+      `cannot postpone a task with status "${task.status}"; task must be "delivering"`,
+    );
+  }
+  return {
+    ...task,
+    status: "pending",
+    nextAttemptAt: availableAt,
+    leaseExpiresAt: null,
+    leaseToken: null,
     updatedAt: nowMs,
   };
 }

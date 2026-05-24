@@ -73,6 +73,7 @@ interface EndpointRow {
   readonly retry_policy: string | null;
   readonly filter: string | null;
   readonly channel: string | null;
+  readonly rate_limit: number | null;
   readonly disabled: number;
   readonly consecutive_failures: number;
   readonly first_failure_at: number | null;
@@ -108,6 +109,7 @@ function rowToEndpoint(row: EndpointRow): Endpoint {
         ? null
         : (JSON.parse(row.filter) as EndpointFilter),
     channel: row.channel ?? null,
+    rateLimit: row.rate_limit ?? null,
     disabled: row.disabled !== 0,
     consecutiveFailures: Number(row.consecutive_failures),
     firstFailureAt: row.first_failure_at === null ? null : Number(row.first_failure_at),
@@ -188,6 +190,9 @@ export class SqliteEndpointStore implements EndpointStore {
     // Likewise for the channel column. Existing rows default to NULL (global endpoint),
     // which is the correct semantic and preserves existing behaviour.
     this.#migrateChannelColumn();
+    // Likewise for the rate_limit column. Existing rows default to NULL (no rate limit),
+    // which is the correct semantic and preserves existing behaviour.
+    this.#migrateRateLimitColumn();
 
     this.#selectEndpoint = this.#db.prepare(
       "SELECT * FROM endpoints WHERE id = ?",
@@ -199,14 +204,14 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#insertEndpoint = this.#db.prepare(
       `INSERT INTO endpoints
          (id, app_id, url, secret, previous_secrets, description, event_types, headers,
-          retry_policy, filter, channel, disabled, consecutive_failures, first_failure_at, last_failure_at,
+          retry_policy, filter, channel, rate_limit, disabled, consecutive_failures, first_failure_at, last_failure_at,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateEndpoint = this.#db.prepare(
       `UPDATE endpoints
          SET url = ?, secret = ?, description = ?, event_types = ?, headers = ?,
-             retry_policy = ?, filter = ?, channel = ?, disabled = ?, consecutive_failures = ?,
+             retry_policy = ?, filter = ?, channel = ?, rate_limit = ?, disabled = ?, consecutive_failures = ?,
              first_failure_at = ?, last_failure_at = ?, updated_at = ?
        WHERE id = ?`,
     );
@@ -334,6 +339,22 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#db.exec("ALTER TABLE endpoints ADD COLUMN channel TEXT");
   }
 
+  /**
+   * Add the `rate_limit` column to a database created before per-endpoint delivery rate
+   * limiting existed. Existing rows default to `NULL` (no rate limit), which is the
+   * correct semantic and preserves existing behaviour. For a fresh database the column
+   * is in {@link SCHEMA} and this is a no-op.
+   */
+  #migrateRateLimitColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(endpoints)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "rate_limit")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE endpoints ADD COLUMN rate_limit INTEGER");
+  }
+
   /** Number of endpoints currently held. Convenience for inspection/tests. */
   get size(): number {
     return Number((this.#countEndpoints.get() as { n: number }).n);
@@ -355,6 +376,7 @@ export class SqliteEndpointStore implements EndpointStore {
       retryPolicy: normalized.retryPolicy,
       filter: normalized.filter,
       channel: normalized.channel,
+      rateLimit: normalized.rateLimit,
       disabled: normalized.disabled,
       consecutiveFailures: 0,
       firstFailureAt: null,
@@ -375,6 +397,7 @@ export class SqliteEndpointStore implements EndpointStore {
       retryPolicyToColumn(endpoint.retryPolicy),
       filterToColumn(endpoint.filter),
       endpoint.channel,
+      endpoint.rateLimit,
       endpoint.disabled ? 1 : 0,
       endpoint.consecutiveFailures,
       endpoint.firstFailureAt,
@@ -411,6 +434,7 @@ export class SqliteEndpointStore implements EndpointStore {
         retryPolicyToColumn(next.retryPolicy),
         filterToColumn(next.filter),
         next.channel,
+        next.rateLimit,
         next.disabled ? 1 : 0,
         next.consecutiveFailures,
         next.firstFailureAt,
@@ -552,6 +576,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   retry_policy     TEXT,
   filter           TEXT,
   channel          TEXT,
+  rate_limit       INTEGER,
   disabled         INTEGER NOT NULL,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   first_failure_at     INTEGER,

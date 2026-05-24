@@ -606,5 +606,43 @@ export function describeEndpointStoreContract(
         await expect(store.create({ ...NEW, channel: "bad\nvalue" })).rejects.toThrow(TypeError);
       });
     });
+
+    describe("rateLimit", () => {
+      it("defaults rateLimit to null when not provided on create", async () => {
+        const e = await store.create(NEW);
+        expect(e.rateLimit).toBeNull();
+        expect((await store.get(e.id))!.rateLimit).toBeNull();
+      });
+
+      it("stores a rateLimit on create and round-trips it via get", async () => {
+        const e = await store.create({ ...NEW, rateLimit: 100 });
+        expect(e.rateLimit).toBe(100);
+        expect((await store.get(e.id))!.rateLimit).toBe(100);
+      });
+
+      it("update can set, replace, and clear rateLimit", async () => {
+        const e = await store.create({ ...NEW, rateLimit: 50 });
+        // Replace.
+        const replaced = await store.update(e.id, { rateLimit: 200 });
+        expect(replaced.rateLimit).toBe(200);
+        // Clear.
+        const cleared = await store.update(e.id, { rateLimit: null });
+        expect(cleared.rateLimit).toBeNull();
+        expect((await store.get(e.id))!.rateLimit).toBeNull();
+      });
+
+      it("update preserves rateLimit when rateLimit is not in the patch", async () => {
+        const e = await store.create({ ...NEW, rateLimit: 60 });
+        const updated = await store.update(e.id, { description: "changed" });
+        expect(updated.rateLimit).toBe(60);
+      });
+
+      it("rejects out-of-range, non-integer, and wrong-type rateLimits", async () => {
+        await expect(store.create({ ...NEW, rateLimit: 0 })).rejects.toThrow(RangeError);
+        await expect(store.create({ ...NEW, rateLimit: 10_001 })).rejects.toThrow(RangeError);
+        await expect(store.create({ ...NEW, rateLimit: 1.5 as unknown as number })).rejects.toThrow(TypeError);
+        await expect(store.create({ ...NEW, rateLimit: "100" as unknown as number })).rejects.toThrow(TypeError);
+      });
+    });
   });
 }

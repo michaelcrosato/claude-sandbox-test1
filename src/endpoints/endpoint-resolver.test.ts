@@ -59,6 +59,7 @@ describe("endpointToDeliveryTarget", () => {
     retryPolicy: null,
     filter: null,
     channel: null,
+    rateLimit: null,
     disabled: false,
     consecutiveFailures: 0,
     firstFailureAt: null,

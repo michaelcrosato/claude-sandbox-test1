@@ -1502,7 +1502,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description: "A delivery destination. The signing secret is never included in this view.",
           required: [
-            "id", "appId", "url", "description", "eventTypes", "channel", "headers", "retryPolicy", "filter",
+            "id", "appId", "url", "description", "eventTypes", "channel", "rateLimit", "headers", "retryPolicy", "filter",
             "disabled", "consecutiveFailures", "firstFailureAt", "lastFailureAt",
             "createdAt", "updatedAt",
           ],
@@ -1537,6 +1537,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "Per-endpoint retry schedule. `null` means the system-wide default policy applies. " +
                 "When set, `delaysMs` replaces the global schedule for deliveries to this endpoint.",
+            },
+            rateLimit: {
+              type: ["integer", "null"],
+              minimum: 1,
+              maximum: 10000,
+              description:
+                "Maximum deliveries per 60-second sliding window. The worker postpones tasks " +
+                "that exceed the limit without consuming a retry attempt. `null` means no limit.",
             },
             filter: {
               oneOf: [ref("EndpointFilter"), { type: "null" }],
@@ -1665,6 +1673,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description:
                 "Custom retry schedule. Omit or pass `null` to use the system-wide default policy.",
             },
+            rateLimit: {
+              type: ["integer", "null"],
+              minimum: 1,
+              maximum: 10000,
+              description:
+                "Max deliveries per 60-second window. Omit or pass `null` for no limit.",
+            },
             filter: {
               oneOf: [ref("EndpointFilter"), { type: "null" }],
               description:
@@ -1697,6 +1712,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               oneOf: [ref("RetryPolicyConfig"), { type: "null" }],
               description:
                 "Replace the retry schedule. Pass `null` to revert to the system-wide default.",
+            },
+            rateLimit: {
+              type: ["integer", "null"],
+              minimum: 1,
+              maximum: 10000,
+              description:
+                "Replace the delivery rate limit. Pass `null` to remove the limit.",
             },
             filter: {
               oneOf: [ref("EndpointFilter"), { type: "null" }],

@@ -531,6 +531,11 @@ export interface EndpointView {
    */
   readonly channel: string | null;
   /**
+   * Maximum deliveries per 60-second sliding window. The worker postpones tasks that
+   * exceed the limit without consuming a retry attempt. `null` means no limit.
+   */
+  readonly rateLimit: number | null;
+  /**
    * Whether the endpoint is paused (skipped by fan-out) — set manually, or set
    * automatically once it has been failing continuously (see
    * {@link EndpointView.consecutiveFailures}). Re-enable with
@@ -589,6 +594,10 @@ export interface CreateEndpointInput {
    * messages. A string value scopes delivery to messages tagged with the same channel.
    */
   readonly channel?: string | null;
+  /**
+   * Max deliveries per 60-second window. Omit or pass `null` for no limit.
+   */
+  readonly rateLimit?: number | null;
 }
 
 /** A patch for {@link PosthornClient.updateEndpoint}; only provided fields change. */
@@ -615,6 +624,10 @@ export interface UpdateEndpointInput {
    * messages); a string scopes it to messages with that channel.
    */
   readonly channel?: string | null;
+  /**
+   * Replace the delivery rate limit. Pass `null` to remove the limit.
+   */
+  readonly rateLimit?: number | null;
 }
 
 /** Optional body of {@link PosthornClient.testEndpoint}. */
@@ -1008,6 +1021,7 @@ export class PosthornClient {
     if (input.retryPolicy !== undefined) body["retryPolicy"] = input.retryPolicy;
     if (input.filter !== undefined) body["filter"] = input.filter;
     if (input.channel !== undefined) body["channel"] = input.channel;
+    if (input.rateLimit !== undefined) body["rateLimit"] = input.rateLimit;
     return this.#transport.request<CreatedEndpoint>("POST", "/v1/endpoints", body);
   }
 
@@ -1031,6 +1045,7 @@ export class PosthornClient {
     if (patch.retryPolicy !== undefined) body["retryPolicy"] = patch.retryPolicy;
     if (patch.filter !== undefined) body["filter"] = patch.filter;
     if (patch.channel !== undefined) body["channel"] = patch.channel;
+    if (patch.rateLimit !== undefined) body["rateLimit"] = patch.rateLimit;
     return this.#transport.request<EndpointView>(
       "PATCH",
       `/v1/endpoints/${encodeURIComponent(id)}`,
