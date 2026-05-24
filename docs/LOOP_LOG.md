@@ -4,6 +4,58 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 67: Wire `priority` through HTTP API and SDK
+
+**Repo truth at start:** clean main @ `afb0bf2` (iter-66, message priority in storage
+and queue). Baseline verified: `tsc --noEmit` clean, vitest **1367/1367**, `npm run build`
+clean.
+
+**Gap closed:** iter-66 landed `priority` in the `Message` model, all three storage
+backends, and the delivery queue's claim ordering — but never exposed it over HTTP or
+the SDK. Callers sending via `POST /v1/messages` had no way to set priority (the field
+was silently dropped), and message reads/lists never returned it. The storage work was
+complete but invisible to API consumers.
+
+**Architecture (5 files, +118 / −2):**
+
+1. **`src/http/api.ts`** — Imported `VALID_PRIORITIES` and `MessagePriority` from
+   `message-store.ts`. Added `parsePriority(v)` helper: validates the string value
+   against `VALID_PRIORITIES`, throws `TypeError` (→ 400) on invalid input, returns
+   `undefined` for missing/null (store default applies). Wired into `createMessage`
+   and `batchSendMessages` intake via a local `priorityVal` variable — the same
+   undefined-conditional spread pattern as `deliverAt`/`expiresAt`. Added `priority`
+   to both create-response inline object and the batch-item inline object. Added
+   `priority: message.priority` to `messageListItemView` and `messageView`.
+
+2. **`src/http/openapi.ts`** — Added `"priority"` to `MessageSummary.required` and
+   `Message.required`. Added `priority` enum property (string, `"high"|"normal"|"low"`)
+   to both schemas. Added `priority` optional property to `NewMessage` schema.
+
+3. **`src/sdk/client.ts`** — Added `priority?: "high" | "normal" | "low"` to
+   `SendMessageInput`. Added `priority: "high" | "normal" | "low"` to `MessageRef` and
+   `MessageWithDeliveries`. Wired into `sendMessage` and `sendMessageBatch` serialization
+   with the existing `if (input.priority !== undefined) body["priority"] = input.priority`
+   guard pattern.
+
+4. **`src/http/api.test.ts`** — 1 new test: "stores priority and returns it in the
+   response" — asserts `"high"` and `"low"` round-trip; confirms omitted priority
+   defaults to `"normal"`.
+
+5. **`src/sdk/client.test.ts`** — 2 new tests: "sendMessage serializes priority into
+   the request body" (asserts `high` reaches the wire); "sendMessage omits priority
+   when not provided" (asserts no `priority` key in body).
+
+**Validation:** `tsc --noEmit` clean. vitest **1370/1370** (was 1367; +3: 1 api.test +
+2 client.test). `npm run build` clean → committed to main @ `a6658d6`.
+
+**State:** GREEN. Next highest-leverage move: invalid priority value should return
+400 (that path was added via `parsePriority` but not yet integration-tested); or
+advance to a richer roadmap feature — rate-limiting per tenant/endpoint, webhook
+signature verification UI in the portal, or a Node.js CLI helper for receiver-side
+verification.
+
+---
+
 ## 2026-05-24 — Iteration 66: Message Priority (`high`/`normal`/`low` delivery ordering)
 
 **Repo truth at start:** dirty main @ `554d007` (iter-65 docs). Five files modified
