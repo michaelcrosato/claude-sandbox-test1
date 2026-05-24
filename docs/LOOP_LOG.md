@@ -4,6 +4,59 @@ High-compression, unvarnished record of every iteration (Axiom 5). Newest first.
 
 ---
 
+## 2026-05-24 — Iteration 56: PostgreSQL Backend for All Six Stores
+
+**Repo truth at start:** clean main @ `132c8ad` (iter-55, non-retryable HTTP status codes). Baseline
+verified: `tsc --noEmit` clean, vitest **1195/1195** (44 files), `npm run build` clean.
+
+**High-leverage move chosen:** PostgreSQL backend — adds `PostgresMessageStore`,
+`PostgresDeliveryQueue`, `PostgresAppStore`, `PostgresEndpointStore`,
+`PostgresDeliveryAttemptStore`, and `PostgresEventTypeStore`. This is the P5 "Postgres optional via
+a thin storage interface" milestone from PROJECT.md. Without it, Posthorn is constrained to
+single-process, single-node deployments backed by SQLite. With it, multiple Posthorn workers can
+share one Postgres database for active/active deployments and the hosted cloud tier.
+
+**Architecture:**
+
+1. **`src/db/postgres.ts`** — `createPostgresPool(connectionString)` factory wrapping `pg.Pool`.
+   Pool lifecycle is owned by the caller (gateway/test); each store takes a shared `Pool` reference.
+   `pg` added to `optionalDependencies` in `package.json`, `@types/pg` to `devDependencies`.
+   Zero-dep claim for SQLite mode is preserved — `pg` is never imported in non-Postgres paths.
+
+2. **Six Postgres stores** (one per domain) — each `implements` the same interface as its SQLite
+   sibling, gated by the same conformance suite:
+   - `PostgresMessageStore` — `messages` + `idempotency_keys` tables; `TO_CHAR(TO_TIMESTAMP(...))` for UTC day bucketing; idempotency create uses `BEGIN`/`COMMIT`/`ROLLBACK` transactions via `pool.connect()`.
+   - `PostgresDeliveryQueue` — `delivery_tasks` table; `SELECT … FOR UPDATE SKIP LOCKED` in `claimDue()` enables multi-worker concurrent claim without writer blocking.
+   - `PostgresAppStore` — `apps` + `api_keys` tables; `UNIQUE` on `key_hash`; FK `ON DELETE CASCADE`.
+   - `PostgresEndpointStore` — `endpoints` table; `disabled` is `BOOLEAN` (not 0/1 INTEGER); JSON columns for `previous_secrets`, `event_types`, `headers`, `retry_policy`.
+   - `PostgresDeliveryAttemptStore` — `delivery_attempts` table; append-only (INSERT only); partial indexes for `app_id IS NOT NULL` and `endpoint_id IS NOT NULL`.
+   - `PostgresEventTypeStore` — `event_types` table; `BOOLEAN` for `archived`; duplicate PK maps to `DuplicateEventTypeError`.
+
+3. **Schema design decisions:**
+   - All epoch-ms timestamps use `BIGINT` (Postgres `INTEGER` is 32-bit = max ~2.1B; epoch-ms is ~1.7T).
+   - `pg` returns `BIGINT` columns as JavaScript strings → `Number(row.column)` in all `rowToXxx` helpers.
+   - `initialize()` async method creates/migrates tables (vs SQLite's synchronous constructor).
+   - `truncate()` calls `TRUNCATE TABLE … RESTART IDENTITY CASCADE` for test isolation.
+   - `close()` is no-op on all Postgres stores; pool lifecycle is the caller's responsibility.
+
+4. **Conformance test wrappers** — six `*.test.ts` files (one per store), each gated on
+   `process.env.POSTHORN_TEST_PG_URL`. When the env var is absent, the test file emits a single
+   `describe.skip` — the default 1195-test suite is completely unaffected. When the env var is set,
+   `beforeAll` runs `initialize()` once, `beforeEach` runs `truncate()`, and the full conformance
+   suite drives a fresh store instance per test.
+
+5. **`src/index.ts`** — all six Postgres store classes + `PostgresXxxStoreOptions` types + `createPostgresPool` / `Pool` / `PoolClient` re-exported from the public entrypoint.
+
+**Validation:**
+- `tsc --noEmit` — clean (one fix: `Awaited<ReturnType<Pool["connect"]>>` → `PoolClient` in `postgres-store.ts`).
+- `vitest run` (default, no env var) — **1195/1195**, 6 files skipped.
+- `docker run postgres:16-alpine` + `POSTHORN_TEST_PG_URL=...` — **215/215** Postgres conformance tests green across all six stores.
+- Container removed post-validation.
+
+**Commit:** `359df90` — 16 files changed, 2328 insertions.
+
+---
+
 ## 2026-05-24 — Iteration 55: Non-Retryable HTTP Status Codes
 
 **Repo truth at start:** clean main @ `7e41ea3` (iter-54, per-endpoint retry policy). Baseline verified:
