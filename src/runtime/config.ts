@@ -27,6 +27,7 @@ import {
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS, MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS } from "../net/guarded-transport.js";
+import { DEFAULT_PG_POOL_MAX } from "../db/postgres.js";
 import {
   DEFAULT_LOG_LEVEL,
   LOG_LEVELS,
@@ -111,6 +112,14 @@ export interface GatewayConfig {
    * See `POSTHORN_DATABASE_URL`.
    */
   readonly databaseUrl: string | null;
+  /**
+   * Maximum connections the shared Postgres pool opens (the PostgreSQL backend
+   * only; ignored on SQLite). Defaults to {@link DEFAULT_PG_POOL_MAX}. Because
+   * every replica's pool draws on the database's one server-side connection
+   * budget, size it so `replicas × databasePoolMax` stays under the server's
+   * `max_connections`. See `POSTHORN_PG_POOL_MAX` and {@link DEFAULT_PG_POOL_MAX}.
+   */
+  readonly databasePoolMax: number;
   /** Request-body cap, in bytes (`413` beyond it). */
   readonly maxBodyBytes: number;
   /**
@@ -484,6 +493,7 @@ function readHstsConfig(env: Env): HstsPolicy {
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`,
  * `POSTHORN_DATABASE_URL` (a `postgres://` URL selects the Postgres backend; unset = embedded SQLite),
+ * `POSTHORN_PG_POOL_MAX` (max shared Postgres connections; Postgres backend only; default 10),
  * `POSTHORN_MAX_BODY_BYTES`,
  * `POSTHORN_PUBLIC_BASE_URL` (canonical origin for portal links; unset = derive from the request Host),
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
@@ -509,6 +519,7 @@ export function loadConfig(env: Env): GatewayConfig {
     }),
     dataDir: readString(env, "POSTHORN_DATA_DIR", DEFAULT_DATA_DIR),
     databaseUrl: readDatabaseUrl(env),
+    databasePoolMax: readInt(env, "POSTHORN_PG_POOL_MAX", DEFAULT_PG_POOL_MAX, { min: 1 }),
     maxBodyBytes: readInt(env, "POSTHORN_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, {
       min: 1,
     }),

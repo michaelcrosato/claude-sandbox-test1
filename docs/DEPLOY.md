@@ -136,6 +136,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the SQLite store files (SQLite backend only — ignored when `POSTHORN_DATABASE_URL` is set). Use `:memory:` for an ephemeral in-memory run (data lost on restart). |
 | `POSTHORN_DATABASE_URL` | _(unset)_ | Postgres connection string (`postgres://` / `postgresql://`) selecting the [PostgreSQL backend](#postgresql-backend). Unset (default) = embedded SQLite under `POSTHORN_DATA_DIR`. The schema is created/migrated automatically on first boot. |
+| `POSTHORN_PG_POOL_MAX` | `10` | Max connections the shared Postgres pool opens (PostgreSQL backend only; ignored on SQLite). Every replica multiplies this against the database's one `max_connections` budget — keep `replicas × this` under the server cap. See [Connection pool sizing](#postgresql-backend). |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap in bytes (`413` if exceeded). |
 | `POSTHORN_PUBLIC_BASE_URL` | _(unset)_ | Canonical public origin for portal-session links (`portalUrl`). Unset (default) derives them from each request's `Host` + `X-Forwarded-Proto`. Set it to your public origin (e.g. `https://hooks.example.com`) behind a host-rewriting proxy. Must be a bare `http`/`https` origin — scheme + host (+ port), no path/query/fragment. See [Public base URL](#public-base-url-portal-links). |
 | `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
@@ -532,6 +533,23 @@ aborted so its locks free. These are fixed, not tunable: they only ever fire on 
 statement that is *blocked* or a session that is *stalled*, never on one making
 progress, so the data-retention pruner's bulk deletes (which can run long) are
 deliberately left uncapped — there is no `statement_timeout`.
+
+**Connection pool sizing.** Each gateway opens a single shared pool of at most
+`POSTHORN_PG_POOL_MAX` connections (default 10) to the database. This is the one
+PostgreSQL tunable you must actively plan in a multi-replica deployment: Postgres
+caps total connections server-side (`max_connections` — frequently ~100 on a
+managed instance, far lower on small/shared tiers), and **every replica's pool
+draws on that same budget**, so size it as `replicas × POSTHORN_PG_POOL_MAX` ≤
+`max_connections` (leaving headroom for admin tools and the pruner). Lower it when
+many replicas share a small database; raise it for a single busy replica that needs
+more than 10 deliveries/queries in flight at once. The pool also bounds how long a
+checkout *waits* for a free connection: a fixed 10-second connection-acquisition
+timeout (pg's default is to wait **forever**) means a saturated or struggling pool
+fails fast with a retryable error rather than hanging the whole gateway — the
+pool-acquisition counterpart to the lock/idle timeouts above, and likewise fixed
+because it only ever fires on a checkout that is already stuck. If you see those
+timeouts under normal load, the pool is under-provisioned: raise
+`POSTHORN_PG_POOL_MAX` (and the database's `max_connections` if needed).
 
 **Schema.** Created and migrated automatically on first boot — the same
 forward-only, additive `ADD COLUMN IF NOT EXISTS` discipline as SQLite. No separate

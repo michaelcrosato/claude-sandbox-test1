@@ -2,9 +2,48 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresPool,
+  DEFAULT_PG_POOL_MAX,
+  POSTGRES_CONNECTION_TIMEOUT_MS,
   POSTGRES_IDLE_IN_TXN_TIMEOUT_MS,
   POSTGRES_LOCK_TIMEOUT_MS,
 } from "./postgres.js";
+
+// Pool *configuration* needs no database: `createPostgresPool` constructs the pool
+// lazily (no connection opens until the first query), so these inspect the resolved
+// `pool.options` and run in the canonical gate without a live Postgres. The bogus
+// host is never contacted.
+describe("createPostgresPool — pool configuration (no database needed)", () => {
+  // An unreachable, syntactically-valid URL: construction stores it but never dials.
+  const URL = "postgres://u:p@unreachable.invalid:5432/db";
+
+  it("defaults the pool size to DEFAULT_PG_POOL_MAX and bounds checkout with a finite timeout", async () => {
+    const pool = createPostgresPool(URL);
+    try {
+      expect(pool.options.max).toBe(DEFAULT_PG_POOL_MAX);
+      // The fix: a non-zero checkout timeout. pg defaults this to 0 = wait forever
+      // for a free connection; assert the factory replaces that with a finite bound.
+      expect(pool.options.connectionTimeoutMillis).toBe(POSTGRES_CONNECTION_TIMEOUT_MS);
+      expect(pool.options.connectionTimeoutMillis ?? 0).toBeGreaterThan(0);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("applies a caller-supplied pool max (the POSTHORN_PG_POOL_MAX path)", async () => {
+    const pool = createPostgresPool(URL, { max: 3 });
+    try {
+      expect(pool.options.max).toBe(3);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("rejects a non-positive or non-integer pool max", () => {
+    expect(() => createPostgresPool(URL, { max: 0 })).toThrow(RangeError);
+    expect(() => createPostgresPool(URL, { max: -1 })).toThrow(RangeError);
+    expect(() => createPostgresPool(URL, { max: 2.5 })).toThrow(RangeError);
+  });
+});
 
 // Gated like every other Postgres suite: skipped unless a live database is
 // reachable. Run locally with a throwaway container:
@@ -83,6 +122,47 @@ if (!pgUrl) {
         }
       },
       POSTGRES_LOCK_TIMEOUT_MS * 3,
+    );
+  });
+
+  describe("createPostgresPool checkout timeout — never waits forever for a connection", () => {
+    it(
+      "fails a checkout fast when the pool is saturated, instead of blocking indefinitely",
+      async () => {
+        // max:1 so a single held client saturates the pool. An explicit short
+        // connection timeout proves the bound is honored without the 10 s
+        // production wait — the same shape as the lock_timeout test above.
+        const timeoutMs = 250;
+        const pool = createPostgresPool(pgUrl, {
+          max: 1,
+          connectionTimeoutMillis: timeoutMs,
+        });
+        try {
+          const held = await pool.connect(); // claims the only slot
+          const start = Date.now();
+          let message: string | undefined;
+          try {
+            // With pg's default connectionTimeoutMillis = 0 this checkout would
+            // block forever waiting for `held` to be released. The finite bound
+            // turns the saturated pool into a prompt, classifiable failure.
+            await pool.connect();
+            throw new Error("expected the saturated-pool checkout to time out");
+          } catch (err) {
+            message = (err as Error).message;
+          }
+          const elapsed = Date.now() - start;
+          held.release();
+
+          expect(message).toMatch(/timeout exceeded when trying to connect/);
+          // Bounds prove the timeout is genuinely in force: it neither failed
+          // instantly (a real wait happened) nor hung indefinitely.
+          expect(elapsed).toBeGreaterThanOrEqual(timeoutMs * 0.5);
+          expect(elapsed).toBeLessThan(timeoutMs * 8);
+        } finally {
+          await pool.end();
+        }
+      },
+      10_000,
     );
   });
 }

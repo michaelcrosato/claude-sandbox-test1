@@ -37,7 +37,7 @@ async function runAdmin(args: readonly string[]): Promise<number> {
 
   if (config.databaseUrl) {
     // Postgres backend: provision against the same shared database the gateway reads.
-    const pool = createPostgresPool(config.databaseUrl);
+    const pool = createPostgresPool(config.databaseUrl, { max: config.databasePoolMax });
     const store = new PostgresAppStore(pool);
     try {
       await store.initialize();

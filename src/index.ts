@@ -345,6 +345,8 @@ export {
 
 export {
   createPostgresPool,
+  DEFAULT_PG_POOL_MAX,
+  type PostgresPoolOptions,
   type Pool,
   type PoolClient,
 } from "./db/postgres.js";

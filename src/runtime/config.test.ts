@@ -27,6 +27,7 @@ import {
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS } from "../net/guarded-transport.js";
+import { DEFAULT_PG_POOL_MAX } from "../db/postgres.js";
 import { DEFAULT_LOG_LEVEL } from "../logging/logger.js";
 
 describe("loadConfig", () => {
@@ -37,6 +38,7 @@ describe("loadConfig", () => {
       port: DEFAULT_PORT,
       dataDir: DEFAULT_DATA_DIR,
       databaseUrl: null,
+      databasePoolMax: DEFAULT_PG_POOL_MAX,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
       publicBaseUrl: null,
       adminToken: null,
@@ -409,6 +411,30 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_DATABASE_URL: "not a url" })).toThrow(
         /must be a valid postgres:\/\/ connection string/,
       );
+    });
+  });
+
+  describe("POSTHORN_PG_POOL_MAX (Postgres pool size)", () => {
+    it("defaults to DEFAULT_PG_POOL_MAX when unset or blank", () => {
+      expect(loadConfig({}).databasePoolMax).toBe(DEFAULT_PG_POOL_MAX);
+      expect(loadConfig({ POSTHORN_PG_POOL_MAX: "   " }).databasePoolMax).toBe(
+        DEFAULT_PG_POOL_MAX,
+      );
+    });
+
+    it("reads a positive integer", () => {
+      expect(loadConfig({ POSTHORN_PG_POOL_MAX: "25" }).databasePoolMax).toBe(25);
+      expect(loadConfig({ POSTHORN_PG_POOL_MAX: "1" }).databasePoolMax).toBe(1);
+    });
+
+    it("rejects zero or negative (a pool needs at least one connection)", () => {
+      expect(() => loadConfig({ POSTHORN_PG_POOL_MAX: "0" })).toThrow(/POSTHORN_PG_POOL_MAX/);
+      expect(() => loadConfig({ POSTHORN_PG_POOL_MAX: "-1" })).toThrow(ConfigError);
+    });
+
+    it("rejects a non-integer", () => {
+      expect(() => loadConfig({ POSTHORN_PG_POOL_MAX: "10.5" })).toThrow(/POSTHORN_PG_POOL_MAX/);
+      expect(() => loadConfig({ POSTHORN_PG_POOL_MAX: "lots" })).toThrow(ConfigError);
     });
   });
 

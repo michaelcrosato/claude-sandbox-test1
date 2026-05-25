@@ -242,8 +242,9 @@ interface StoreBackend {
 function openStoreBackend(config: GatewayConfig): StoreBackend {
   if (config.databaseUrl) {
     // One pool shared by every Postgres store — Postgres connection slots are
-    // precious, so the composition root owns the single pool and drains it on stop.
-    const pool = createPostgresPool(config.databaseUrl);
+    // precious, so the composition root owns the single pool (sized via
+    // POSTHORN_PG_POOL_MAX) and drains it on stop.
+    const pool = createPostgresPool(config.databaseUrl, { max: config.databasePoolMax });
     const apps = new PostgresAppStore(pool);
     const endpoints = new PostgresEndpointStore(pool);
     const messages = new PostgresMessageStore(pool);

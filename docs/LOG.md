@@ -41,6 +41,43 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T00:30 · iter-0105 · GREEN · postgres-pool-max-and-connection-acquisition-timeout
+
+- **Baseline:** clean main @ `07ca4f1` (iter-0104 added the per-connection lock +
+  idle-in-txn GUC timeouts). Verified green first: `tsc --noEmit` 0, `vitest run`
+  1831 (7 PG-skipped), `npm run build` 0.
+- **Move:** Bound the shared Postgres pool — the last "wait forever" default on the PG
+  path. `createPostgresPool` was a bare `new Pool({ connectionString, options })`: pg's
+  default `max: 10` (unsizable — N replicas × 10 can exhaust a small managed Postgres'
+  `max_connections`, or starve a single busy replica) and, worse, `connectionTimeoutMillis: 0`
+  — a checkout against a *saturated* pool waits **indefinitely**. That is the
+  pool-acquisition twin of the infinite `lock_timeout` iter-0104 just closed, and it would
+  re-hang the whole gateway under connection starvation *despite* the statement-level timeouts.
+- **Changed:**
+  - `db/postgres.ts`: `createPostgresPool(url, { max?, connectionTimeoutMillis? })`. `max`
+    defaults to new `DEFAULT_PG_POOL_MAX` (10 = pg's own default, so unset is a no-op);
+    `connectionTimeoutMillis` defaults to fixed `POSTGRES_CONNECTION_TIMEOUT_MS` (10 s),
+    bounding both new-connection establishment and the saturated-pool queue wait.
+    Positive-int / non-negative-finite `RangeError` guards.
+  - `config.ts`: new `POSTHORN_PG_POOL_MAX` → `databasePoolMax` (int ≥ 1, default 10),
+    threaded into the pool at both creation sites — `gateway.ts` composition root and
+    `main.ts` admin CLI. `index.ts` exports `DEFAULT_PG_POOL_MAX` + `PostgresPoolOptions`.
+  - Docs: `.env.example` + a DEPLOY.md table row & "Connection pool sizing" note (the
+    config↔docs drift guard enforces both).
+- **Decisions:** Pool *max* is an operator var (a genuine per-deploy capacity call against the
+  shared server budget); the acquisition *timeout* is a fixed safety bound (a constant, not an
+  env var — same call as iter-0104's GUC timeouts, keeping the config↔docs surface to one new
+  var). `connectionTimeoutMillis` stays an injectable option only so a test can prove fast-fail
+  without the 10 s production wait.
+- **Validation:** `tsc` 0; `vitest run` **1840** (6 PG-skipped files; +3 ungated pool-config
+  tests now run in the gate, +4 config). Against live Docker Postgres 16: `postgres.test.ts`
+  6/6 — incl. a new `max:1` saturation test proving a checkout fails with `timeout exceeded
+  when trying to connect` in ~250 ms, never hangs — and gateway PG e2e 21/21;
+  `smoke-postgres.mjs` on the compiled `dist` **9/9**. `npm run build` 0;
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** `idleTimeoutMillis` / `maxLifetimeSeconds` pool knobs for connection recycling
+  behind a transient-NAT proxy; or the DEPLOY.md active/active topology guide.
+
 ## 2026-05-25T00:15 · iter-0104 · GREEN · postgres-lock-and-idle-txn-timeouts
 
 - **Baseline:** clean main @ `d682435` (iter-0103 wired the PG backend into the gateway).

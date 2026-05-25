@@ -68,6 +68,42 @@ export const POSTGRES_LOCK_TIMEOUT_MS = 5_000;
 export const POSTGRES_IDLE_IN_TXN_TIMEOUT_MS = 10_000;
 
 /**
+ * Default maximum number of connections the shared pool opens to Postgres.
+ *
+ * Matches `pg`'s own default (10), so leaving `POSTHORN_PG_POOL_MAX` unset keeps
+ * today's behavior byte-for-byte. It is exposed as a knob because the right value
+ * is a per-deployment capacity decision the library cannot guess: Postgres caps
+ * total connections server-side (`max_connections` — often ~100 on a managed
+ * instance, far lower on small/shared tiers), and **every Posthorn replica
+ * multiplies its pool against that one budget**. So `replicas × max` must stay
+ * under the server cap (minus a margin for admin and other clients): lower this
+ * when running many replicas against a small database; raise it for a single busy
+ * replica that needs more than 10 concurrent queue/API connections in flight.
+ */
+export const DEFAULT_PG_POOL_MAX = 10;
+
+/**
+ * Maximum time (ms) a `pool.connect()` checkout may wait before failing with
+ * `timeout exceeded when trying to connect` — bounding **both** establishing a
+ * brand-new connection **and** waiting in the queue for a free slot when the pool
+ * is already at its `max` busy connections.
+ *
+ * `pg` defaults this to `0` = wait **forever**. That is the pool-acquisition twin
+ * of the infinite `lock_timeout` / `idle_in_transaction_session_timeout` defaults
+ * closed above: under a connection-starved burst (a struggling database, or more
+ * concurrent work than `max` connections), every delivery-worker tick and API
+ * request that needs the database would otherwise block indefinitely rather than
+ * failing fast with a retryable error the caller already handles — turning local
+ * saturation into a whole-gateway hang. A finite bound sheds load instead. 10 s is
+ * deliberately generous: Posthorn's hot-path queries are short, so a checkout that
+ * cannot complete within 10 s means the pool is genuinely saturated (an
+ * under-provisioned `max`, or a database in trouble) — exactly the condition where
+ * failing fast beats hanging. Fixed, not an operator knob, for the same reason as
+ * the two GUC timeouts: it only ever fires on a checkout that is already stuck.
+ */
+export const POSTGRES_CONNECTION_TIMEOUT_MS = 10_000;
+
+/**
  * The `-c key=value` startup options applied to every connection the pool opens.
  * Postgres reads a bare integer GUC as milliseconds (`5000` ⇒ `5s`), so these
  * are sent as-is. Set at connection handshake — before any query can run — so
@@ -78,6 +114,24 @@ const CONNECTION_OPTIONS =
   `-c lock_timeout=${POSTGRES_LOCK_TIMEOUT_MS}` +
   ` -c idle_in_transaction_session_timeout=${POSTGRES_IDLE_IN_TXN_TIMEOUT_MS}`;
 
+/** Construction options for {@link createPostgresPool}. */
+export interface PostgresPoolOptions {
+  /**
+   * Maximum pooled connections. Defaults to {@link DEFAULT_PG_POOL_MAX}. The
+   * gateway threads `POSTHORN_PG_POOL_MAX` here; see {@link DEFAULT_PG_POOL_MAX}
+   * for how to size it against the database's server-side connection budget.
+   */
+  readonly max?: number;
+  /**
+   * Checkout timeout in ms — bounds new-connection establishment *and* the
+   * saturated-pool queue wait (see {@link POSTGRES_CONNECTION_TIMEOUT_MS}).
+   * Defaults to {@link POSTGRES_CONNECTION_TIMEOUT_MS} and is **not** wired to an
+   * env var (a fixed safety bound, like the GUC timeouts). Exposed only so a test
+   * can prove the saturated-pool checkout fails fast without the full 10 s wait.
+   */
+  readonly connectionTimeoutMillis?: number;
+}
+
 /**
  * Create a `pg.Pool` from a connection string (e.g.
  * `postgresql://user:pass@host:5432/dbname`).
@@ -85,11 +139,35 @@ const CONNECTION_OPTIONS =
  * Every connection the pool opens is configured with Posthorn's standard safety
  * timeouts ({@link POSTGRES_LOCK_TIMEOUT_MS},
  * {@link POSTGRES_IDLE_IN_TXN_TIMEOUT_MS}) so no statement can block on a lock,
- * and no session can squat on locks inside an idle transaction, forever.
+ * and no session can squat on locks inside an idle transaction, forever. The pool
+ * itself is bounded too: at most `max` connections ({@link DEFAULT_PG_POOL_MAX} by
+ * default), and a checkout that cannot be satisfied within
+ * {@link POSTGRES_CONNECTION_TIMEOUT_MS} fails fast instead of waiting forever for
+ * a slot — closing the last "wait forever" default on the Postgres path.
  *
  * The pool stays idle until the first query. Pass it to each store constructor,
  * then call `pool.end()` to drain connections during graceful shutdown.
  */
-export function createPostgresPool(connectionString: string): InstanceType<typeof Pool> {
-  return new Pool({ connectionString, options: CONNECTION_OPTIONS });
+export function createPostgresPool(
+  connectionString: string,
+  options: PostgresPoolOptions = {},
+): InstanceType<typeof Pool> {
+  const max = options.max ?? DEFAULT_PG_POOL_MAX;
+  if (!Number.isInteger(max) || max < 1) {
+    throw new RangeError(`Postgres pool max must be a positive integer, got ${max}`);
+  }
+  const connectionTimeoutMillis =
+    options.connectionTimeoutMillis ?? POSTGRES_CONNECTION_TIMEOUT_MS;
+  if (!Number.isFinite(connectionTimeoutMillis) || connectionTimeoutMillis < 0) {
+    throw new RangeError(
+      `Postgres connectionTimeoutMillis must be a non-negative, finite number, ` +
+        `got ${connectionTimeoutMillis}`,
+    );
+  }
+  return new Pool({
+    connectionString,
+    options: CONNECTION_OPTIONS,
+    max,
+    connectionTimeoutMillis,
+  });
 }
