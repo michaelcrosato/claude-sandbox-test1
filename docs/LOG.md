@@ -41,6 +41,48 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T22:39 · iter-0096 · GREEN · x-forwarded-proto-aware-hsts
+
+- **Baseline:** clean main @ `742fc66` (iter-0095 `?failureReason=` triage filter). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1788**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Land the security/correctness item teed up in the iter-0095 Next list — honor
+  `X-Forwarded-Proto` so HSTS emits only on requests believed to have arrived over HTTPS. Until now a
+  configured `Strict-Transport-Security` was stamped on *every* response, including a genuine
+  plain-HTTP request that bypasses the TLS proxy. A browser ignores HSTS received over HTTP (RFC 6797
+  §8.1), so it was harmless but spec-incorrect and a needless security-scanner finding — a real cost
+  for the compliance-sensitive target segment.
+- **Changed:**
+  - `http/security-headers.ts`: new pure, total `isRequestSecure({ encrypted, forwardedProto })` +
+    `RequestTransport` type — secure iff a direct TLS socket, or the **leftmost** `X-Forwarded-Proto`
+    token is `https` (trimmed, case-insensitive; handles the proxy-chain comma list). HSTS module doc
+    updated to describe the gate.
+  - `http/server.ts`: `serve()` now reads `req.socket.encrypted` (via `isEncryptedSocket`) + the
+    `x-forwarded-proto` header and passes the HSTS string to `securityHeadersForPath` only when
+    `isRequestSecure` holds; otherwise `undefined`. The pure header builder is unchanged.
+  - Tests: +4 `isRequestSecure` unit cases (TLS socket; https incl. case/space/chain-leftmost; http /
+    empty / absent / non-https → false); rewrote the server socket-level HSTS test to assert
+    suppressed-on-plain-HTTP, stamped-under-`X-Forwarded-Proto: https`, suppressed-on-`http`.
+  - `scripts/smoke-hsts.mjs`: section 4 now drives the gateway with `X-Forwarded-Proto: https` and
+    adds two checks (plain-HTTP and `xfp: http` stay suppressed even with HSTS configured).
+  - `docs/DEPLOY.md`: HSTS section documents the transport gate and the proxy's `X-Forwarded-Proto`
+    requirement (the same signal the portal-URL builder already trusts).
+- **Decisions:** Kept `securityHeadersForPath` pure (transport-agnostic) and gated in the thin
+  `node:http` adapter where the socket lives — pure-core / thin-I/O split preserved, all existing
+  builder tests untouched. Trusting `X-Forwarded-Proto` needs no proxy-allowlist here: the worst a
+  spoofed `https` does over a real plain-HTTP connection is emit a header the browser ignores. Split
+  on the **leftmost** comma token (RFC-correct multi-proxy semantics) — stricter than the portal-URL
+  builder's naive whole-value read (noted for a later cleanup). This is a deliberate behavior change:
+  an operator whose TLS proxy omits `X-Forwarded-Proto` now loses HSTS — but such a proxy already
+  breaks the `https://` portal links, so the assumption is pre-existing; documented in DEPLOY.md.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1792** (+4; 52 files, 6 PG-skipped, no flaky exit);
+  `npm run build` 0; `node scripts/smoke-hsts.mjs` **22/22** (+ gated emit/suppress paths through
+  compiled ESM on a real socket); `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Next:** Apply the same leftmost-token `X-Forwarded-Proto` parse to the portal-URL builder
+  (`api.ts` ~1920), which today would mis-render `https, http://host` from a proxy chain; or honor
+  `X-Forwarded-Host` there too so portal links survive a host-rewriting proxy; or the deferred
+  `posthorn_deliveries_by_reason` point-in-time backlog gauge off the denormalized `failure_reason`.
+
 ## 2026-05-24T22:36 · iter-0095 · GREEN · failure-reason-triage-filter-on-deliveries
 
 - **Baseline:** clean main @ `e481793` (iter-0094 denormalized `failureReason` onto the delivery

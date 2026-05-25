@@ -40,8 +40,12 @@
  * ({@link hstsHeaderValue} returns `null` until configured) because it is only
  * meaningful when the origin is actually reached over HTTPS and an over-long
  * `max-age` set before every host is TLS-ready can lock a domain out of plain HTTP
- * for that window. This service terminates TLS at an upstream proxy; the emitted
- * header reaches the browser over that HTTPS hop and is inert on a plain-HTTP probe.
+ * for that window. This service terminates TLS at an upstream proxy, so the adapter
+ * emits HSTS only on a request it identifies as HTTPS — a direct TLS socket or
+ * `X-Forwarded-Proto: https` from that proxy (see {@link isRequestSecure}). A plain
+ * HTTP request that bypasses the proxy therefore carries no HSTS header, matching
+ * RFC 6797 §8.1 (do not assert HSTS over insecure transport) and keeping security
+ * scanners quiet.
  */
 
 /** The response surfaces, distinguished only by URL prefix. */
@@ -123,6 +127,51 @@ export function hstsHeaderValue(policy: HstsPolicy): string | null {
     value += "; preload";
   }
   return value;
+}
+
+/**
+ * The request-transport signals {@link isRequestSecure} reasons over. Both come
+ * from the `node:http` socket layer, so they are read in the thin server adapter
+ * and passed in here — keeping the HTTPS verdict a pure, unit-testable decision.
+ */
+export interface RequestTransport {
+  /**
+   * `true` when the request arrived on a TLS socket directly (Node's
+   * `tls.TLSSocket.encrypted`). Rare for this service — it expects TLS to be
+   * terminated upstream — but correct for a direct-HTTPS deployment.
+   */
+  readonly encrypted: boolean;
+  /**
+   * The `X-Forwarded-Proto` header value as received, or `undefined`. A proxy
+   * chain sends a comma-separated list whose leftmost entry is the protocol the
+   * original client used to reach the outermost proxy.
+   */
+  readonly forwardedProto: string | undefined;
+}
+
+/**
+ * Decide whether a request is believed to have arrived over HTTPS — the gate on
+ * whether HSTS may be emitted ({@link securityHeadersForPath}'s `hsts` argument).
+ * Pure and total.
+ *
+ * Secure iff the socket is itself TLS, or the (leftmost) `X-Forwarded-Proto` token
+ * is `https` (trimmed, case-insensitive). The forwarded-proto signal is the same
+ * one the portal-URL builder already trusts to choose `https://`; trusting it is
+ * safe even on a directly-exposed instance, because the worst a spoofed
+ * `X-Forwarded-Proto: https` can do over a genuine plain-HTTP connection is make us
+ * emit an HSTS header the browser then ignores — it honors HSTS only over HTTPS.
+ */
+export function isRequestSecure(transport: RequestTransport): boolean {
+  if (transport.encrypted) {
+    return true;
+  }
+  const { forwardedProto } = transport;
+  if (forwardedProto === undefined) {
+    return false;
+  }
+  // A proxy chain appends hops; the leftmost token is the original client's scheme.
+  const clientFacing = forwardedProto.split(",", 1)[0]?.trim().toLowerCase();
+  return clientFacing === "https";
 }
 
 /** Headers applied to *every* response regardless of surface. */

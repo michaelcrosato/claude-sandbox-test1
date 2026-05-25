@@ -20,7 +20,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApi, type ApiDeps, type ApiHandler, type ApiResponse } from "./api.js";
-import { securityHeadersForPath } from "./security-headers.js";
+import { isRequestSecure, securityHeadersForPath } from "./security-headers.js";
 import { SILENT_LOGGER, type Logger } from "../logging/logger.js";
 
 /** Default request-body cap: 1 MiB. Generous for webhook payloads, bounded against abuse. */
@@ -59,8 +59,10 @@ export interface HttpServerOptions {
   /**
    * Precomputed `Strict-Transport-Security` header value (see
    * {@link import("./security-headers.js").hstsHeaderValue}). When set, it is
-   * stamped on every response across all surfaces. Omit to emit no HSTS header —
-   * the default, since HSTS is only safe once the origin is served over HTTPS.
+   * stamped — across every surface — on each response the adapter identifies as
+   * HTTPS (a direct TLS socket, or `X-Forwarded-Proto: https` from the upstream
+   * proxy; see {@link import("./security-headers.js").isRequestSecure}). Omit to
+   * emit no HSTS header — the default, since HSTS is only safe over HTTPS.
    */
   readonly strictTransportSecurity?: string;
 }
@@ -110,6 +112,16 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
       reject(err);
     });
   });
+}
+
+/**
+ * Whether the request arrived on a TLS socket. `tls.TLSSocket` exposes
+ * `encrypted: true`; a plain `net.Socket` has no such field. This service usually
+ * sits behind a TLS-terminating proxy (so this is `false` and `X-Forwarded-Proto`
+ * decides), but a direct-HTTPS deployment reports `true`.
+ */
+function isEncryptedSocket(req: IncomingMessage): boolean {
+  return (req.socket as { encrypted?: boolean }).encrypted === true;
 }
 
 /** Collapse Node's `string | string[]` header values to a single string per key (keys are already lower-cased). */
@@ -200,11 +212,26 @@ async function serve(
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
+  // HSTS is a transport assertion about the whole origin, so emit it only on a
+  // request we identify as HTTPS — a direct TLS socket, or `X-Forwarded-Proto:
+  // https` from the TLS-terminating proxy (the same signal the portal-URL builder
+  // trusts). On a plain-HTTP request it is suppressed: a browser ignores an HSTS
+  // header received over HTTP anyway (RFC 6797 §8.1) and emitting one is only a
+  // needless security-scanner finding. `undefined` whenever HSTS is unconfigured.
+  const xForwardedProto = req.headers["x-forwarded-proto"];
+  const hsts =
+    strictTransportSecurity !== undefined &&
+    isRequestSecure({
+      encrypted: isEncryptedSocket(req),
+      forwardedProto: Array.isArray(xForwardedProto) ? xForwardedProto[0] : xForwardedProto,
+    })
+      ? strictTransportSecurity
+      : undefined;
   // Defense-in-depth response headers, keyed purely off the URL surface (API vs
   // dashboard vs the embeddable portal). Computed once here so every exit path
-  // below — including the early body-read failures — stamps them. HSTS (when
-  // configured) rides on top of every surface.
-  const securityHeaders = securityHeadersForPath(path, strictTransportSecurity);
+  // below — including the early body-read failures — stamps them. HSTS (gated
+  // above) rides on top of every surface when present.
+  const securityHeaders = securityHeadersForPath(path, hsts);
 
   let rawBody: string;
   try {

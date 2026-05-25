@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hstsHeaderValue,
+  isRequestSecure,
   securityHeadersForPath,
   surfaceForPath,
 } from "./security-headers.js";
@@ -158,5 +159,32 @@ describe("hstsHeaderValue", () => {
     expect(
       hstsHeaderValue({ maxAgeSeconds: 100.9, includeSubDomains: false, preload: false }),
     ).toBe("max-age=100");
+  });
+});
+
+describe("isRequestSecure", () => {
+  it("is secure on a direct TLS socket regardless of forwarded-proto", () => {
+    expect(isRequestSecure({ encrypted: true, forwardedProto: undefined })).toBe(true);
+    expect(isRequestSecure({ encrypted: true, forwardedProto: "http" })).toBe(true);
+  });
+
+  it("is secure when X-Forwarded-Proto is https (trimmed, case-insensitive)", () => {
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "https" })).toBe(true);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "HTTPS" })).toBe(true);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "  https  " })).toBe(true);
+  });
+
+  it("reads the leftmost token of a proxy-chain X-Forwarded-Proto list", () => {
+    // The client-facing protocol is the first entry; a trailing internal hop must
+    // not flip the verdict either way.
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "https, http" })).toBe(true);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "http, https" })).toBe(false);
+  });
+
+  it("is insecure on plain HTTP with no, empty, or non-https forwarded-proto", () => {
+    expect(isRequestSecure({ encrypted: false, forwardedProto: undefined })).toBe(false);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "http" })).toBe(false);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "" })).toBe(false);
+    expect(isRequestSecure({ encrypted: false, forwardedProto: "ws" })).toBe(false);
   });
 });

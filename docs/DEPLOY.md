@@ -193,7 +193,15 @@ browsers to refuse plain-HTTP requests to this origin for a fixed window. It is
 when the origin is genuinely reached over HTTPS. Posthorn's own socket speaks
 plain HTTP and assumes **TLS is terminated upstream** (the reverse proxy above);
 the emitted header travels back through that proxy to the browser over the HTTPS
-hop, where it takes effect. It is inert on a plain-HTTP probe.
+hop, where it takes effect.
+
+To stay faithful to that — and to keep security scanners quiet — Posthorn emits
+the header **only on requests it identifies as HTTPS**: a direct TLS socket, or a
+request carrying `X-Forwarded-Proto: https`. So your TLS-terminating proxy must
+set that header (nginx, Caddy, Traefik, and the major cloud load balancers do, by
+default or with a single directive) — it is the same signal Posthorn already uses
+to build `https://` portal links. A plain-HTTP request that bypasses the proxy
+carries no HSTS header (RFC 6797 §8.1: do not assert HSTS over insecure transport).
 
 ```env
 # Start small and ramp up. 1 day while you confirm every path is HTTPS:

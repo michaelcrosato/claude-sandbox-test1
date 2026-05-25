@@ -348,18 +348,32 @@ describe("createHttpServer — security response headers", () => {
     expect(dash.headers.get("strict-transport-security")).toBeNull();
   });
 
-  it("stamps the configured Strict-Transport-Security on every surface", async () => {
+  it("emits the configured HSTS only on requests identified as HTTPS (X-Forwarded-Proto)", async () => {
     const sts = "max-age=31536000; includeSubDomains";
     const { base } = await startServer({
       dashboardHandler: htmlOk,
       portalHandler: htmlOk,
       strictTransportSecurity: sts,
     });
-    // Transport-level: present on the plain API surface as well as the HTML ones.
+    // Plain HTTP with no proxy signal: HSTS is suppressed even though configured
+    // (a browser would ignore an HSTS header received over HTTP anyway).
     for (const path of ["/healthz", "/dashboard", "/portal"]) {
       const res = await fetch(`${base}${path}`);
+      expect(res.headers.get("strict-transport-security")).toBeNull();
+    }
+    // X-Forwarded-Proto: https (from the TLS-terminating proxy) → stamped on every
+    // surface, transport-level (present on the plain API surface as well as the HTML ones).
+    for (const path of ["/healthz", "/dashboard", "/portal"]) {
+      const res = await fetch(`${base}${path}`, {
+        headers: { "x-forwarded-proto": "https" },
+      });
       expect(res.headers.get("strict-transport-security")).toBe(sts);
     }
+    // An explicit X-Forwarded-Proto: http stays suppressed.
+    const httpRes = await fetch(`${base}/healthz`, {
+      headers: { "x-forwarded-proto": "http" },
+    });
+    expect(httpRes.headers.get("strict-transport-security")).toBeNull();
   });
 
   it("stamps the headers on an early body-overflow (413) rejection too", async () => {

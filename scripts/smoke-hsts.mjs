@@ -1,9 +1,10 @@
 // Compiled-dist smoke: HTTP Strict Transport Security through production ESM.
 // Proves the pure header builder + per-surface merge, the env→config validation
 // (including the fail-fast preload rules), and — end-to-end on a running gateway —
-// that the configured `Strict-Transport-Security` header is stamped on every
-// surface over a real socket, and is absent by default. Hits 127.0.0.1 (the IPv4
-// bind), matching the other dist smokes.
+// that the configured `Strict-Transport-Security` header is stamped on requests
+// identified as HTTPS (X-Forwarded-Proto: https), suppressed on plain-HTTP
+// requests even when configured, and absent entirely by default. Hits 127.0.0.1
+// (the IPv4 bind), matching the other dist smokes.
 import { hstsHeaderValue, securityHeadersForPath } from "../dist/http/security-headers.js";
 import { loadConfig, ConfigError } from "../dist/runtime/config.js";
 import { createGateway } from "../dist/runtime/gateway.js";
@@ -61,7 +62,7 @@ function check(label, cond) {
   check("config: a modifier without max-age is rejected at boot", threw2);
 }
 
-// ── 4. Running gateway, HSTS ON: the header reaches the wire on every surface ─
+// ── 4. Running gateway, HSTS ON: emitted on HTTPS-identified requests only ────
 {
   const config = loadConfig({
     POSTHORN_HOST: "127.0.0.1",
@@ -75,13 +76,23 @@ function check(label, cond) {
   const { port } = await gw.start();
   try {
     const expected = "max-age=31536000; includeSubDomains";
-    // API surface (transport-level: present even though it's JSON, not HTML).
-    const health = await fetch(`http://127.0.0.1:${port}/healthz`);
-    check("gateway(on): /healthz carries the configured STS header",
+    const https = { "x-forwarded-proto": "https" };
+    // Behind the TLS-terminating proxy (X-Forwarded-Proto: https), transport-level:
+    // present even on the plain JSON API surface.
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, { headers: https });
+    check("gateway(on): /healthz behind X-Forwarded-Proto: https carries the STS header",
       health.headers.get("strict-transport-security") === expected);
-    const api = await fetch(`http://127.0.0.1:${port}/v1/endpoints`); // 401, still stamped
-    check("gateway(on): an unauthenticated 401 still carries STS",
+    const api = await fetch(`http://127.0.0.1:${port}/v1/endpoints`, { headers: https }); // 401, still stamped
+    check("gateway(on): an unauthenticated 401 (proxied https) still carries STS",
       api.status === 401 && api.headers.get("strict-transport-security") === expected);
+    // A plain-HTTP request that bypasses the proxy: HSTS suppressed (RFC 6797 §8.1).
+    const plain = await fetch(`http://127.0.0.1:${port}/healthz`);
+    check("gateway(on): a plain-HTTP request carries no STS even when HSTS is configured",
+      plain.headers.get("strict-transport-security") === null);
+    const downgrade = await fetch(`http://127.0.0.1:${port}/healthz`,
+      { headers: { "x-forwarded-proto": "http" } });
+    check("gateway(on): an explicit X-Forwarded-Proto: http stays suppressed",
+      downgrade.headers.get("strict-transport-security") === null);
   } finally {
     await gw.stop();
   }
