@@ -68,6 +68,7 @@ import type { DeliveryStatus } from "../delivery/delivery-state.js";
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 /** Construction options for {@link SqliteDeliveryQueue}. */
 export interface SqliteQueueOptions {
@@ -182,10 +183,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#visibilityTimeoutMs = visibilityTimeoutMs;
 
     this.#db = new DatabaseSync(location);
-    // WAL gives crash-safe, concurrent-reader durability for file-backed queues
-    // (a no-op for `:memory:`).
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas).
+    applyConnectionPragmas(this.#db);
     this.#db.exec(SCHEMA);
     // Ensure app_id column + indexes exist (idempotent; handles pre-migration DBs).
     this.#migrateAppIdColumn();

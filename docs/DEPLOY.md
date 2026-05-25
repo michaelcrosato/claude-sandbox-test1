@@ -530,6 +530,10 @@ cp -r /srv/posthorn-data /srv/posthorn-data.bak
 SQLite files can also be backed up online (the WAL journal makes this safe with
 a running server) using the SQLite `.backup` command or any file-copy method
 that copies both the `.sqlite` file and its `-wal` / `-shm` siblings atomically.
+Each store opens its database with a 5-second SQLite busy-timeout, so concurrent
+access from another process — an online `.backup`, the `posthorn admin` CLI, or
+the brief file overlap while a rolling deploy hands off — waits for the write
+lock to free instead of failing immediately with `database is locked`.
 
 ---
 

@@ -44,6 +44,7 @@ import type { RetryPolicy } from "../delivery/retry-policy.js";
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 /** Construction options for {@link SqliteEndpointStore}. */
 export interface SqliteEndpointStoreOptions {
@@ -167,10 +168,8 @@ export class SqliteEndpointStore implements EndpointStore {
     this.#generateSecret = makeSecret;
 
     this.#db = new DatabaseSync(location);
-    // WAL gives crash-safe, concurrent-reader durability for file-backed stores
-    // (a no-op for `:memory:`).
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas).
+    applyConnectionPragmas(this.#db);
     this.#db.exec(SCHEMA);
     // Bring a database created by a pre-rotation version up to schema. For a fresh
     // database the column is in SCHEMA and this is a no-op.

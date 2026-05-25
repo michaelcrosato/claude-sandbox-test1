@@ -52,6 +52,7 @@ import {
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 /** Construction options for {@link SqliteMessageStore}. */
 export interface SqliteStoreOptions {
@@ -146,11 +147,9 @@ export class SqliteMessageStore implements MessageStore {
     this.#idempotencyWindowMs = idempotencyWindowMs;
 
     this.#db = new DatabaseSync(location);
-    // WAL gives crash-safe, concurrent-reader durability for file-backed stores
-    // (a no-op for `:memory:`); foreign keys enforce the binding→message link.
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
-    this.#db.exec("PRAGMA foreign_keys = ON");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas);
+    // foreign keys enforce the binding→message link.
+    applyConnectionPragmas(this.#db, { foreignKeys: true });
     this.#db.exec(SCHEMA);
     // Bring a database created by a pre-outbox version up to schema, then build
     // the index that depends on the (now-guaranteed) outbox column.

@@ -41,6 +41,39 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T23:55 · iter-0102 · GREEN · sqlite-busy-timeout-for-multi-process-contention
+
+- **Baseline:** clean main @ `f5930ab` (iter-0101 log rotation). Verified green first:
+  `tsc --noEmit` 0, `vitest run` 1819, `npm run build` 0.
+- **Move:** Close the one conspicuous gap in the SQLite connection setup — no `busy_timeout`.
+  `node:sqlite` defaults it to 0, so a write that loses a lock race fails *immediately* with
+  `SQLITE_BUSY` ("database is locked") rather than waiting. Posthorn's own single process never
+  contends (one synchronous connection per store file), but the product *supports* concurrent
+  multi-process access: the `posthorn admin` CLI opens the same `apps.db` while the gateway runs
+  (`resolveLocations`), rolling deploys briefly overlap two containers on the shared data dir, and
+  online backup tooling (`.backup`, Litestream) takes locks — there the loser failed spuriously.
+- **Changed:**
+  - New `src/db/sqlite.ts`: `SQLITE_BUSY_TIMEOUT_MS` (5 s) + `applyConnectionPragmas(db,{foreignKeys?})`
+    — single source of truth for the WAL + synchronous=NORMAL + busy-timeout opening sequence the six
+    stores each duplicated inline; foreign-key enforcement stays opt-in per store.
+  - Refactored all six SQLite stores (apps, endpoints, messages, attempts, event-types, queue) onto
+    the helper. Behaviour-preserving: WAL/synchronous unchanged; FK passed `true` exactly where each
+    store set it before (node:sqlite already defaults FK on, so the three that omitted it are
+    unaffected); the only new effect is the busy-timeout.
+  - `src/db/sqlite.test.ts` (+4) and a `docs/DEPLOY.md` note beside the online-backup guidance.
+- **Decisions:** Hard-coded constant, not a new `POSTHORN_*` env var — it belongs with the other
+  non-tunable durability pragmas and avoids the config/doc-drift surface for a value operators never
+  need to change. 5 s is the standard server-SQLite recommendation; the synchronous event-loop block
+  is bounded and only paid under real, rare contention. No public API/SDK/OpenAPI change — the helper
+  is internal to the store layer (not re-exported from `index.ts`).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1823** (+4; 53 files, 6 PG-skipped, no flaky
+  exit) — incl. the file-backed restart-persistence integration test exercising the new pragmas
+  through the real composition root; `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Mirror the failure-reason column onto the admin dashboard message-detail deliveries
+  (`dashboard/views.ts`) for parity with the tenant view; or review a Postgres-side `lock_timeout`
+  for the optional PG backend.
+
 ## 2026-05-24T23:45 · iter-0101 · GREEN · rotate-canonical-log-into-monthly-archive
 
 - **Baseline:** clean main @ `2ebfab1` (iter-0100 tenant failure-reason column). `docs/LOG.md`

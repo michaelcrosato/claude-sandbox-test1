@@ -46,6 +46,7 @@ import {
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 /** Construction options for {@link SqliteAppStore}. */
 export interface SqliteAppStoreOptions {
@@ -146,11 +147,9 @@ export class SqliteAppStore implements AppStore {
     this.#generateApiKeySecret = makeSecret;
 
     this.#db = new DatabaseSync(location);
-    // WAL gives crash-safe, concurrent-reader durability for file-backed stores
-    // (a no-op for `:memory:`). Foreign keys enforce the api_keys → apps link.
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
-    this.#db.exec("PRAGMA foreign_keys = ON");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas);
+    // foreign keys enforce the api_keys → apps link.
+    applyConnectionPragmas(this.#db, { foreignKeys: true });
     this.#db.exec(SCHEMA);
     // Bring databases created before later schema additions up to current. For a
     // fresh database these columns are in SCHEMA and each call is a no-op.

@@ -47,6 +47,7 @@ import {
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 /** Construction options for {@link SqliteDeliveryAttemptStore}. */
 export interface SqliteDeliveryAttemptStoreOptions {
@@ -123,10 +124,8 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#generateId = generateId;
 
     this.#db = new DatabaseSync(location);
-    // WAL gives crash-safe, concurrent-reader durability for file-backed logs
-    // (a no-op for `:memory:`).
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas).
+    applyConnectionPragmas(this.#db);
     this.#db.exec(SCHEMA);
     this.#migrateAppIdColumn();
     this.#migrateBodyColumns();

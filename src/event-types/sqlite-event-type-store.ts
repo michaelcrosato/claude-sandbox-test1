@@ -18,6 +18,7 @@ import {
 const { DatabaseSync } = createRequire(import.meta.url)(
   "node:sqlite",
 ) as typeof import("node:sqlite");
+import { applyConnectionPragmas } from "../db/sqlite.js";
 
 export interface SqliteEventTypeStoreOptions {
   location?: string;
@@ -79,9 +80,9 @@ export class SqliteEventTypeStore implements EventTypeStore {
     const { location = ":memory:", now = Date.now } = options;
     this.#now = now;
     this.#db = new DatabaseSync(location);
-    this.#db.exec("PRAGMA journal_mode = WAL");
-    this.#db.exec("PRAGMA synchronous = NORMAL");
-    this.#db.exec("PRAGMA foreign_keys = ON");
+    // WAL + synchronous=NORMAL + busy-timeout (see applyConnectionPragmas);
+    // foreign keys enforce the event-type → app link.
+    applyConnectionPragmas(this.#db, { foreignKeys: true });
     this.#db.exec(SCHEMA);
 
     this.#insert = this.#db.prepare(
