@@ -36,8 +36,12 @@ const psRes = await fetch(`${base}/v1/portal/sessions`, {
   headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
   body: JSON.stringify({ externalUserId: "ext_u1" }),
 });
-const { token } = await psRes.json();
+const { token, portalUrl } = await psRes.json();
 check("portal session 201", psRes.status === 201);
+// With no POSTHORN_PUBLIC_BASE_URL configured, portalUrl is derived from the request
+// Host (the loopback addr this smoke connects to).
+check("portalUrl derived from request host when no base URL configured",
+  portalUrl === `http://127.0.0.1:${addr.port}/portal/login?token=${token}`, portalUrl);
 
 // 3. Exchange token for cookie
 const loginRes = await fetch(`${base}/portal/login?token=${token}`, { redirect: "manual" });
@@ -102,5 +106,39 @@ if (epId) {
 }
 
 await gw.stop();
+
+// 11. A second gateway with POSTHORN_PUBLIC_BASE_URL configured: the minted
+// portalUrl must use that canonical origin, not the request's loopback Host —
+// exercising the full config → gateway → api wiring through compiled ESM.
+const PUBLIC_BASE = "https://hooks.smoke.example";
+const gw2 = createGateway(loadConfig({
+  POSTHORN_DATA_DIR: ":memory:",
+  POSTHORN_PORT: "0", // ephemeral port — avoid racing the just-stopped gateway's socket
+  POSTHORN_ADMIN_TOKEN: "smoke-test-token-42",
+  POSTHORN_PUBLIC_BASE_URL: `${PUBLIC_BASE}/`, // trailing slash → normalized away at load
+}));
+const addr2 = await gw2.start();
+const base2 = `http://127.0.0.1:${addr2.port}`;
+const app2 = await (await fetch(`${base2}/v1/admin/apps`, {
+  method: "POST",
+  headers: { Authorization: "Bearer smoke-test-token-42", "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "smoke2" }),
+})).json();
+const { secret: secret2 } = await (await fetch(`${base2}/v1/admin/apps/${app2.id}/keys`, {
+  method: "POST",
+  headers: { Authorization: "Bearer smoke-test-token-42", "Content-Type": "application/json" },
+  body: JSON.stringify({}),
+})).json();
+const ps2Res = await fetch(`${base2}/v1/portal/sessions`, {
+  method: "POST",
+  // A spoofed X-Forwarded-Proto/Host must be ignored once a base URL is configured.
+  headers: { Authorization: `Bearer ${secret2}`, "Content-Type": "application/json", "X-Forwarded-Proto": "http" },
+  body: JSON.stringify({ externalUserId: "ext_u2" }),
+});
+const ps2 = await ps2Res.json();
+check("portalUrl uses configured POSTHORN_PUBLIC_BASE_URL",
+  ps2.portalUrl === `${PUBLIC_BASE}/portal/login?token=${ps2.token}`, ps2.portalUrl);
+await gw2.stop();
+
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

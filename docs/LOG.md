@@ -41,6 +41,51 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T23:15 · iter-0099 · GREEN · public-base-url-config-for-portal-links
+
+- **Baseline:** clean main @ `91754d2` (iter-0098 dead-letter-by-reason gauge). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1804**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Resolve the recurring deferred portal-URL-behind-a-proxy item (iter-0096→0098 Next lists),
+  but via a cleaner, strictly-safer design than the "X-Forwarded-Host + trusted-host allowlist" it was
+  framed as. Add `POSTHORN_PUBLIC_BASE_URL`: an operator-configured canonical origin the `portalUrl`
+  (`POST /v1/portal/sessions`) is built from. Today that URL is derived from the request `Host` header,
+  which points at the wrong place behind a **host-rewriting** proxy (the inbound Host is the gateway's
+  *internal* name). An explicit base URL fixes that AND sidesteps the "distinct trust decision" that
+  kept blocking the allowlist approach — it trusts *no* client-settable header.
+- **Changed:**
+  - `runtime/config.ts`: `publicBaseUrl: string | null` on `GatewayConfig`; new `readPublicBaseUrl`
+    reader — validates a bare `http(s)` origin (rejects non-http(s) scheme, non-absolute, any
+    path/query/fragment, embedded credentials), normalizes to `URL.origin` (default port + trailing
+    slash dropped, non-default port kept); `null` when unset/blank. Fail-fast at boot.
+  - `http/api.ts`: `ApiDeps.publicBaseUrl?`; `createPortalSession` uses it as the authoritative origin
+    when set (request `Host`/`X-Forwarded-Proto` then ignored), else the prior request-derived
+    leftmost-token parse — `portalUrl = ${origin}/portal/login?token=`.
+  - `runtime/gateway.ts`: plumb `config.publicBaseUrl` into `createApi` deps (truthy guard so a
+    hand-built config omitting the field degrades cleanly, mirroring the hsts guard).
+  - `.env.example` + `docs/DEPLOY.md`: documented the var (config-table row + a new "Public base URL"
+    prose section on the host-rewriting-proxy case); the config↔docs drift guard enforces both.
+  - Tests: +8 config (defaults null; accepts/trims; normalizes slash+default port; keeps non-default
+    port; rejects non-http(s)/non-absolute/path-query-fragment/credentials) + default-shape `toEqual`
+    updated; +3 HTTP (built from base URL; overrides Host+XFP; non-default port); +2 auto from the
+    `it.each` doc-drift guard now iterating the new var; `smoke-portal-delivery` +2 (default-derived
+    URL; configured base URL ignores a spoofed `X-Forwarded-Proto`).
+- **Decisions:** Chose an explicit base-URL config over honoring `X-Forwarded-Host` + an allowlist
+  (Axiom 4 — adapted the deferred plan): same outcome for the common single-public-host case, but
+  strictly safer (no client-header trust at all) and simpler to validate. Normalized to `URL.origin`
+  and *rejected* any path/query/fragment rather than silently dropping them — a misconfig fails loud
+  at boot. Backward-compatible: unset ⇒ today's exact request-derived behavior, so no operator action
+  is needed. Multi-public-host (per-request host selection) stays out of scope — the rare case the
+  allowlist design would serve but this one does not.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1817** (+13: 8 config, 3 HTTP, 2 auto-doc-guard;
+  52 files, 6 PG-skipped, no flaky exit); `npm run build` 0; `node scripts/smoke-portal-delivery.mjs`
+  **14/14** (+2, base URL through compiled ESM on a real socket); `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `local-gate.ps1` PASS; `validate-log-compliance.py` `[PASS]`.
+- **Notes:** `docs/LOG.md` is now 961 lines — approaching the 1,000-line rotation boundary (still
+  under both 1,000 lines and 250 KB); a near-future tick should rotate into `docs/log/2026-05.md`.
+- **Next:** Surface the structured failure reason as a column/filter in the tenant dashboard delivery
+  rows (the still-open iter-0095/0098 UI item); or an Alertmanager rule keyed on the per-reason
+  `posthorn_dead_letter_tasks` gauge (which reason crossed threshold); or rotate `docs/LOG.md`.
+
 ## 2026-05-24T23:00 · iter-0098 · GREEN · dead-letter-backlog-gauge-by-reason
 
 - **Baseline:** clean main @ `de07ee5` (iter-0097 leftmost-token XFP portal parse). Verified green

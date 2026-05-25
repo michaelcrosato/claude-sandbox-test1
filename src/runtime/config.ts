@@ -102,6 +102,17 @@ export interface GatewayConfig {
   /** Request-body cap, in bytes (`413` beyond it). */
   readonly maxBodyBytes: number;
   /**
+   * Canonical public base URL the portal-session links (`POST /v1/portal/sessions`
+   * → `portalUrl`) are built from, or `null` to derive them from each request's
+   * `Host` + `X-Forwarded-Proto` (the default — unchanged behavior). When set it is
+   * the authoritative origin — the correct posture behind a host-rewriting proxy,
+   * where the inbound `Host` header is the gateway's *internal* name rather than the
+   * public one, and it never trusts a client-settable header to build an
+   * operator-facing link. A bare `http`/`https` origin (scheme + host [+ port], no
+   * path/query/fragment/credentials), normalized at load. See `POSTHORN_PUBLIC_BASE_URL`.
+   */
+  readonly publicBaseUrl: string | null;
+  /**
    * Bootstrap token for the admin/control-plane HTTP API (`/v1/admin/*`), or
    * `null` to leave that API **disabled** (the default — `POSTHORN_ADMIN_TOKEN`
    * unset). While disabled the admin routes return `404`, indistinguishable from a
@@ -324,6 +335,54 @@ function readAdminToken(env: Env): string | null {
 }
 
 /**
+ * Read the optional canonical public base URL the portal-session links are built
+ * from. Unset or blank yields `null` — the `portalUrl` then falls back to the
+ * request's `Host` + `X-Forwarded-Proto` (today's behavior, unchanged).
+ *
+ * When set it is the authoritative origin for those operator-facing links, which is
+ * the correct posture behind a host-rewriting proxy (where the inbound `Host` header
+ * is the gateway's *internal* name, not the public one) and avoids ever trusting a
+ * client-settable header to construct a link. The value must be an absolute
+ * `http`/`https` URL that is a bare origin — scheme + host [+ port], with no path,
+ * query, fragment, or embedded credentials — and is normalized to its origin form
+ * (default port and any trailing slash dropped). Validated here so a malformed value
+ * fails fast at boot rather than silently emitting broken links later.
+ */
+function readPublicBaseUrl(env: Env): string | null {
+  const raw = env["POSTHORN_PUBLIC_BASE_URL"];
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new ConfigError(
+      `POSTHORN_PUBLIC_BASE_URL must be an absolute http(s) URL, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ConfigError(
+      `POSTHORN_PUBLIC_BASE_URL must use the http or https scheme, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigError("POSTHORN_PUBLIC_BASE_URL must not embed credentials");
+  }
+  if ((url.pathname !== "" && url.pathname !== "/") || url.search !== "" || url.hash !== "") {
+    throw new ConfigError(
+      "POSTHORN_PUBLIC_BASE_URL must be a bare origin (scheme + host [+ port]) " +
+        "with no path, query, or fragment",
+    );
+  }
+  return url.origin;
+}
+
+/**
  * The HSTS preload list's floor for `max-age`: one year in seconds. A `preload`
  * directive is rejected by the browser preload submission rules below this, so
  * configuring `preload` with a shorter `max-age` is a guaranteed no-op — rejected
@@ -372,6 +431,7 @@ function readHstsConfig(env: Env): HstsPolicy {
  *
  * Recognized variables (all optional; sensible defaults otherwise):
  * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
+ * `POSTHORN_PUBLIC_BASE_URL` (canonical origin for portal links; unset = derive from the request Host),
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
  * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_CONCURRENCY`,
@@ -397,6 +457,7 @@ export function loadConfig(env: Env): GatewayConfig {
     maxBodyBytes: readInt(env, "POSTHORN_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, {
       min: 1,
     }),
+    publicBaseUrl: readPublicBaseUrl(env),
     adminToken: readAdminToken(env),
     endpointAutoDisableAfterMs: readInt(
       env,

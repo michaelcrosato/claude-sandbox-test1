@@ -399,6 +399,10 @@ export function createGateway(
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
       // Always wire the portal session store so POST /v1/portal/sessions works.
       portalSessions,
+      // Canonical public base URL for portal links, when configured; otherwise the
+      // portalUrl is derived from the request Host + X-Forwarded-Proto. Truthy guard
+      // (not `!== null`) so a hand-built config omitting the field degrades cleanly.
+      ...(config.publicBaseUrl ? { publicBaseUrl: config.publicBaseUrl } : {}),
     },
     {
       maxBodyBytes: config.maxBodyBytes,

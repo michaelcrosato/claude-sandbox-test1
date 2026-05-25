@@ -37,6 +37,7 @@ describe("loadConfig", () => {
       port: DEFAULT_PORT,
       dataDir: DEFAULT_DATA_DIR,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+      publicBaseUrl: null,
       adminToken: null,
       endpointAutoDisableAfterMs: DEFAULT_AUTO_DISABLE_AFTER_MS,
       worker: {
@@ -300,6 +301,71 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_ADMIN_TOKEN: tooShort })).toThrow(
         /POSTHORN_ADMIN_TOKEN must be at least/,
       );
+    });
+  });
+
+  describe("POSTHORN_PUBLIC_BASE_URL", () => {
+    it("defaults to null (derive portal links from the request) when unset or blank", () => {
+      expect(loadConfig({}).publicBaseUrl).toBeNull();
+      expect(loadConfig({ POSTHORN_PUBLIC_BASE_URL: "   " }).publicBaseUrl).toBeNull();
+    });
+
+    it("accepts a bare http/https origin and trims surrounding whitespace", () => {
+      expect(loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com" }).publicBaseUrl).toBe(
+        "https://hooks.example.com",
+      );
+      expect(loadConfig({ POSTHORN_PUBLIC_BASE_URL: "  http://localhost  " }).publicBaseUrl).toBe(
+        "http://localhost",
+      );
+    });
+
+    it("normalizes a trailing slash and a default port away to the bare origin", () => {
+      expect(loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com/" }).publicBaseUrl).toBe(
+        "https://hooks.example.com",
+      );
+      expect(
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com:443" }).publicBaseUrl,
+      ).toBe("https://hooks.example.com");
+    });
+
+    it("preserves a non-default port", () => {
+      expect(
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com:8443" }).publicBaseUrl,
+      ).toBe("https://hooks.example.com:8443");
+    });
+
+    it("rejects a non-http(s) scheme", () => {
+      expect(() => loadConfig({ POSTHORN_PUBLIC_BASE_URL: "ftp://hooks.example.com" })).toThrow(
+        /must use the http or https scheme/,
+      );
+      expect(() => loadConfig({ POSTHORN_PUBLIC_BASE_URL: "ws://hooks.example.com" })).toThrow(
+        ConfigError,
+      );
+    });
+
+    it("rejects a value that is not an absolute URL", () => {
+      expect(() => loadConfig({ POSTHORN_PUBLIC_BASE_URL: "hooks.example.com" })).toThrow(
+        /must be an absolute http\(s\) URL/,
+      );
+      expect(() => loadConfig({ POSTHORN_PUBLIC_BASE_URL: "not a url" })).toThrow(ConfigError);
+    });
+
+    it("rejects a path, query, or fragment beyond the bare origin", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com/portal" }),
+      ).toThrow(/must be a bare origin/);
+      expect(() =>
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com/?a=1" }),
+      ).toThrow(/must be a bare origin/);
+      expect(() =>
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://hooks.example.com/#x" }),
+      ).toThrow(/must be a bare origin/);
+    });
+
+    it("rejects embedded credentials", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://user:pass@hooks.example.com" }),
+      ).toThrow(/must not embed credentials/);
     });
   });
 

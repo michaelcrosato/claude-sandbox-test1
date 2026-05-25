@@ -217,6 +217,17 @@ export interface ApiDeps {
    * in the gateway alongside the portal handler so they share the same store.
    */
   readonly portalSessions?: import("../portal/portal-session.js").PortalSessionStore;
+  /**
+   * Canonical public base URL for the `portalUrl` returned by
+   * `POST /v1/portal/sessions` — a bare origin (`https://hooks.example.com`). When
+   * set it is authoritative and the request's `Host`/`X-Forwarded-Proto` are ignored,
+   * which is the correct posture behind a host-rewriting proxy (the inbound `Host` is
+   * the gateway's internal name) and avoids building an operator-facing link from a
+   * client-settable header. When omitted the URL is derived from the request as before.
+   * Validated/normalized upstream by {@link import("../runtime/config.js").loadConfig}
+   * (`POSTHORN_PUBLIC_BASE_URL`); wired in by the gateway.
+   */
+  readonly publicBaseUrl?: string;
   /** Backs the event-type catalog CRUD routes. */
   readonly eventTypes: EventTypeStore;
   /**
@@ -1918,15 +1929,24 @@ export function createApi(deps: ApiDeps): ApiHandler {
     const token = deps.portalSessions.createSession(ctx.app.id, externalUserId, nowMs, ttlMs);
     const expiresAt = nowMs + ttlMs;
 
-    // Derive the portal URL from the request's Host header so the caller gets a
-    // ready-to-use redirect target regardless of whether the gateway is behind
-    // a proxy. `x-forwarded-proto` (set by common reverse proxies) upgrades the
-    // scheme to `https` for TLS-terminated deployments. Read it through the shared
-    // leftmost-token parse — a proxy chain sends a comma list (`https, http`), so a
-    // naive whole-value read would render the broken URL `https, http://host`.
-    const proto = forwardedProtoIsHttps(ctx.req.headers["x-forwarded-proto"]) ? "https" : "http";
-    const host = ctx.req.headers["host"] ?? "localhost";
-    const portalUrl = `${proto}://${host}/portal/login?token=${token}`;
+    // Build the portal URL the caller can redirect the end-user to. When the operator
+    // has configured a canonical public base URL (POSTHORN_PUBLIC_BASE_URL) it is
+    // authoritative — the correct posture behind a host-rewriting proxy, where the
+    // inbound Host header is the gateway's *internal* name rather than the public one,
+    // and it never builds an operator-facing link out of a client-settable header.
+    // Otherwise derive the origin from the request: `x-forwarded-proto` (set by common
+    // reverse proxies) upgrades the scheme to `https` for TLS-terminated deployments,
+    // read through the shared leftmost-token parse — a proxy chain sends a comma list
+    // (`https, http`), so a naive whole-value read would render `https, http://host`.
+    let origin: string;
+    if (deps.publicBaseUrl !== undefined && deps.publicBaseUrl.length > 0) {
+      origin = deps.publicBaseUrl;
+    } else {
+      const proto = forwardedProtoIsHttps(ctx.req.headers["x-forwarded-proto"]) ? "https" : "http";
+      const host = ctx.req.headers["host"] ?? "localhost";
+      origin = `${proto}://${host}`;
+    }
+    const portalUrl = `${origin}/portal/login?token=${token}`;
 
     return json(201, { token, portalUrl, expiresAt });
   };

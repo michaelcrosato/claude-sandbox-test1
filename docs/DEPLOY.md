@@ -134,6 +134,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the four SQLite files. Use `:memory:` for an ephemeral in-memory run (data lost on restart). |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap in bytes (`413` if exceeded). |
+| `POSTHORN_PUBLIC_BASE_URL` | _(unset)_ | Canonical public origin for portal-session links (`portalUrl`). Unset (default) derives them from each request's `Host` + `X-Forwarded-Proto`. Set it to your public origin (e.g. `https://hooks.example.com`) behind a host-rewriting proxy. Must be a bare `http`/`https` origin — scheme + host (+ port), no path/query/fragment. See [Public base URL](#public-base-url-portal-links). |
 | `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
 | `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight within one tick. `1` = sequential. |
@@ -184,6 +185,30 @@ Bind Posthorn to loopback when running behind a local proxy:
 ```env
 POSTHORN_HOST=127.0.0.1
 ```
+
+### Public base URL (portal links)
+
+`POST /v1/portal/sessions` returns a ready-to-use `portalUrl` you can redirect the
+end-user to. By default Posthorn builds it from the request's `Host` header and
+`X-Forwarded-Proto`, so the nginx snippet above — which forwards the public host
+with `proxy_set_header Host $host;` — already produces correct links with no extra
+configuration.
+
+Set `POSTHORN_PUBLIC_BASE_URL` when your proxy **rewrites** the `Host` header so the
+value reaching Posthorn is the gateway's *internal* name (`posthorn.svc.cluster.local`,
+a container name, an ALB target-group host, …) rather than the public one. Without it
+the portal link would point at that internal host. The configured origin is
+authoritative — the request `Host`/`X-Forwarded-Proto` are then ignored entirely, so
+the link is never built from a client-settable header:
+
+```env
+POSTHORN_PUBLIC_BASE_URL=https://hooks.example.com
+```
+
+It must be a bare `http`/`https` origin — scheme + host, optionally a port — with no
+path, query string, fragment, or embedded credentials; a malformed value is rejected
+at boot. A non-default port is preserved (`https://hooks.example.com:8443`); a default
+port and any trailing slash are normalized away.
 
 ### HSTS (Strict Transport Security)
 

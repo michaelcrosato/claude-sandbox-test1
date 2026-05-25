@@ -3466,7 +3466,7 @@ describe("createApi — POST /v1/endpoints/:id/replay (endpoint message replay)"
 });
 
 describe("createApi — POST /v1/portal/sessions (portal session minting)", () => {
-  async function portalSetup() {
+  async function portalSetup(opts: { publicBaseUrl?: string } = {}) {
     const apps = new InMemoryAppStore();
     const endpoints = new InMemoryEndpointStore();
     const messages = new InMemoryMessageStore();
@@ -3474,7 +3474,17 @@ describe("createApi — POST /v1/portal/sessions (portal session minting)", () =
     const attempts = new InMemoryDeliveryAttemptStore();
     const portalSessions = new InMemoryPortalSessionStore();
     const now = () => 1_700_000_000_000;
-    const api = createApi({ apps, endpoints, messages, queue, attempts, portalSessions, now, eventTypes: new InMemoryEventTypeStore() });
+    const api = createApi({
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      portalSessions,
+      now,
+      eventTypes: new InMemoryEventTypeStore(),
+      ...(opts.publicBaseUrl !== undefined ? { publicBaseUrl: opts.publicBaseUrl } : {}),
+    });
     const app = await apps.create({ name: "Acme" });
     const { secret } = await apps.createApiKey(app.id);
     return { api, secret, portalSessions };
@@ -3631,6 +3641,52 @@ describe("createApi — POST /v1/portal/sessions (portal session minting)", () =
     );
     expect(weirdScheme.status).toBe(201);
     expect(body(weirdScheme).portalUrl).toMatch(/^http:\/\/hooks\.example\.com\/portal\/login\?token=/);
+  });
+
+  it("builds portalUrl from a configured publicBaseUrl", async () => {
+    const { api, secret } = await portalSetup({ publicBaseUrl: "https://hooks.example.com" });
+    const res = await api(
+      jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "user-123" }, secret),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).portalUrl).toBe(
+      `https://hooks.example.com/portal/login?token=${body(res).token}`,
+    );
+  });
+
+  it("lets a configured publicBaseUrl override the request Host and X-Forwarded-Proto", async () => {
+    // The host-rewriting-proxy scenario: the inbound Host is the gateway's internal
+    // name and X-Forwarded-Proto would otherwise pick the scheme. The configured
+    // public origin must win on both counts so the link points at the public host.
+    const { api, secret } = await portalSetup({ publicBaseUrl: "https://hooks.example.com" });
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/portal/sessions",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          "x-forwarded-proto": "http",
+          host: "posthorn.internal:8080",
+        },
+        rawBody: JSON.stringify({ externalUserId: "u" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).portalUrl).toBe(
+      `https://hooks.example.com/portal/login?token=${body(res).token}`,
+    );
+  });
+
+  it("preserves a non-default port in a configured publicBaseUrl", async () => {
+    const { api, secret } = await portalSetup({ publicBaseUrl: "https://hooks.example.com:8443" });
+    const res = await api(
+      jsonRequest("POST", "/v1/portal/sessions", { externalUserId: "u" }, secret),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).portalUrl).toBe(
+      `https://hooks.example.com:8443/portal/login?token=${body(res).token}`,
+    );
   });
 });
 
