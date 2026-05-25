@@ -20,6 +20,15 @@
  * while making a reflected/stored-XSS payload non-executable by construction
  * (a second layer behind output escaping). JSON/text API responses carry no markup,
  * so they need only `nosniff` (kill MIME-sniffing) + a no-referrer policy.
+ *
+ * Both HTML surfaces are also served behind a session cookie (operator dashboards)
+ * or a portal session (consumer portal) and render tenant-scoped data, so they add
+ * `Cache-Control: no-store` to keep that authenticated markup out of every cache —
+ * the browser's disk/back-forward store and any shared proxy alike — closing the
+ * "log out, press Back, see the prior tenant's data" leak on a shared machine. The
+ * API surface is deliberately left cacheable: it also serves the *public* health,
+ * `/openapi.json`, and docs responses, which benefit from being cached, and its
+ * authenticated JSON is bearer-token (not cookie) driven and not a back-button risk.
  */
 
 /** The response surfaces, distinguished only by URL prefix. */
@@ -56,6 +65,15 @@ const DASHBOARD_CSP = `${HTML_CSP_RESOURCE_POLICY}; frame-ancestors 'none'`;
  */
 const PORTAL_CSP = HTML_CSP_RESOURCE_POLICY;
 
+/**
+ * `Cache-Control` for the authenticated HTML surfaces (dashboards + portal).
+ * `no-store` is the strongest directive — it forbids *any* cache (browser disk,
+ * back/forward buffer, and shared proxies) from retaining the response — which is
+ * the correct posture for cookie/session-scoped pages rendering tenant data. Shared
+ * by both HTML surfaces so the cache posture can't drift between them.
+ */
+const HTML_CACHE_CONTROL = "no-store";
+
 /** Headers applied to *every* response regardless of surface. */
 const UNIVERSAL_HEADERS: Readonly<Record<string, string>> = {
   // Stop browsers from MIME-sniffing a response into a more dangerous type
@@ -86,7 +104,8 @@ export function surfaceForPath(path: string): ResponseSurface {
 /**
  * The complete set of security headers to stamp on a response for the given
  * request path. Always includes {@link UNIVERSAL_HEADERS}; the HTML surfaces add a
- * Content-Security-Policy, and the dashboards additionally send the legacy
+ * Content-Security-Policy plus `Cache-Control: no-store` (authenticated, tenant-
+ * scoped markup must not be cached), and the dashboards additionally send the legacy
  * `X-Frame-Options: DENY` as a backstop for clients predating `frame-ancestors`.
  * Returns a fresh object each call (safe for the caller to spread/mutate).
  */
@@ -97,12 +116,14 @@ export function securityHeadersForPath(path: string): Record<string, string> {
       ...UNIVERSAL_HEADERS,
       "content-security-policy": DASHBOARD_CSP,
       "x-frame-options": "DENY",
+      "cache-control": HTML_CACHE_CONTROL,
     };
   }
   if (surface === "portal") {
     return {
       ...UNIVERSAL_HEADERS,
       "content-security-policy": PORTAL_CSP,
+      "cache-control": HTML_CACHE_CONTROL,
     };
   }
   return { ...UNIVERSAL_HEADERS };

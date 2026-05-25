@@ -300,13 +300,16 @@ describe("createHttpServer — security response headers", () => {
     // JSON/text carries no markup — no Content-Security-Policy, no frame controls.
     expect(res.headers.get("content-security-policy")).toBeNull();
     expect(res.headers.get("x-frame-options")).toBeNull();
+    // Public health/openapi/docs share this surface — leave it cacheable.
+    expect(res.headers.get("cache-control")).toBeNull();
   });
 
-  it("locks the dashboard down and forbids framing", async () => {
+  it("locks the dashboard down, forbids framing, and forbids caching", async () => {
     const { base } = await startServer({ dashboardHandler: htmlOk });
     const res = await fetch(`${base}/dashboard`);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("cache-control")).toBe("no-store");
     const csp = res.headers.get("content-security-policy") ?? "";
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'none'");
@@ -315,7 +318,7 @@ describe("createHttpServer — security response headers", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
-  it("locks the portal's resources down but leaves it embeddable (no frame controls)", async () => {
+  it("locks the portal's resources down, forbids caching, but leaves it embeddable", async () => {
     const { base } = await startServer({ portalHandler: htmlOk });
     const res = await fetch(`${base}/portal`);
     expect(res.status).toBe(200);
@@ -325,6 +328,8 @@ describe("createHttpServer — security response headers", () => {
     // Embeddability is the portal's whole point — it must NOT block framing.
     expect(csp).not.toContain("frame-ancestors");
     expect(res.headers.get("x-frame-options")).toBeNull();
+    // …but the tenant-scoped portal markup still must not be cached.
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("classifies by URL space even when the dashboard handler is disabled (404 still anti-framed)", async () => {

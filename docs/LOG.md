@@ -41,6 +41,43 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T21:25 · iter-0091 · GREEN · no-store-cache-control-on-authenticated-html
+
+- **Baseline:** clean main @ `00fb920` (iter-0090 per-surface security headers), whose recorded
+  green was `vitest run` **1736/1736**; tree unchanged at that SHA. Confirmed `tsc --noEmit` 0 and
+  the touched suites (`security-headers` + `server`, 29 tests) green before the full run below.
+- **Move:** Land iter-0090's standing Next #1 — add `Cache-Control: no-store` to the authenticated
+  HTML surfaces. Both operator **dashboards** (session-cookie) and the consumer **portal** (portal
+  session) render tenant-scoped data yet carried **no** cache directive, so a browser would cache
+  the markup to disk / its back-forward buffer: log out, press Back on a shared or kiosk machine,
+  and the prior tenant's data is still on screen. The service had zero caching posture on any
+  surface.
+- **Changed:**
+  - `http/security-headers.ts`: new shared `HTML_CACHE_CONTROL = "no-store"` constant; both the
+    `dashboard` and `portal` branches of `securityHeadersForPath` now emit `cache-control: no-store`.
+    The `api` branch is deliberately untouched. Header doc comments updated to state the rationale.
+  - `http/security-headers.test.ts`: +1 test (API surface stays cacheable — `/v1/*`, `/openapi.json`,
+    `/healthz` carry no `cache-control`); dashboard/portal cases now assert `no-store`.
+  - `http/server.test.ts`: dashboard + portal socket tests assert `cache-control: no-store` over the
+    wire; the plain-API socket test asserts it is absent (public docs/health stay cacheable).
+- **Decisions:** Scoped to the two HTML surfaces only — the `api` surface also serves the *public*
+  health/`openapi.json`/docs responses, which benefit from being cacheable, and its authenticated
+  JSON is bearer-token (not a cookie back-button) driven, so a blanket API `no-store` would strip
+  legitimate cacheability for no security gain. Used bare `no-store` (strongest: forbids browser +
+  shared-proxy + bfcache storage); skipped the HTTP/1.0-legacy `Pragma`/`Expires` pair as
+  cargo-cult on a modern-client service. Reused the existing pure prefix-surface model, so a
+  disabled-dashboard 404 and a `/portal/*` 404 inherit the posture by URL space, not handler wiring.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1737/1737** (+1; 52 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`. Compiled-`dist` ESM smoke: `dashboard`/`portal` →
+  `no-store`, `api`/`openapi` → undefined (`DIST_SMOKE_PASS`).
+- **Next:** Document the TLS-termination assumption and add `Strict-Transport-Security` (HSTS) behind
+  a config flag (only safe when TLS is actually terminated — getting it wrong locks a domain out for
+  the max-age); audit the admin/tenant dashboard views for any non-`esc()` interpolation (iter-0089
+  residual); or the standing `?failureReason=` triage filter on `GET /v1/deliveries` (needs the
+  structured reason threaded onto the `DeliveryTask` across all 3 backends + the worker `fail()`
+  path — a core-FSM change, hence its repeated deferral).
+
 ## 2026-05-24T19:45 · iter-0090 · GREEN · per-surface-security-response-headers
 
 - **Baseline:** clean main @ `82be719` (iter-0089 portal reflected-XSS fix). Verified green first:

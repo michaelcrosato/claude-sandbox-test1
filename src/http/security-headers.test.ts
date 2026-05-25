@@ -48,9 +48,19 @@ describe("securityHeadersForPath", () => {
     expect(Object.keys(h).sort()).toEqual(["referrer-policy", "x-content-type-options"]);
   });
 
-  it("locks the dashboard down and forbids framing", () => {
+  it("leaves the API surface cacheable (it also serves public health/openapi/docs)", () => {
+    // No `Cache-Control` on the API surface: the public health, /openapi.json, and
+    // docs responses share this surface and benefit from being cacheable, and the
+    // authenticated JSON is bearer-token (not a cookie back-button) risk.
+    expect(securityHeadersForPath("/v1/endpoints")["cache-control"]).toBeUndefined();
+    expect(securityHeadersForPath("/openapi.json")["cache-control"]).toBeUndefined();
+    expect(securityHeadersForPath("/healthz")["cache-control"]).toBeUndefined();
+  });
+
+  it("locks the dashboard down, forbids framing, and forbids caching", () => {
     const h = securityHeadersForPath("/dashboard/apps");
     expect(h["x-frame-options"]).toBe("DENY");
+    expect(h["cache-control"]).toBe("no-store");
     const csp = h["content-security-policy"] ?? "";
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'none'");
@@ -70,6 +80,8 @@ describe("securityHeadersForPath", () => {
     const h = securityHeadersForPath("/portal/endpoints");
     // Embeddability is the portal's whole point: NO frame controls.
     expect(h["x-frame-options"]).toBeUndefined();
+    // Authenticated tenant data still must not be cached, even though it's frameable.
+    expect(h["cache-control"]).toBe("no-store");
     const csp = h["content-security-policy"] ?? "";
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'none'");
