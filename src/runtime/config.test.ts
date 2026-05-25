@@ -12,7 +12,12 @@ import {
   type Env,
 } from "./config.js";
 import { MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
-import { DEFAULT_MAX_BODY_BYTES } from "../http/server.js";
+import {
+  DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+  DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_BODY_BYTES,
+} from "../http/server.js";
 import {
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -40,6 +45,9 @@ describe("loadConfig", () => {
       databaseUrl: null,
       databasePoolMax: DEFAULT_PG_POOL_MAX,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+      httpKeepAliveTimeoutMs: DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+      httpHeadersTimeoutMs: DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+      httpRequestTimeoutMs: DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
       publicBaseUrl: null,
       adminToken: null,
       endpointAutoDisableAfterMs: DEFAULT_AUTO_DISABLE_AFTER_MS,
@@ -270,6 +278,61 @@ describe("loadConfig", () => {
   it("rejects a non-positive max body size", () => {
     expect(loadConfig({ POSTHORN_MAX_BODY_BYTES: "2048" }).maxBodyBytes).toBe(2048);
     expect(() => loadConfig({ POSTHORN_MAX_BODY_BYTES: "0" })).toThrow(ConfigError);
+  });
+
+  describe("POSTHORN_HTTP_*_TIMEOUT_MS (socket-lifetime timeouts)", () => {
+    it("defaults to Node's own values when unset", () => {
+      const config = loadConfig({});
+      expect(config.httpKeepAliveTimeoutMs).toBe(DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS);
+      expect(config.httpHeadersTimeoutMs).toBe(DEFAULT_HTTP_HEADERS_TIMEOUT_MS);
+      expect(config.httpRequestTimeoutMs).toBe(DEFAULT_HTTP_REQUEST_TIMEOUT_MS);
+    });
+
+    it("parses explicit values", () => {
+      const config = loadConfig({
+        POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS: "65000",
+        POSTHORN_HTTP_HEADERS_TIMEOUT_MS: "66000",
+        POSTHORN_HTTP_REQUEST_TIMEOUT_MS: "120000",
+      });
+      expect(config.httpKeepAliveTimeoutMs).toBe(65_000);
+      expect(config.httpHeadersTimeoutMs).toBe(66_000);
+      expect(config.httpRequestTimeoutMs).toBe(120_000);
+    });
+
+    it("accepts 0 (disable) on each timeout", () => {
+      const config = loadConfig({
+        POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS: "0",
+        POSTHORN_HTTP_HEADERS_TIMEOUT_MS: "0",
+        POSTHORN_HTTP_REQUEST_TIMEOUT_MS: "0",
+      });
+      expect(config.httpKeepAliveTimeoutMs).toBe(0);
+      expect(config.httpHeadersTimeoutMs).toBe(0);
+      expect(config.httpRequestTimeoutMs).toBe(0);
+    });
+
+    it("rejects a negative timeout", () => {
+      expect(() => loadConfig({ POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS: "-1" })).toThrow(
+        /POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS/,
+      );
+    });
+
+    it("rejects headers timeout exceeding request timeout (both non-zero)", () => {
+      expect(() =>
+        loadConfig({
+          POSTHORN_HTTP_HEADERS_TIMEOUT_MS: "90000",
+          POSTHORN_HTTP_REQUEST_TIMEOUT_MS: "30000",
+        }),
+      ).toThrow(/must be <= POSTHORN_HTTP_REQUEST_TIMEOUT_MS/);
+    });
+
+    it("allows headers > request when request is disabled (0)", () => {
+      const config = loadConfig({
+        POSTHORN_HTTP_HEADERS_TIMEOUT_MS: "90000",
+        POSTHORN_HTTP_REQUEST_TIMEOUT_MS: "0",
+      });
+      expect(config.httpHeadersTimeoutMs).toBe(90_000);
+      expect(config.httpRequestTimeoutMs).toBe(0);
+    });
   });
 
   it("returns a deeply frozen, immutable config", () => {

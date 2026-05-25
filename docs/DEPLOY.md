@@ -142,6 +142,9 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_DATABASE_URL` | _(unset)_ | Postgres connection string (`postgres://` / `postgresql://`) selecting the [PostgreSQL backend](#postgresql-backend). Unset (default) = embedded SQLite under `POSTHORN_DATA_DIR`. The schema is created/migrated automatically on first boot. |
 | `POSTHORN_PG_POOL_MAX` | `10` | Max connections the shared Postgres pool opens (PostgreSQL backend only; ignored on SQLite). Every replica multiplies this against the database's one `max_connections` budget — keep `replicas × this` under the server cap. See [Connection pool sizing](#postgresql-backend). |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap in bytes (`413` if exceeded). |
+| `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS` | `5000` | Idle keep-alive socket timeout (ms). Defaults to Node's own. Behind a connection-pooling LB, **raise it above the LB's idle timeout** to avoid the upstream-`502` reuse race — see [Load-balancer keep-alive](#load-balancer-keep-alive-and-timeouts). `0` disables it. |
+| `POSTHORN_HTTP_HEADERS_TIMEOUT_MS` | `60000` | Deadline to receive the complete request **headers** (ms) — the slow-headers Slowloris bound. Must be ≤ `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` when both are non-zero. `0` disables it. |
+| `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` | `300000` | Deadline to receive the **entire** request, headers + body (ms) — the slow-body Slowloris bound, independent of the body-size cap. Tighten it for an internet-facing ingest endpoint (a normal POST finishes in well under a second). `0` disables it. |
 | `POSTHORN_PUBLIC_BASE_URL` | _(unset)_ | Canonical public origin for portal-session links (`portalUrl`). Unset (default) derives them from each request's `Host` + `X-Forwarded-Proto`. Set it to your public origin (e.g. `https://hooks.example.com`) behind a host-rewriting proxy. Must be a bare `http`/`https` origin — scheme + host (+ port), no path/query/fragment. See [Public base URL](#public-base-url-portal-links). |
 | `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
@@ -700,6 +703,37 @@ per-pod volume, because the replicas hold no local state.
   visibility timeout, so the only observable effect is at-least-once redelivery (which
   receivers already dedup on `webhook-id`). No draining beyond your load balancer's
   normal in-flight-request grace is required.
+
+### Load-balancer keep-alive and timeouts
+
+There is one HTTP-edge knob a deployment **behind a connection-pooling load balancer**
+(AWS ALB, nginx, Envoy, HAProxy, …) should set, and it is a correctness fix, not just
+tuning. The LB keeps a pool of upstream connections to each replica and reuses them. If
+the replica's keep-alive timeout is *shorter* than the LB's idle timeout, the LB can pick
+a socket to reuse in the same instant the replica decides to close it — the request lands
+on a half-closed connection and the client sees a sporadic, unexplained `502`/`504`.
+
+The fix is to make the replica's keep-alive timeout **longer** than the LB's idle
+timeout, so the LB always closes idle sockets first:
+
+```
+POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS  >  (LB idle timeout)
+POSTHORN_HTTP_HEADERS_TIMEOUT_MS     >  POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS
+```
+
+| Load balancer | Default idle timeout | Suggested `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS` | Suggested `POSTHORN_HTTP_HEADERS_TIMEOUT_MS` |
+|---------------|----------------------|--------------------------------------------------|----------------------------------------------|
+| AWS ALB       | 60 s                 | `65000`                                          | `66000` |
+| nginx (`keepalive_timeout`) | 75 s    | `80000`                                          | `81000` |
+| Direct / no LB | —                   | `5000` (default — keep short)                    | `60000` (default) |
+
+The defaults match Node's own (`5000` / `60000` / `300000`), so a single-container or
+direct-exposed deployment needs no change. `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` (whole
+request, headers + body) is the slow-body Slowloris bound; the `5`-minute default is
+generous for a 1 MiB body over a slow link — tighten it (e.g. `30000`) on an
+internet-facing ingest endpoint where a legitimate webhook POST finishes near-instantly.
+Setting `POSTHORN_HTTP_HEADERS_TIMEOUT_MS` above `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` is
+rejected at boot (the headers deadline can never outlast the whole-request one).
 
 ### Connection budget — the one number to plan
 

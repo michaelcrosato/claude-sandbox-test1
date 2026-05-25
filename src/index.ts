@@ -370,6 +370,9 @@ export {
 export {
   createHttpServer,
   DEFAULT_MAX_BODY_BYTES,
+  DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+  DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
   type HttpServerOptions,
 } from "./http/server.js";
 

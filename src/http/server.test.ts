@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AddressInfo, Server } from "node:net";
-import { createHttpServer, type HttpServerOptions } from "./server.js";
+import {
+  createHttpServer,
+  DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+  DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+  type HttpServerOptions,
+} from "./server.js";
 import type { ApiHandler } from "./api.js";
 import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
@@ -388,5 +394,48 @@ describe("createHttpServer — security response headers", () => {
     expect(res.status).toBe(413);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("connection")).toBe("close"); // preserved alongside
+  });
+});
+
+describe("createHttpServer socket-lifetime timeouts", () => {
+  /** Build a server (not listening — these are synchronous property assertions). */
+  function build(options?: HttpServerOptions) {
+    return createHttpServer(
+      {
+        apps: new InMemoryAppStore(),
+        endpoints: new InMemoryEndpointStore(),
+        messages: new InMemoryMessageStore(),
+        queue: new InMemoryDeliveryQueue(),
+        attempts: new InMemoryDeliveryAttemptStore(),
+        metrics: new MetricsRegistry({ version: "test" }),
+        eventTypes: new InMemoryEventTypeStore(),
+      },
+      options,
+    );
+  }
+
+  it("applies the explicit defaults (equal to Node's own) when unset", () => {
+    const server = build();
+    expect(server.keepAliveTimeout).toBe(DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS);
+    expect(server.headersTimeout).toBe(DEFAULT_HTTP_HEADERS_TIMEOUT_MS);
+    expect(server.requestTimeout).toBe(DEFAULT_HTTP_REQUEST_TIMEOUT_MS);
+  });
+
+  it("applies caller-supplied timeouts to the underlying server", () => {
+    const server = build({
+      keepAliveTimeoutMs: 65_000,
+      headersTimeoutMs: 66_000,
+      requestTimeoutMs: 90_000,
+    });
+    expect(server.keepAliveTimeout).toBe(65_000);
+    expect(server.headersTimeout).toBe(66_000);
+    expect(server.requestTimeout).toBe(90_000);
+  });
+
+  it("honors 0 as the disable sentinel (does not fall back to the default)", () => {
+    const server = build({ keepAliveTimeoutMs: 0, headersTimeoutMs: 0, requestTimeoutMs: 0 });
+    expect(server.keepAliveTimeout).toBe(0);
+    expect(server.headersTimeout).toBe(0);
+    expect(server.requestTimeout).toBe(0);
   });
 });

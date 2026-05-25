@@ -12,7 +12,12 @@
  * decisions are pure, only the outermost shell does I/O.
  */
 
-import { DEFAULT_MAX_BODY_BYTES } from "../http/server.js";
+import {
+  DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+  DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+  DEFAULT_MAX_BODY_BYTES,
+} from "../http/server.js";
 import {
   DEFAULT_IDLE_POLL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -122,6 +127,28 @@ export interface GatewayConfig {
   readonly databasePoolMax: number;
   /** Request-body cap, in bytes (`413` beyond it). */
   readonly maxBodyBytes: number;
+  /**
+   * Idle keep-alive socket timeout in ms (`server.keepAliveTimeout`). Defaults to
+   * {@link DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS} (Node's own default). Behind a
+   * connection-pooling reverse proxy / load balancer, set this **above** the LB's idle
+   * timeout to avoid the upstream `502` reuse race. `0` disables it.
+   * See `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS`.
+   */
+  readonly httpKeepAliveTimeoutMs: number;
+  /**
+   * Complete-request-headers deadline in ms (`server.headersTimeout`) — the slow-headers
+   * Slowloris bound. Defaults to {@link DEFAULT_HTTP_HEADERS_TIMEOUT_MS}. Must be
+   * `<= httpRequestTimeoutMs` when both are non-zero. `0` disables it.
+   * See `POSTHORN_HTTP_HEADERS_TIMEOUT_MS`.
+   */
+  readonly httpHeadersTimeoutMs: number;
+  /**
+   * Whole-request (headers + body) deadline in ms (`server.requestTimeout`) — the
+   * slow-body Slowloris bound, independent of {@link maxBodyBytes}. Defaults to
+   * {@link DEFAULT_HTTP_REQUEST_TIMEOUT_MS}. `0` disables it.
+   * See `POSTHORN_HTTP_REQUEST_TIMEOUT_MS`.
+   */
+  readonly httpRequestTimeoutMs: number;
   /**
    * Canonical public base URL the portal-session links (`POST /v1/portal/sessions`
    * → `portalUrl`) are built from, or `null` to derive them from each request's
@@ -443,6 +470,50 @@ function readDatabaseUrl(env: Env): string | null {
   return trimmed;
 }
 
+/** The three validated HTTP-server socket-lifetime timeouts, in ms. */
+interface HttpServerTimeouts {
+  readonly keepAliveTimeoutMs: number;
+  readonly headersTimeoutMs: number;
+  readonly requestTimeoutMs: number;
+}
+
+/**
+ * Read the HTTP-server socket-lifetime timeouts. Each defaults to Node's own value
+ * (so an un-tuned gateway is unchanged) and `0` disables that timeout. The one
+ * cross-field rule: when both are enabled, `headersTimeout` must not exceed
+ * `requestTimeout` — otherwise the whole-request deadline fires before the headers
+ * deadline can, making the latter silently dead weight. Rejected at boot rather than
+ * shipped as an ineffective config (the same fail-fast posture as {@link readHstsConfig}).
+ */
+function readHttpServerTimeouts(env: Env): HttpServerTimeouts {
+  const keepAliveTimeoutMs = readInt(
+    env,
+    "POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS",
+    DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+    { min: 0 },
+  );
+  const headersTimeoutMs = readInt(
+    env,
+    "POSTHORN_HTTP_HEADERS_TIMEOUT_MS",
+    DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
+    { min: 0 },
+  );
+  const requestTimeoutMs = readInt(
+    env,
+    "POSTHORN_HTTP_REQUEST_TIMEOUT_MS",
+    DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+    { min: 0 },
+  );
+  if (headersTimeoutMs > 0 && requestTimeoutMs > 0 && headersTimeoutMs > requestTimeoutMs) {
+    throw new ConfigError(
+      `POSTHORN_HTTP_HEADERS_TIMEOUT_MS (${headersTimeoutMs}) must be <= ` +
+        `POSTHORN_HTTP_REQUEST_TIMEOUT_MS (${requestTimeoutMs}) — the whole-request ` +
+        "deadline cannot be shorter than the headers deadline",
+    );
+  }
+  return { keepAliveTimeoutMs, headersTimeoutMs, requestTimeoutMs };
+}
+
 /**
  * The HSTS preload list's floor for `max-age`: one year in seconds. A `preload`
  * directive is rejected by the browser preload submission rules below this, so
@@ -495,6 +566,8 @@ function readHstsConfig(env: Env): HstsPolicy {
  * `POSTHORN_DATABASE_URL` (a `postgres://` URL selects the Postgres backend; unset = embedded SQLite),
  * `POSTHORN_PG_POOL_MAX` (max shared Postgres connections; Postgres backend only; default 10),
  * `POSTHORN_MAX_BODY_BYTES`,
+ * `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS` (idle keep-alive socket timeout; raise above the LB idle timeout; `0` = off),
+ * `POSTHORN_HTTP_HEADERS_TIMEOUT_MS` / `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` (Slowloris bounds; `0` = off; headers <= request),
  * `POSTHORN_PUBLIC_BASE_URL` (canonical origin for portal links; unset = derive from the request Host),
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
@@ -511,6 +584,7 @@ function readHstsConfig(env: Env): HstsPolicy {
  * `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` / `POSTHORN_HSTS_PRELOAD` (HSTS modifiers; require a non-zero max-age).
  */
 export function loadConfig(env: Env): GatewayConfig {
+  const httpTimeouts = readHttpServerTimeouts(env);
   const config: GatewayConfig = {
     host: readString(env, "POSTHORN_HOST", DEFAULT_HOST),
     port: readInt(env, "POSTHORN_PORT", DEFAULT_PORT, {
@@ -523,6 +597,9 @@ export function loadConfig(env: Env): GatewayConfig {
     maxBodyBytes: readInt(env, "POSTHORN_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, {
       min: 1,
     }),
+    httpKeepAliveTimeoutMs: httpTimeouts.keepAliveTimeoutMs,
+    httpHeadersTimeoutMs: httpTimeouts.headersTimeoutMs,
+    httpRequestTimeoutMs: httpTimeouts.requestTimeoutMs,
     publicBaseUrl: readPublicBaseUrl(env),
     adminToken: readAdminToken(env),
     endpointAutoDisableAfterMs: readInt(

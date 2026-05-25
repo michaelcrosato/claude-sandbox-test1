@@ -587,6 +587,12 @@ export function createGateway(
     },
     {
       maxBodyBytes: config.maxBodyBytes,
+      // Explicit socket-lifetime timeouts (Slowloris bounds + the keep-alive knob that
+      // must clear an upstream LB's idle timeout). A hand-built config that omits these
+      // flat fields passes `undefined`, so createHttpServer falls back to Node's defaults.
+      keepAliveTimeoutMs: config.httpKeepAliveTimeoutMs,
+      headersTimeoutMs: config.httpHeadersTimeoutMs,
+      requestTimeoutMs: config.httpRequestTimeoutMs,
       ...(dashboardHandler !== undefined ? { dashboardHandler } : {}),
       tenantDashboardHandler,
       portalHandler,

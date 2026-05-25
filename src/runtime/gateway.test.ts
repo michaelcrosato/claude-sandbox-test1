@@ -149,6 +149,21 @@ describe("createGateway", () => {
     await expect(gateway.start()).rejects.toThrow(/already started/);
   });
 
+  it("threads the configured HTTP socket timeouts onto the live listener", async () => {
+    const gateway = createGateway(
+      memoryConfig({
+        POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS: "65000",
+        POSTHORN_HTTP_HEADERS_TIMEOUT_MS: "66000",
+        POSTHORN_HTTP_REQUEST_TIMEOUT_MS: "120000",
+      }),
+    );
+    gateways.push(gateway);
+    await gateway.start();
+    expect(gateway.httpServer.keepAliveTimeout).toBe(65_000);
+    expect(gateway.httpServer.headersTimeout).toBe(66_000);
+    expect(gateway.httpServer.requestTimeout).toBe(120_000);
+  });
+
   it("routes HTTP requests through the injected logger, tagged component:http", async () => {
     const entries: LogEntry[] = [];
     const logger = createLogger({ level: "info", sink: (e) => entries.push(e) });

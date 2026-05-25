@@ -41,6 +41,49 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T02:45 · iter-0110 · GREEN · explicit-configurable-http-server-socket-timeouts
+
+- **Baseline:** clean main @ `ac90e16` (iter-0109 pg-pool acquire-timeout counter). Verified
+  green first: `tsc` 0, `vitest run` 1852 (6 PG-skipped), `build` 0.
+- **Move:** Break the eight-tick PG-pool/DB-pressure tunnel (memory flags that axis SATURATED)
+  and harden a *different* surface — the public HTTP edge. `createHttpServer` set **no** socket
+  timeouts, implicitly inheriting Node's defaults: the Slowloris bounds were unconfigurable and,
+  worse, the 5 s `keepAliveTimeout` default perpetuated the upstream-`502` keep-alive-reuse race
+  for the active/active-behind-LB topology iter-0106 just documented.
+- **Changed:**
+  - `http/server.ts`: three exported defaults (`DEFAULT_HTTP_{KEEP_ALIVE,HEADERS,REQUEST}_TIMEOUT_MS`
+    = Node's own `5000`/`60000`/`300000`) + `HttpServerOptions.{keepAliveTimeoutMs,headersTimeoutMs,
+    requestTimeoutMs}`; `createHttpServer` now sets `server.{keepAliveTimeout,headersTimeout,
+    requestTimeout}` explicitly (`option ?? default`).
+  - `runtime/config.ts`: flat `http{KeepAlive,Headers,Request}TimeoutMs` on `GatewayConfig`
+    (flat like `maxBodyBytes`, dodging the hand-built-smoke sub-object deref trap), read by a new
+    `readHttpServerTimeouts` with a fail-fast cross-field check (headers <= request when both > 0).
+    `0` disables each.
+  - `runtime/gateway.ts` threads the three into the `createHttpServer` options; `index.ts`
+    re-exports the defaults (parity with `DEFAULT_MAX_BODY_BYTES`).
+  - `.env.example` + `docs/DEPLOY.md`: the three vars (config-drift guard enforces both) + a new
+    `### Load-balancer keep-alive and timeouts` section with the ALB/nginx ordering rule
+    (`keepAlive > LB idle`, `headers > keepAlive`).
+- **Decisions:** Defaults == Node's, so **zero behavior change** out of the box — the leverage is
+  configurability + the LB-coordination correctness fix + explicitness against future Node
+  default drift, *not* a tightened default (which would risk regressing a slow legitimate upload).
+  Flat config fields over a `worker`/`fanout`-style sub-object specifically to avoid the
+  smoke-config crash ([[adding-a-config-var-has-hidden-requirements]]).
+- **Validation:** `tsc` 0; `vitest run` **1868** (+16; 6 PG-skipped) — one flaky tinypool
+  worker-exit on the first full run ([[vitest-tinypool-flaky-worker-exit]]), clean on re-run.
+  `build` 0. **Live `dist` smoke:** booted `node dist/main.js` with
+  `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS=600`; an idle keep-alive socket closed after 1601 ms (vs the
+  5000 ms Node default) → runtime enforcement confirmed; normal `GET /healthz` 200.
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** Exact property values are asserted in unit (server.test) + integration (gateway.test
+  reads `gateway.httpServer.*`) tests; the dist smoke proves the knob bites at runtime. keep-alive
+  is per-socket-timer enforced (prompt); headers/request are swept on `connectionsCheckingInterval`
+  (30 s default), so sub-second header/request deadlines are coarse-grained — see Next.
+- **Next:** Tighten the *default* `requestTimeout` for ingest (needs a payload-size-vs-link-speed
+  argument first) or expose `connectionsCheckingInterval` (the sweep granularity bounding how
+  promptly headers/request deadlines fire); or pivot off the HTTP-edge axis to a fresh
+  correctness/data-loss review of the delivery worker.
+
 ## 2026-05-25T02:10 · iter-0109 · GREEN · pg-pool-acquire-timeout-counter-and-saturation-alert
 
 - **Baseline:** clean main @ `eee8276` (iter-0108 `posthorn_pg_pool_errors_total`). Verified green

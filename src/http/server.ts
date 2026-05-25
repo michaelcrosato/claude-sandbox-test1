@@ -26,10 +26,61 @@ import { SILENT_LOGGER, type Logger } from "../logging/logger.js";
 /** Default request-body cap: 1 MiB. Generous for webhook payloads, bounded against abuse. */
 export const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * Default keep-alive socket timeout (ms): how long an idle persistent connection is
+ * held open between requests before the server closes it. Matches Node's own default
+ * (`5_000`), so the out-of-the-box behavior is unchanged; the value is made explicit
+ * and tunable here for **one** load-balancer correctness reason. A reverse proxy / LB
+ * pools upstream connections and may reuse a socket the very instant the gateway has
+ * decided to close it (the classic race that surfaces as sporadic upstream `502`s). The
+ * fix is to set this *above* the LB's own idle timeout (AWS ALB 60 s, nginx 75 s, …) —
+ * see `docs/DEPLOY.md`. `0` disables the timeout (sockets stay open until the client or
+ * an OS-level timeout closes them).
+ */
+export const DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+
+/**
+ * Default headers timeout (ms): the deadline from connection-open to the *complete*
+ * request headers being received. Bounds a slow-headers (Slowloris) client that dribbles
+ * header bytes to pin a connection open indefinitely. Matches Node's default (`60_000`);
+ * explicit + tunable here so it can be coordinated with the keep-alive and request
+ * timeouts. Must be `<= ` {@link DEFAULT_HTTP_REQUEST_TIMEOUT_MS} (the loader enforces
+ * the analogous relation on the configured values). `0` disables it.
+ */
+export const DEFAULT_HTTP_HEADERS_TIMEOUT_MS = 60_000;
+
+/**
+ * Default request timeout (ms): the deadline from connection-open to the *entire*
+ * request (headers **and** body) being received; the server answers `408` and closes
+ * the socket past it. Bounds a slow-body client that trickles the payload to hold a
+ * connection — the body twin of the headers Slowloris — independently of the
+ * {@link DEFAULT_MAX_BODY_BYTES} size cap (a within-cap body sent one byte at a time
+ * still hits this). Matches Node's default (`300_000`, i.e. 5 min); explicit + tunable
+ * so a webhook-ingest deployment can tighten it (a normal POST completes in well under a
+ * second). `0` disables it.
+ */
+export const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 300_000;
+
 /** Tunables for the HTTP server. */
 export interface HttpServerOptions {
   /** Reject a request body larger than this many bytes with `413`. Defaults to {@link DEFAULT_MAX_BODY_BYTES}. */
   readonly maxBodyBytes?: number;
+  /**
+   * Idle keep-alive socket timeout in ms (`server.keepAliveTimeout`). Defaults to
+   * {@link DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS}. Raise above the upstream LB's idle
+   * timeout to avoid the connection-reuse race; `0` disables it.
+   */
+  readonly keepAliveTimeoutMs?: number;
+  /**
+   * Complete-headers deadline in ms (`server.headersTimeout`), bounding a slow-headers
+   * Slowloris. Defaults to {@link DEFAULT_HTTP_HEADERS_TIMEOUT_MS}; `0` disables it.
+   */
+  readonly headersTimeoutMs?: number;
+  /**
+   * Whole-request (headers + body) deadline in ms (`server.requestTimeout`), bounding a
+   * slow-body Slowloris. Defaults to {@link DEFAULT_HTTP_REQUEST_TIMEOUT_MS}; `0` disables it.
+   */
+  readonly requestTimeoutMs?: number;
   /**
    * When provided, requests whose pathname begins with `/dashboard` (but not
    * `/dashboard/tenant`) are forwarded to this handler. Omit to disable the admin
@@ -324,7 +375,7 @@ export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {})
   const { dashboardHandler, tenantDashboardHandler, portalHandler } = options;
   const logger = options.logger ?? SILENT_LOGGER;
   const { strictTransportSecurity } = options;
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     void serve(
       req,
       res,
@@ -337,4 +388,13 @@ export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {})
       strictTransportSecurity,
     );
   });
+  // Make the socket-lifetime timeouts explicit and tunable rather than implicitly
+  // inheriting Node's defaults: keeps the Slowloris bounds (headers/request) under
+  // operator control and exposes `keepAliveTimeout` so it can be lifted above an
+  // upstream LB's idle timeout (the connection-reuse `502` race). Defaults equal
+  // Node's own, so an un-tuned deployment behaves exactly as before.
+  server.keepAliveTimeout = options.keepAliveTimeoutMs ?? DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = options.headersTimeoutMs ?? DEFAULT_HTTP_HEADERS_TIMEOUT_MS;
+  server.requestTimeout = options.requestTimeoutMs ?? DEFAULT_HTTP_REQUEST_TIMEOUT_MS;
+  return server;
 }
