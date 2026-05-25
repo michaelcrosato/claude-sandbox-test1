@@ -41,6 +41,43 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T00:15 · iter-0104 · GREEN · postgres-lock-and-idle-txn-timeouts
+
+- **Baseline:** clean main @ `d682435` (iter-0103 wired the PG backend into the gateway).
+  Verified green first: `tsc --noEmit` 0, `vitest run` 1831 (6 PG-skipped), `npm run build` 0.
+- **Move:** Give the freshly-deployable Postgres backend the connection-level safety
+  timeouts that the multi-replica path it exists for actually needs — the analogue of
+  the SQLite busy-timeout added in iter-0102. `createPostgresPool` was a bare
+  `new Pool({ connectionString })`, and Postgres defaults both `lock_timeout` and
+  `idle_in_transaction_session_timeout` to *infinite*. The PG queue's single-task
+  mutators (`complete`/`fail`/`retry`/`cancel`/`postpone`) take a plain `FOR UPDATE`
+  (no `SKIP LOCKED`), so a manual API `retry`/`cancel` colliding with a worker's `fail`
+  on the same row would block **forever**, pinning a pooled connection; a session left
+  idle mid-`BEGIN` would hold its row locks forever, blocking every other replica.
+- **Changed:**
+  - `db/postgres.ts`: new `POSTGRES_LOCK_TIMEOUT_MS` (5 s, matching the SQLite
+    busy-timeout) and `POSTGRES_IDLE_IN_TXN_TIMEOUT_MS` (10 s), applied to every pooled
+    connection via the `-c …` startup `options` parameter — set at handshake, so no
+    statement ever runs before the timeouts and there is no extra round-trip.
+  - `db/postgres.test.ts` (new, PG-gated): asserts both GUCs reach the backend
+    (`pg_settings`), and a real two-client `FOR UPDATE` contention test proving the
+    blocked statement is cancelled with `55P03` within the bound — never hangs.
+  - `DEPLOY.md`: "Concurrency safety timeouts" note in the PostgreSQL backend section.
+- **Decisions:** Startup `options` param, not a `pool.on('connect')` SET — empirically
+  the SET path emits pg's `client.query()`-while-busy DeprecationWarning (removed in
+  pg@9) and races the first query; `options` is race-free and future-proof. Fixed
+  constants, not new `POSTHORN_*` vars (same call as iter-0102's busy-timeout — keeps
+  them off the config↔docs drift surface). **No `statement_timeout`**: the data pruner's
+  bulk `DELETE`s can legitimately run long; both chosen timeouts fire only on a *blocked*
+  or *stalled* statement, never on one making progress.
+- **Validation:** `tsc` 0; `vitest run` **1831** (7 PG-skipped, +1 file). Against live
+  Docker Postgres 16: full `vitest run` **2105/2105**, 0 skipped (incl. the 2 new tests).
+  `npm run build` 0; `scripts/smoke-postgres.mjs` on the compiled `dist` vs real PG
+  **9/9**. `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** A `POSTHORN_PG_POOL_MAX` knob (the pool currently uses pg's default max 10,
+  likely too low for a busy multi-replica deploy); or a DEPLOY.md active/active topology
+  guide for the PG horizontal-scale path.
+
 ## 2026-05-24T23:59 · iter-0103 · GREEN · wire-postgres-backend-into-the-gateway
 
 - **Baseline:** clean main @ `f4710f2` (iter-0102). Verified green first:

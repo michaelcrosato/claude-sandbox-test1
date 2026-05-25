@@ -521,6 +521,18 @@ Postgres queue never double-deliver a task that another replica already holds, a
 replica that dies mid-delivery has its lease reclaimed. Idempotency keys are enforced
 by a composite unique index, so concurrent ingests of the same key still dedup.
 
+**Concurrency safety timeouts.** Every pooled connection opens with a 5-second
+`lock_timeout` and a 10-second `idle_in_transaction_session_timeout` (the Postgres
+counterpart to the SQLite busy-timeout). Postgres defaults both to *infinite*, so
+without them a queue mutation blocked behind another replica's row lock — or a
+session left idle mid-transaction by a stalled/crashed peer — would wait forever,
+pinning a connection and the locks it holds. With finite timeouts the blocked
+statement fails promptly with a retryable error instead, and a zombie transaction is
+aborted so its locks free. These are fixed, not tunable: they only ever fire on a
+statement that is *blocked* or a session that is *stalled*, never on one making
+progress, so the data-retention pruner's bulk deletes (which can run long) are
+deliberately left uncapped — there is no `statement_timeout`.
+
 **Schema.** Created and migrated automatically on first boot — the same
 forward-only, additive `ADD COLUMN IF NOT EXISTS` discipline as SQLite. No separate
 migration tool to run. The database role only needs `CREATE`/DDL on its schema plus
