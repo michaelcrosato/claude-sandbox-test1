@@ -191,6 +191,50 @@ describe("createTenantDashboardHandler — message detail", () => {
     expect(body).toContain("200");
   });
 
+  it("renders the structured failure reason on a failed delivery", async () => {
+    const { handler, apps, messages, endpoints, queue } = setup();
+    const { cookie, appId } = await loginAs(handler, apps);
+
+    const ep = await endpoints.create({ appId, url: "https://example.com/hook" });
+    const { message } = await messages.create({ appId, eventType: "user.created", payload: "{}" });
+    await queue.enqueue({ messageId: message.id, endpointId: ep.id, appId });
+    const [claimed] = await queue.claimDue({ nowMs: 1000, limit: 1 });
+    await queue.fail(claimed!.id, claimed!.leaseToken!, {
+      error: "connect ECONNREFUSED 203.0.113.5:443",
+      failureReason: "connection_refused",
+      nowMs: 1000,
+    });
+
+    const res = await handler(
+      req("GET", `/dashboard/tenant/messages/${message.id}`, { cookie }),
+    );
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    // Humanized reason in the new column, raw stable code in the title.
+    expect(body).toContain("Reason");
+    expect(body).toContain(">connection refused<");
+    expect(body).toContain('title="connection_refused"');
+    // The free-text lastError still renders alongside the structured reason.
+    expect(body).toContain("ECONNREFUSED");
+  });
+
+  it("shows an em-dash reason for a delivery that never failed", async () => {
+    const { handler, apps, messages, endpoints, queue } = setup();
+    const { cookie, appId } = await loginAs(handler, apps);
+
+    const ep = await endpoints.create({ appId, url: "https://example.com/hook" });
+    const { message } = await messages.create({ appId, eventType: "user.created", payload: "{}" });
+    await queue.enqueue({ messageId: message.id, endpointId: ep.id, appId });
+
+    const res = await handler(
+      req("GET", `/dashboard/tenant/messages/${message.id}`, { cookie }),
+    );
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    // A pending task with no failure carries no reason pill.
+    expect(body).not.toContain('title="');
+  });
+
   it("returns 404 for another tenant's message", async () => {
     const { handler, apps, messages } = setup();
     const { cookie } = await loginAs(handler, apps, "App1");

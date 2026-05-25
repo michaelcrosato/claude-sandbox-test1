@@ -41,6 +41,39 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T23:30 · iter-0100 · GREEN · tenant-dashboard-failure-reason-column
+
+- **Baseline:** clean main @ `845148a` (iter-0099 public-base-url config). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1817**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Close the thrice-deferred tenant-dashboard UI item (iter-0095/0098/0099 Next lists):
+  surface the structured `DeliveryFailureReason` on the tenant message-detail Deliveries table. The
+  reason code was denormalized onto the task (iter-0094), exposed as a `?failureReason=` API filter
+  (iter-0095) and `/metrics` gauges (iter-0098) — but the only failure signal a tenant could *see* in
+  the dashboard was the free-text `lastError`; its queryable structured companion was invisible at the
+  one surface a tenant actually reads.
+- **Changed:**
+  - `dashboard/tenant-views.ts`: new pure `reasonPill(reason)` — `null` (never failed) → em-dash;
+    else a `pill-gray` showing the humanized reason (`connection_refused` → "connection refused") with
+    the raw stable code in `title=` for precise triage/copy-paste. Inserted a **Reason** column into the
+    message-detail Deliveries table (between Next Attempt and Last Error); empty-state colspan 5→6. The
+    structured reason now sits beside its free-text Last Error sibling.
+  - Tests: +2 tenant-handler (a `connection_refused` fail renders the humanized pill + raw-code title
+    alongside the free-text error; a never-failed pending delivery shows no reason pill).
+- **Decisions:** Scoped to the tenant dashboard only — the deferred item's exact wording; the admin
+  dashboard (`views.ts`) is a parallel surface left for a follow-up to keep the diff tight. Flat neutral
+  `pill-gray` over category color-coding: the adjacent Status pill already carries the red/green signal,
+  so the reason only needs to be legible. `esc()`-guarded defensively though the value is a closed enum,
+  matching `statusPill`. No reason on the messages *list* (a message fans out to many deliveries with no
+  single reason).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1819** (+2; 52 files, 6 PG-skipped, no flaky exit);
+  `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py`
+  `[PASS]`.
+- **Notes:** `docs/LOG.md` now ~994 lines — still under the 1,000-line / 250 KB rotation boundary, but
+  the next product entry will likely cross it; a near-future tick should rotate into `docs/log/2026-05.md`.
+- **Next:** Mirror the Reason column onto the admin dashboard message-detail deliveries
+  (`dashboard/views.ts`) for parity; or an Alertmanager rule example keyed on the per-reason
+  `posthorn_dead_letter_tasks` gauge (which reason crossed threshold); or rotate `docs/LOG.md`.
+
 ## 2026-05-24T23:15 · iter-0099 · GREEN · public-base-url-config-for-portal-links
 
 - **Baseline:** clean main @ `91754d2` (iter-0098 dead-letter-by-reason gauge). Verified green

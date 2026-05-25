@@ -86,6 +86,17 @@ function outcomePill(outcome: string): string {
     : `<span class="pill pill-red">failed</span>`;
 }
 
+/**
+ * Pill for a delivery's structured {@link DeliveryFailureReason} — the queryable
+ * companion to the free-text `lastError`. `null` (never failed) renders an em-dash.
+ * The pill shows the humanized reason (`connection_refused` → "connection refused")
+ * with the raw, stable code in the `title` for precise triage and copy/paste.
+ */
+function reasonPill(reason: string | null): string {
+  if (reason === null) return '<span class="meta">—</span>';
+  return `<span class="pill pill-gray" title="${esc(reason)}">${esc(reason.replace(/_/g, " "))}</span>`;
+}
+
 function fmtTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace("T", " ") + " UTC";
 }
@@ -246,7 +257,7 @@ export function tenantMessageDetailPage(
 
   const deliveryRows =
     deliveries.length === 0
-      ? `<tr><td colspan="5" class="empty">No deliveries — no endpoints subscribed to this event type at send time.</td></tr>`
+      ? `<tr><td colspan="6" class="empty">No deliveries — no endpoints subscribed to this event type at send time.</td></tr>`
       : deliveries
           .map(
             (d) => `<tr>
@@ -254,6 +265,7 @@ export function tenantMessageDetailPage(
   <td>${statusPill(d.task.status)}</td>
   <td class="meta">${d.task.attempts}</td>
   <td class="meta">${d.task.nextAttemptAt !== null && d.task.status === "pending" ? fmtTime(d.task.nextAttemptAt) : "—"}</td>
+  <td>${reasonPill(d.task.failureReason)}</td>
   <td class="mono meta trunc">${d.task.lastError !== null ? esc(d.task.lastError) : "—"}</td>
 </tr>`,
           )
@@ -298,7 +310,7 @@ export function tenantMessageDetailPage(
 <div class="card">
   <table>
     <thead>
-      <tr><th>Endpoint</th><th>Status</th><th>Attempts</th><th>Next Attempt</th><th>Last Error</th></tr>
+      <tr><th>Endpoint</th><th>Status</th><th>Attempts</th><th>Next Attempt</th><th>Reason</th><th>Last Error</th></tr>
     </thead>
     <tbody>${deliveryRows}</tbody>
   </table>
