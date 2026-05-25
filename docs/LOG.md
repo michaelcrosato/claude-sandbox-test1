@@ -41,6 +41,37 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T01:35 · iter-0108 · GREEN · pg-pool-errors-counter-and-flapping-db-alert
+
+- **Baseline:** clean main @ `0f95e79` (iter-0107 crash-safe PG pool + `/readyz`). Verified
+  green: `tsc` 0, `vitest run` 1845 (6 PG-skipped), `build` 0.
+- **Move:** Close iter-0107's own headline gap — the pool `'error'` it made *non-fatal* now
+  leaves only a log line, so a flapping managed-Postgres is invisible to metrics/alerting.
+  Add `posthorn_pg_pool_errors_total` so the recoverable-but-request-invisible event becomes
+  observable and alertable.
+- **Changed:**
+  - `metrics.ts`: new `pgPoolErrors` counter on `MetricsRegistry` + arrow-bound
+    `recordPgPoolError`; rendered as `posthorn_pg_pool_errors_total` (always present, `0` on
+    SQLite — consistent with the "every series always present" design).
+  - `gateway.ts`: construct `metrics` *before* `openStoreBackend` (mirrors iter-0107's logger
+    move) and thread it in; the PG pool `onError` now logs **and** counts. `main.ts` admin path
+    left log-only (short-lived CLI, no `/metrics`).
+  - `monitoring/alerts.yml`: new `posthorn.database` group — `PosthornPostgresPoolErrors` fires
+    on `rate(...[5m]) > 0`, per-`instance` (the counter is per-replica; do not aggregate).
+  - Docs: DEPLOY.md counters-table row + a per-replica monitoring note (alert per-instance).
+- **Decisions:** No new `POSTHORN_*` var — always-on like `/readyz`, keeping the config↔docs
+  surface clean. Unlabeled single series (a pool `'error'` carries no useful dimension). Rendered
+  on SQLite too (stays `0`) so dashboards/alerts don't break when switching backends.
+- **Validation:** `tsc` 0; `vitest run` **1847** (+2 metric tests; 6 PG-skipped, no flaky exit)
+  incl. the `/metrics` integration test; `build` 0; `assert-gate-integrity.ps1` 0 (zero substrate
+  edits); `validate-log-compliance.py` `[PASS]`. **Live DB-down smoke** on compiled `dist` vs
+  Docker `postgres:16`: counter `0` → `docker stop` (pool logged 3× "postgres pool error", process
+  **survived**, `/readyz` 503, `/healthz` 200) → `docker start` (`/readyz` auto-recovered to 200) →
+  `posthorn_pg_pool_errors_total` = **3**. 8/8 checks.
+- **Next:** A pool-saturation / acquisition-timeout counter (the iter-0105 `connectionTimeoutMillis`
+  path) for the other "DB pressure" failure mode; or a brief `/readyz` cache if a high LB probe
+  cadence makes the per-request `SELECT 1` load undesirable.
+
 ## 2026-05-25T01:10 · iter-0107 · GREEN · readyz-probe-and-crash-safe-pg-pool-error-handler
 
 - **Baseline:** clean main @ `f814eca` (iter-0106 active/active deploy guide). Verified

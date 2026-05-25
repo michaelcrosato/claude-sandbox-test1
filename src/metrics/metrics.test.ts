@@ -38,6 +38,7 @@ describe("MetricsRegistry", () => {
       messagesDeduplicated: 0,
       deliveries: { succeeded: 0, failed: 0, deadLettered: 0, stale: 0 },
       deliveryFailures: emptyDeliveryFailureCounts(),
+      pgPoolErrors: 0,
     });
   });
 
@@ -99,6 +100,16 @@ describe("MetricsRegistry", () => {
     expect(reg.counters().messagesIngested).toBe(1);
   });
 
+  it("counts Postgres pool errors and stays bound as a bare callback", () => {
+    const reg = new MetricsRegistry();
+    expect(reg.counters().pgPoolErrors).toBe(0);
+    // Mirrors how the composition root wires it: `onError: ... metrics.recordPgPoolError`.
+    const onError = reg.recordPgPoolError;
+    onError();
+    onError();
+    expect(reg.counters().pgPoolErrors).toBe(2);
+  });
+
   it("computes uptime from the injected clock and never goes negative", () => {
     let now = 10_000;
     const reg = new MetricsRegistry({ now: () => now });
@@ -125,6 +136,7 @@ describe("renderPrometheus", () => {
         request_timeout: 1,
         http_5xx: 3,
       },
+      pgPoolErrors: 4,
     },
     deliveryTasksByStatus: {
       pending: 2,
@@ -149,6 +161,7 @@ describe("renderPrometheus", () => {
       "posthorn_messages_deduplicated_total",
       "posthorn_deliveries_total",
       "posthorn_delivery_failures_total",
+      "posthorn_pg_pool_errors_total",
       "posthorn_delivery_tasks",
       "posthorn_dead_letter_tasks",
     ]) {
@@ -183,6 +196,12 @@ describe("renderPrometheus", () => {
     expect(text).toContain('posthorn_delivery_failures_total{reason="http_5xx"} 3');
     // A reason with no failures still emits a zero series so the dashboard label exists.
     expect(text).toContain('posthorn_delivery_failures_total{reason="ssrf_blocked"} 0');
+  });
+
+  it("renders the Postgres pool-error counter as an unlabeled series", () => {
+    const text = renderPrometheus(snapshot);
+    expect(text).toContain("# TYPE posthorn_pg_pool_errors_total counter");
+    expect(text).toContain("posthorn_pg_pool_errors_total 4");
   });
 
   it("renders the backlog gauge with one series per status", () => {

@@ -74,3 +74,25 @@ groups:
             More than 1 000 deliveries are queued as pending.  The worker may
             be falling behind or a burst of messages arrived.  Consider
             increasing POSTHORN_WORKER_BATCH_SIZE or POSTHORN_WORKER_CONCURRENCY.
+
+  - name: posthorn.database
+    rules:
+      - alert: PosthornPostgresPoolErrors
+        # posthorn_pg_pool_errors_total is per-replica (it accumulates in the process
+        # whose pooled connection was severed), so alert per-instance — do NOT aggregate.
+        # Only fires when POSTHORN_DATABASE_URL is set; on the SQLite backend the counter
+        # is always 0 and this rule never triggers.
+        expr: rate(posthorn_pg_pool_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connection pool reporting errors on {{ $labels.instance }}"
+          description: >
+            The Postgres connection pool on {{ $labels.instance }} emitted recoverable
+            'error' events over the last 5 minutes — a severed idle connection from a
+            database restart/failover, idle timeout, or network blip.  The pool
+            reconnects automatically (no request failed, and /readyz tracks live
+            reachability), but a sustained rate means the database is flapping and
+            deliveries may stall.  Check the managed-Postgres status and the gateway
+            logs ("postgres pool error").

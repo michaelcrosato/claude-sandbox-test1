@@ -363,6 +363,7 @@ Prometheus model; Prometheus detects resets via the `_created` convention).
 | `posthorn_messages_deduplicated_total` | — | Messages suppressed because the idempotency key was already seen. |
 | `posthorn_deliveries_total` | `outcome` | Delivery attempt outcomes. Labels: `succeeded`, `failed`, `dead_lettered`, `stale` (lease-lapsed, counted but not retried by this worker). |
 | `posthorn_delivery_failures_total` | `reason` | The **why** behind `failed` + `dead_lettered` (their sum equals the sum of this family). Labels: `connect_timeout` (endpoint unreachable — DNS+connect deadline hit), `request_timeout` (connected but too slow — total deadline hit), `dns_failure`, `connection_refused`, `connection_reset`, `tls_error`, `ssrf_blocked` (resolved to a private/internal address), `http_4xx`, `http_5xx`, `http_other`, `no_endpoint` (subscription gone), `expired` (message TTL elapsed), `other`. |
+| `posthorn_pg_pool_errors_total` | — | Recoverable Postgres connection-pool errors: a severed *idle* connection (DB restart/failover, idle timeout, network blip) the pool reconnects from on its own. **Always `0` on the SQLite backend** (no pool). No request fails when it ticks, so it is the only signal a flapping database leaves behind — a sustained `rate()` is the alert (see `PosthornPostgresPoolErrors` in `monitoring/alerts.yml`). |
 
 ### Gauges (point-in-time, read from queue at scrape time)
 
@@ -727,7 +728,11 @@ conflating them is the easiest multi-replica monitoring mistake:
 - **Counters are per-replica — sum them.** `posthorn_messages_ingested_total`,
   `posthorn_deliveries_total`, `posthorn_messages_deduplicated_total`, and
   `posthorn_delivery_failures_total` each accumulate in the process that handled the
-  work, so a fleet total is a `sum`:
+  work, so a fleet total is a `sum`. (`posthorn_pg_pool_errors_total` is also
+  per-replica — each replica owns its own pool — but it tracks the *health of a
+  replica's connection to the shared database*, so the shipped alert keeps it
+  per-`instance` rather than summing, surfacing exactly which replica lost its
+  connections.)
 
   ```promql
   # Fleet-wide ingest rate (msgs/min):

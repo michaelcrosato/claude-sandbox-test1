@@ -251,16 +251,25 @@ interface StoreBackend {
  * without knowing which backend backs them, the same store-contract abstraction the
  * conformance suites guarantee both backends honor identically.
  */
-function openStoreBackend(config: GatewayConfig, logger: Logger): StoreBackend {
+function openStoreBackend(
+  config: GatewayConfig,
+  logger: Logger,
+  metrics: MetricsRegistry,
+): StoreBackend {
   if (config.databaseUrl) {
     // One pool shared by every Postgres store — Postgres connection slots are
     // precious, so the composition root owns the single pool (sized via
     // POSTHORN_PG_POOL_MAX) and drains it on stop. The pool's error sink logs a
     // severed *idle* connection (a DB restart/failover) instead of letting Node's
-    // unhandled-'error' rule crash the whole gateway over a recoverable blip.
+    // unhandled-'error' rule crash the whole gateway over a recoverable blip, and
+    // counts it (`posthorn_pg_pool_errors_total`) so a database that flaps is
+    // alertable — the event fails no request, so it is otherwise invisible to metrics.
     const pool = createPostgresPool(config.databaseUrl, {
       max: config.databasePoolMax,
-      onError: (err) => logger.error("postgres pool error", { component: "db", err }),
+      onError: (err) => {
+        logger.error("postgres pool error", { component: "db", err });
+        metrics.recordPgPoolError();
+      },
     });
     const apps = new PostgresAppStore(pool);
     const endpoints = new PostgresEndpointStore(pool);
@@ -367,10 +376,14 @@ export function createGateway(
     version: POSTHORN_VERSION,
   });
 
-  const backend = openStoreBackend(config, logger);
-  const { apps, endpoints, messages, queue, attempts, eventTypes } = backend;
-
+  // Operational counters. Built before the store backend (like the logger) so the
+  // Postgres pool's error listener can both log *and* count a severed idle connection —
+  // `posthorn_pg_pool_errors_total` is the only signal a recoverable, request-invisible
+  // DB blip leaves behind.
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
+
+  const backend = openStoreBackend(config, logger, metrics);
+  const { apps, endpoints, messages, queue, attempts, eventTypes } = backend;
 
   // The webhook delivery transport for every tenant-URL send (the worker's
   // continuous delivery loop and the `POST /v1/endpoints/:id/test` one-shot). It

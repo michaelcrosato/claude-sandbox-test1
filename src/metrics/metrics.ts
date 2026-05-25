@@ -68,6 +68,16 @@ export interface MetricsCounters {
    * Summed across reasons this equals `deliveries.failed + deliveries.deadLettered`.
    */
   readonly deliveryFailures: DeliveryFailureReasonCounts;
+  /**
+   * Recoverable Postgres connection-pool `'error'` events over the process lifetime —
+   * a severed *idle* pooled connection (DB restart/failover, `pg_terminate_backend`,
+   * idle timeout, network blip) that the pool discards and transparently reconnects on
+   * the next checkout. Always `0` on the embedded SQLite backend (no pool). No request
+   * fails when this ticks, so it is invisible to the delivery counters — but a sustained
+   * rate is the signature of a flapping database, which is exactly what makes it worth a
+   * dedicated series and alert.
+   */
+  readonly pgPoolErrors: number;
 }
 
 /** Everything {@link renderPrometheus} needs: counters + live gauges + metadata. */
@@ -118,6 +128,7 @@ export class MetricsRegistry {
   #failed = 0;
   #deadLettered = 0;
   #stale = 0;
+  #pgPoolErrors = 0;
   readonly #deliveryFailures = emptyDeliveryFailureCounts();
 
   constructor(options: MetricsRegistryOptions = {}) {
@@ -151,6 +162,17 @@ export class MetricsRegistry {
     }
   };
 
+  /**
+   * Record one recoverable Postgres connection-pool `'error'` event (a severed idle
+   * pooled connection the pool reconnects from automatically). Arrow-bound so the
+   * composition root can hand it straight to {@link PostgresPoolOptions.onError}
+   * alongside the structured log line. A no-op concept on the SQLite backend — that
+   * path never calls it, so the counter stays `0` there.
+   */
+  recordPgPoolError = (): void => {
+    this.#pgPoolErrors += 1;
+  };
+
   /** Seconds since this registry (≈ the process) started; never negative. */
   uptimeSeconds(): number {
     return Math.max(0, (this.#now() - this.#startedAtMs) / 1000);
@@ -169,6 +191,7 @@ export class MetricsRegistry {
       },
       // A copy so the snapshot can never mutate the registry's live tally.
       deliveryFailures: { ...this.#deliveryFailures },
+      pgPoolErrors: this.#pgPoolErrors,
     };
   }
 }
@@ -270,6 +293,14 @@ export function renderPrometheus(snapshot: MetricsSnapshot): string {
         labels: { reason },
         value: counters.deliveryFailures[reason],
       })),
+    ),
+    renderFamily(
+      "posthorn_pg_pool_errors_total",
+      "counter",
+      "Recoverable Postgres connection-pool errors (a severed idle connection from a DB " +
+        "restart/failover/idle timeout; the pool reconnects automatically). Always 0 on the " +
+        "embedded SQLite backend. A sustained rate signals a flapping database.",
+      [{ value: counters.pgPoolErrors }],
     ),
     renderFamily(
       "posthorn_delivery_tasks",
