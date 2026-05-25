@@ -150,7 +150,15 @@ export function portalEndpointsPage(
   endpoints: readonly Endpoint[],
   createdSecret?: string,
   catalogTypes?: readonly { id: string; name: string }[],
+  errorMessage?: string,
 ): string {
+  // Escaped inline error (e.g. a rejected URL). Rendered as HTML text — never as a
+  // script — so a hostile URL echoed back by validation cannot execute. See the
+  // create handler, which previously injected this via an inline <script>alert(...)>.
+  const errorBanner = errorMessage
+    ? `<div class="alert alert-err">${esc(errorMessage)}</div>`
+    : "";
+
   const secretBanner = createdSecret
     ? `<div class="banner">
   <label>Signing secret (shown once — copy it now)</label>
@@ -200,6 +208,7 @@ export function portalEndpointsPage(
 
   const createForm = `<div class="card">
   <h2 style="margin-bottom:16px">Add endpoint</h2>
+  ${errorBanner}
   <form method="POST" action="/portal/endpoints">
     <div class="form-row">
       <label for="url">URL <span style="color:#ef4444">*</span></label>

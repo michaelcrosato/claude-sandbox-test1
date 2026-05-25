@@ -41,6 +41,44 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T19:35 · iter-0089 · GREEN · portal-reflected-xss-on-create-error
+
+- **Baseline:** clean main @ `b61902b` (iter-0088 per-attempt failure reason). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1720/1720** (51 files, 6 PG-skipped, no flaky exit), `npm run
+  build` 0.
+- **Move:** Close a reflected-XSS hole in the consumer portal — security hardening, chosen over
+  continuing the observability arc per standing guidance. On a failed `POST /portal/endpoints` the
+  handler surfaced the validation error by **injecting an inline
+  `<script>alert(JSON.stringify(errMsg))</script>`**. `JSON.stringify` escapes quotes/backslashes but
+  **not** `</script>`, and the endpoint store's syntactic validation echoes the raw URL verbatim
+  (`url is not a valid absolute URL: "<input>"`, `endpoint.ts:495`) — `assertUrlDeliverable` is a
+  no-op on an unparseable URL, so a malformed value reaches that echo. A URL like
+  `abc</script><script>…</script>` thus broke out of the alert script and executed in the
+  portal-session origin.
+- **Changed:**
+  - `portal/portal-views.ts`: `portalEndpointsPage` gains an optional `errorMessage`, rendered as an
+    `esc()`-escaped `.alert-err` banner inside the create-form card — the exact pattern
+    `portalEventTypesPage` already uses for its create error. No script ever carries the message.
+  - `portal/portal-handler.ts`: the create-failure path now calls
+    `portalEndpointsPage(eps, undefined, catalogTypes, errMsg)` instead of concatenating the inline
+    `<script>alert(...)>`. The rendered portal HTML now contains **zero** `<script>` tags.
+  - +1 regression test: a `</script><script>alert(document.cookie)</script>` URL is escaped
+    (`&lt;/script&gt;` present; the breakout boundary `</script><script>` absent; nothing created).
+- **Decisions:** Fixed at the sink (encode-on-output via `esc()`) rather than scrubbing the error
+  text, so any future error string is safe by construction. Kept the `200` re-render + inline-banner
+  UX (matches the event-types path). Deferred a defense-in-depth CSP / security-response-header pass:
+  it needs per-surface policy (the portal is *designed* to be iframe-embedded, so a blanket
+  `X-Frame-Options: DENY` would break it while the admin/tenant dashboards *should* set it) — its own
+  tick.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1721/1721** (+1; 51 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Next:** Defense-in-depth security response headers with per-surface policy (`nosniff` everywhere;
+  `X-Frame-Options`/CSP `frame-ancestors` on the dashboards but not the embeddable portal;
+  `script-src 'none'` CSP on portal HTML); audit the other HTML surfaces (admin/tenant dashboards)
+  for any non-`esc()` interpolation; or the standing `?failureReason=` triage filter on
+  `GET /v1/deliveries`.
+
 ## 2026-05-24T19:25 · iter-0088 · GREEN · delivery-failure-reason-on-attempt-record
 
 - **Baseline:** clean main @ `1ef5e5b` (iter-0087 per-reason failure metric). Verified green first:

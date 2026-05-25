@@ -146,6 +146,38 @@ describe("createPortalHandler", () => {
     expect(await endpoints.listByApp("app_1")).toHaveLength(0);
   });
 
+  it("POST /portal/endpoints does not reflect a malformed URL as executable script (XSS guard)", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    // A URL that fails to parse falls through to the endpoint store's syntactic
+    // validation, whose error echoes the raw input verbatim. The closing-tag
+    // payload must never break out of the page into an executable <script>.
+    const payload = "abc</script><script>alert(document.cookie)</script>";
+    const r = withCookie(
+      req({
+        method: "POST",
+        path: "/portal/endpoints",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        rawBody: `url=${encodeURIComponent(payload)}`,
+      }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    // No script breakout: neither the closing-tag boundary nor the injected
+    // script survives unescaped (the previous inline <script>alert(JSON.stringify
+    // (...))> sink did not neutralize a `</script>`).
+    expect(html).not.toContain("</script><script>");
+    expect(html).not.toContain("<script>alert(document.cookie)</script>");
+    // The error IS surfaced — HTML-escaped — in the inline banner.
+    expect(html).toContain("alert-err");
+    expect(html).toContain("&lt;/script&gt;");
+    // And nothing was created from the bad input.
+    expect(await endpoints.listByApp("app_1")).toHaveLength(0);
+  });
+
   it("POST /portal/endpoints permits an internal URL when allowPrivateNetworks is set", async () => {
     const endpoints = new InMemoryEndpointStore();
     const queue = new InMemoryDeliveryQueue();

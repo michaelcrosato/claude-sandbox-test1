@@ -287,12 +287,14 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         const created = await endpoints.create(input);
         secret = created.secret;
       } catch (err) {
-        // Validation error (e.g. bad URL) — show the list with an inline error.
+        // Validation error (e.g. bad URL) — re-render the list with an inline,
+        // HTML-escaped error banner. The message can echo the caller's raw URL
+        // (e.g. `url is not a valid absolute URL: "<input>"`); rendering it as
+        // escaped text — not an inline <script>alert(JSON.stringify(...))>, which
+        // does NOT neutralize a `</script>` breakout — keeps the portal XSS-safe.
         const eps = await endpoints.listByApp(appId);
         const errMsg = err instanceof Error ? err.message : "Invalid input.";
-        // Inject a JS alert as the simplest way to surface the error without
-        // refactoring the view to carry a separate error slot for the create form.
-        return html(200, portalEndpointsPage(eps, undefined, catalogTypes) + `<script>alert(${JSON.stringify(errMsg)})</script>`);
+        return html(200, portalEndpointsPage(eps, undefined, catalogTypes, errMsg));
       }
       // Reload the list and show the secret banner.
       const eps = await endpoints.listByApp(appId);
