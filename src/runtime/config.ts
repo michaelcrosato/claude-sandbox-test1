@@ -33,6 +33,7 @@ import {
   isLogThreshold,
   type LogThreshold,
 } from "../logging/logger.js";
+import type { HstsPolicy } from "../http/security-headers.js";
 
 /**
  * Default bind host. `0.0.0.0` is the right default for the headline deployment
@@ -149,6 +150,16 @@ export interface GatewayConfig {
    * See `POSTHORN_LOG_LEVEL` and {@link import("../logging/logger.js").Logger}.
    */
   readonly logLevel: LogThreshold;
+  /**
+   * HTTP Strict Transport Security policy for the response edge. Disabled by
+   * default (`maxAgeSeconds: 0` — no header emitted), because HSTS is only safe once
+   * the origin is genuinely reached over HTTPS: an over-long `max-age` published
+   * before a host/subdomain is TLS-ready locks it out of plain HTTP for that window.
+   * Enable deliberately (this service terminates TLS at an upstream proxy).
+   * See `POSTHORN_HSTS_MAX_AGE` / `_INCLUDE_SUBDOMAINS` / `_PRELOAD` and
+   * {@link import("../http/security-headers.js").hstsHeaderValue}.
+   */
+  readonly hsts: HstsPolicy;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -313,6 +324,47 @@ function readAdminToken(env: Env): string | null {
 }
 
 /**
+ * The HSTS preload list's floor for `max-age`: one year in seconds. A `preload`
+ * directive is rejected by the browser preload submission rules below this, so
+ * configuring `preload` with a shorter `max-age` is a guaranteed no-op — rejected
+ * at boot rather than silently shipped.
+ */
+export const HSTS_PRELOAD_MIN_MAX_AGE_SECONDS = 31_536_000;
+
+/**
+ * Read the optional HSTS policy. Disabled by default (`POSTHORN_HSTS_MAX_AGE` unset
+ * or `0`), in which case the modifier flags must not be set on their own — a
+ * `includeSubDomains`/`preload` with no `max-age` is a misconfiguration (nothing to
+ * extend), rejected at boot. `preload` additionally requires `includeSubDomains` and
+ * a `max-age >= 1 year`, mirroring the browser preload-list rules so an ineffective
+ * `preload` directive never ships silently.
+ */
+function readHstsConfig(env: Env): HstsPolicy {
+  const maxAgeSeconds = readInt(env, "POSTHORN_HSTS_MAX_AGE", 0, { min: 0 });
+  const includeSubDomains = readBool(env, "POSTHORN_HSTS_INCLUDE_SUBDOMAINS", false);
+  const preload = readBool(env, "POSTHORN_HSTS_PRELOAD", false);
+  if (maxAgeSeconds === 0 && (includeSubDomains || preload)) {
+    throw new ConfigError(
+      "POSTHORN_HSTS_INCLUDE_SUBDOMAINS / POSTHORN_HSTS_PRELOAD require " +
+        "POSTHORN_HSTS_MAX_AGE > 0 (there is no policy to extend while HSTS is disabled)",
+    );
+  }
+  if (preload && !includeSubDomains) {
+    throw new ConfigError(
+      "POSTHORN_HSTS_PRELOAD requires POSTHORN_HSTS_INCLUDE_SUBDOMAINS=true " +
+        "(the HSTS preload-list rules mandate includeSubDomains)",
+    );
+  }
+  if (preload && maxAgeSeconds < HSTS_PRELOAD_MIN_MAX_AGE_SECONDS) {
+    throw new ConfigError(
+      `POSTHORN_HSTS_PRELOAD requires POSTHORN_HSTS_MAX_AGE >= ${HSTS_PRELOAD_MIN_MAX_AGE_SECONDS} ` +
+        "(1 year, the HSTS preload-list minimum)",
+    );
+  }
+  return Object.freeze<HstsPolicy>({ maxAgeSeconds, includeSubDomains, preload });
+}
+
+/**
  * Build a validated {@link GatewayConfig} from an environment record. Pure: it
  * never reads `process.env` directly (the caller passes it) and performs no I/O,
  * so every branch is unit-testable. Throws {@link ConfigError} on the first
@@ -330,7 +382,9 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default),
  * `POSTHORN_DEFAULT_RATE_LIMIT` (gateway-wide deliveries/min cap for endpoints without an explicit limit; unset = no default),
  * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (`false` = block delivery to private/internal addresses, the SSRF default),
- * `POSTHORN_LOG_LEVEL` (`debug`/`info`/`warn`/`error`/`silent`; default `info`).
+ * `POSTHORN_LOG_LEVEL` (`debug`/`info`/`warn`/`error`/`silent`; default `info`),
+ * `POSTHORN_HSTS_MAX_AGE` (`Strict-Transport-Security max-age` in seconds; `0` = HSTS off, the default),
+ * `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` / `POSTHORN_HSTS_PRELOAD` (HSTS modifiers; require a non-zero max-age).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -386,6 +440,7 @@ export function loadConfig(env: Env): GatewayConfig {
     defaultRateLimit: readDefaultRateLimit(env),
     allowPrivateNetworks: readBool(env, "POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS", false),
     logLevel: readLogLevel(env),
+    hsts: readHstsConfig(env),
     fanout: Object.freeze<FanoutConfig>({
       graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
         min: 0,

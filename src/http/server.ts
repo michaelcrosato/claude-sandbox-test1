@@ -56,6 +56,13 @@ export interface HttpServerOptions {
    * passes a level-configured logger bound to `component: "http"`.
    */
   readonly logger?: Logger;
+  /**
+   * Precomputed `Strict-Transport-Security` header value (see
+   * {@link import("./security-headers.js").hstsHeaderValue}). When set, it is
+   * stamped on every response across all surfaces. Omit to emit no HSTS header —
+   * the default, since HSTS is only safe once the origin is served over HTTPS.
+   */
+  readonly strictTransportSecurity?: string;
 }
 
 /** Signals that a request body exceeded the configured cap. */
@@ -187,6 +194,7 @@ async function serve(
   tenantDashboardHandler: ApiHandler | undefined,
   portalHandler: ApiHandler | undefined,
   logger: Logger,
+  strictTransportSecurity: string | undefined,
 ): Promise<void> {
   const startedAt = Date.now();
   const method = req.method ?? "GET";
@@ -194,8 +202,9 @@ async function serve(
   const path = url.pathname;
   // Defense-in-depth response headers, keyed purely off the URL surface (API vs
   // dashboard vs the embeddable portal). Computed once here so every exit path
-  // below — including the early body-read failures — stamps them.
-  const securityHeaders = securityHeadersForPath(path);
+  // below — including the early body-read failures — stamps them. HSTS (when
+  // configured) rides on top of every surface.
+  const securityHeaders = securityHeadersForPath(path, strictTransportSecurity);
 
   let rawBody: string;
   try {
@@ -285,6 +294,7 @@ export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {})
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const { dashboardHandler, tenantDashboardHandler, portalHandler } = options;
   const logger = options.logger ?? SILENT_LOGGER;
+  const { strictTransportSecurity } = options;
   return createServer((req, res) => {
     void serve(
       req,
@@ -295,6 +305,7 @@ export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {})
       tenantDashboardHandler,
       portalHandler,
       logger,
+      strictTransportSecurity,
     );
   });
 }

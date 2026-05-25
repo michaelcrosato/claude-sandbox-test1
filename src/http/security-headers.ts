@@ -29,6 +29,16 @@
  * API surface is deliberately left cacheable: it also serves the *public* health,
  * `/openapi.json`, and docs responses, which benefit from being cached, and its
  * authenticated JSON is bearer-token (not cookie) driven and not a back-button risk.
+ *
+ * One header crosses every surface when enabled: `Strict-Transport-Security` (HSTS).
+ * It is a transport assertion about the *whole origin* (force HTTPS for `max-age`
+ * seconds), not about a given response's content, so — unlike CSP / X-Frame-Options —
+ * it is stamped on the API surface too. It is **opt-in and off by default**
+ * ({@link hstsHeaderValue} returns `null` until configured) because it is only
+ * meaningful when the origin is actually reached over HTTPS and an over-long
+ * `max-age` set before every host is TLS-ready can lock a domain out of plain HTTP
+ * for that window. This service terminates TLS at an upstream proxy; the emitted
+ * header reaches the browser over that HTTPS hop and is inert on a plain-HTTP probe.
  */
 
 /** The response surfaces, distinguished only by URL prefix. */
@@ -74,6 +84,44 @@ const PORTAL_CSP = HTML_CSP_RESOURCE_POLICY;
  */
 const HTML_CACHE_CONTROL = "no-store";
 
+/**
+ * HSTS (HTTP Strict Transport Security) policy. Disabled by default: HSTS is only
+ * meaningful — and only safe — when the origin is actually reached over HTTPS, and
+ * an over-long `max-age` set before every host/subdomain is TLS-ready can lock a
+ * domain out of plain HTTP for that whole window. So it is an explicit opt-in: the
+ * value is a transport assertion the operator makes deliberately. A `maxAgeSeconds`
+ * of `0` (or negative) disables it — no header is emitted.
+ */
+export interface HstsPolicy {
+  /** `max-age` in seconds. `0` (or negative) disables HSTS — no header is emitted. */
+  readonly maxAgeSeconds: number;
+  /** Append `; includeSubDomains` — extend the policy to every subdomain too. */
+  readonly includeSubDomains: boolean;
+  /** Append `; preload` — opt into the browser HSTS preload lists. */
+  readonly preload: boolean;
+}
+
+/**
+ * Build the `Strict-Transport-Security` header value for a policy, or `null` when
+ * HSTS is disabled (`maxAgeSeconds <= 0`). Pure and total. Produces, e.g.,
+ * `max-age=31536000; includeSubDomains; preload`. Directive order is the
+ * conventional one — `max-age` first, then `includeSubDomains`, then `preload` —
+ * which is also the order the preload-list submission rules expect.
+ */
+export function hstsHeaderValue(policy: HstsPolicy): string | null {
+  if (!Number.isFinite(policy.maxAgeSeconds) || policy.maxAgeSeconds <= 0) {
+    return null;
+  }
+  let value = `max-age=${Math.floor(policy.maxAgeSeconds)}`;
+  if (policy.includeSubDomains) {
+    value += "; includeSubDomains";
+  }
+  if (policy.preload) {
+    value += "; preload";
+  }
+  return value;
+}
+
 /** Headers applied to *every* response regardless of surface. */
 const UNIVERSAL_HEADERS: Readonly<Record<string, string>> = {
   // Stop browsers from MIME-sniffing a response into a more dangerous type
@@ -107,24 +155,36 @@ export function surfaceForPath(path: string): ResponseSurface {
  * Content-Security-Policy plus `Cache-Control: no-store` (authenticated, tenant-
  * scoped markup must not be cached), and the dashboards additionally send the legacy
  * `X-Frame-Options: DENY` as a backstop for clients predating `frame-ancestors`.
+ *
+ * `hsts` is the precomputed `Strict-Transport-Security` value (see
+ * {@link hstsHeaderValue}); when a non-empty string is supplied it is added to
+ * *every* surface, since HSTS governs the origin's transport rather than any one
+ * response's content. Omit it (or pass `null`) to emit no HSTS header — the default.
+ *
  * Returns a fresh object each call (safe for the caller to spread/mutate).
  */
-export function securityHeadersForPath(path: string): Record<string, string> {
+export function securityHeadersForPath(
+  path: string,
+  hsts?: string | null,
+): Record<string, string> {
   const surface = surfaceForPath(path);
-  if (surface === "dashboard") {
-    return {
-      ...UNIVERSAL_HEADERS,
-      "content-security-policy": DASHBOARD_CSP,
-      "x-frame-options": "DENY",
-      "cache-control": HTML_CACHE_CONTROL,
-    };
+  const headers: Record<string, string> =
+    surface === "dashboard"
+      ? {
+          ...UNIVERSAL_HEADERS,
+          "content-security-policy": DASHBOARD_CSP,
+          "x-frame-options": "DENY",
+          "cache-control": HTML_CACHE_CONTROL,
+        }
+      : surface === "portal"
+        ? {
+            ...UNIVERSAL_HEADERS,
+            "content-security-policy": PORTAL_CSP,
+            "cache-control": HTML_CACHE_CONTROL,
+          }
+        : { ...UNIVERSAL_HEADERS };
+  if (hsts !== undefined && hsts !== null && hsts.length > 0) {
+    headers["strict-transport-security"] = hsts;
   }
-  if (surface === "portal") {
-    return {
-      ...UNIVERSAL_HEADERS,
-      "content-security-policy": PORTAL_CSP,
-      "cache-control": HTML_CACHE_CONTROL,
-    };
-  }
-  return { ...UNIVERSAL_HEADERS };
+  return headers;
 }

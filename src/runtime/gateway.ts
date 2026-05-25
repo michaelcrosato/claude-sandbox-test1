@@ -33,6 +33,7 @@ import { createGuardedTransport } from "../net/guarded-transport.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { DataPruner } from "../pruner/data-pruner.js";
 import { createHttpServer } from "../http/server.js";
+import { hstsHeaderValue } from "../http/security-headers.js";
 import { createDashboardHandler } from "../dashboard/handler.js";
 import { InMemorySessionStore } from "../dashboard/sessions.js";
 import { createTenantDashboardHandler } from "../dashboard/tenant-handler.js";
@@ -373,6 +374,11 @@ export function createGateway(
     allowPrivateNetworks: config.allowPrivateNetworks,
   });
 
+  // Precompute the Strict-Transport-Security header once; null when HSTS is off.
+  // `loadConfig` always supplies `hsts`; the guard keeps a hand-built config that
+  // omits it (a library embedder) degrading to HSTS-off rather than crashing boot.
+  const hstsValue = config.hsts ? hstsHeaderValue(config.hsts) : null;
+
   const httpServer = createHttpServer(
     {
       apps,
@@ -401,6 +407,9 @@ export function createGateway(
       portalHandler,
       // Access lines + unhandled-error reporting, tagged with the HTTP component.
       logger: logger.child({ component: "http" }),
+      // Stamp Strict-Transport-Security on every response when HSTS is configured
+      // (null → omitted, the default). Computed once at wiring time.
+      ...(hstsValue !== null ? { strictTransportSecurity: hstsValue } : {}),
     },
   );
 

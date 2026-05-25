@@ -340,6 +340,28 @@ describe("createHttpServer — security response headers", () => {
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   });
 
+  it("emits no Strict-Transport-Security header by default", async () => {
+    const { base } = await startServer({ dashboardHandler: htmlOk });
+    const api = await fetch(`${base}/healthz`);
+    const dash = await fetch(`${base}/dashboard`);
+    expect(api.headers.get("strict-transport-security")).toBeNull();
+    expect(dash.headers.get("strict-transport-security")).toBeNull();
+  });
+
+  it("stamps the configured Strict-Transport-Security on every surface", async () => {
+    const sts = "max-age=31536000; includeSubDomains";
+    const { base } = await startServer({
+      dashboardHandler: htmlOk,
+      portalHandler: htmlOk,
+      strictTransportSecurity: sts,
+    });
+    // Transport-level: present on the plain API surface as well as the HTML ones.
+    for (const path of ["/healthz", "/dashboard", "/portal"]) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.headers.get("strict-transport-security")).toBe(sts);
+    }
+  });
+
   it("stamps the headers on an early body-overflow (413) rejection too", async () => {
     const { base, secret } = await startServer({ maxBodyBytes: 8 });
     const res = await fetch(`${base}/v1/messages`, {

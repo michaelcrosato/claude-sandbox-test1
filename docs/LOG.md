@@ -41,6 +41,58 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T21:39 · iter-0092 · GREEN · hsts-response-header-behind-config-flag
+
+- **Baseline:** clean main @ `5be3727` (iter-0091 no-store cache-control), recorded green
+  `vitest run` **1737/1737**; verified green first: `tsc --noEmit` 0, `vitest run` 1737, `npm run
+  build` 0, `assert-gate-integrity.ps1` 0. SSRF guard + Standard-Webhooks signature verify audited
+  en route — both thorough (no latent vuln); dashboard/portal views are `esc()`-disciplined.
+- **Move:** Land the standing Next #1 carried across iter-0090/0091 — `Strict-Transport-Security`
+  (HSTS) behind a config flag, with the TLS-termination assumption documented. The service emitted
+  per-surface CSP/XFO/cache headers but **no** transport-pinning header, so a network attacker could
+  SSL-strip the first request. HSTS is dangerous to get wrong (an over-long `max-age` locks a domain
+  out of plain HTTP for the whole window), so it is **opt-in, off by default**.
+- **Changed:**
+  - `http/security-headers.ts`: new `HstsPolicy` + pure total `hstsHeaderValue(policy)` →
+    `max-age=…; includeSubDomains; preload` or `null` (disabled when `maxAgeSeconds <= 0`).
+    `securityHeadersForPath(path, hsts?)` now merges the STS value onto **every** surface (API
+    included — HSTS governs the origin's transport, not a response's content), refactored to build
+    one object then conditionally add the header.
+  - `http/server.ts`: `HttpServerOptions.strictTransportSecurity?` threaded through `serve()` into
+    the single `securityHeadersForPath` call, so all exits (incl. the 413/400 early ones) stamp it.
+  - `runtime/config.ts`: `GatewayConfig.hsts: HstsPolicy`; `readHstsConfig` reads
+    `POSTHORN_HSTS_MAX_AGE`/`_INCLUDE_SUBDOMAINS`/`_PRELOAD` with fail-fast validation (a modifier
+    needs a non-zero max-age; `preload` needs `includeSubDomains` + max-age ≥ 1 yr per the
+    preload-list rules). `runtime/gateway.ts`: precompute `hstsHeaderValue(config.hsts)` once; a
+    guard (`config.hsts ? … : null`) degrades a hand-built config that omits it to HSTS-off.
+  - Docs: `.env.example` + `docs/DEPLOY.md` (config table rows + a new "HSTS" subsection under
+    Security hardening documenting the TLS-termination assumption + ramp-up/one-way-door warning).
+  - +tests (24): `hstsHeaderValue` + per-surface merge (security-headers), socket-level present/
+    absent on every surface (server), config parse + 3 fail-fast rejections (config); new
+    `scripts/smoke-hsts.mjs`.
+- **Decisions:** HSTS rides on **all** surfaces (unlike CSP/XFO) — it's a transport assertion about
+  the origin, inert on the plain-HTTP probe and honored over the proxy's HTTPS hop. Off-by-default
+  and fail-fast on impossible preload configs (a `preload` that can't satisfy the list rules is a
+  silent no-op otherwise — rejected at boot, matching the codebase's fail-loud config posture). Used
+  a runtime guard in the gateway rather than editing the 7 hand-built smoke configs: it makes an
+  absent `hsts` degrade gracefully, consistent with how the gateway already tolerates other
+  incomplete hand-built configs (e.g. `smoke-logging` omits `connectTimeoutMs`).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1761/1761** (+24; 52 files, 6 PG-skipped, no
+  flaky exit); `npm run build` 0; `node scripts/smoke-hsts.mjs` **20/20** (pure builder + merge,
+  config validation incl. preload rejection, and the configured header on the wire on every surface
+  vs. absent by default, through compiled ESM on 127.0.0.1); `smoke-logging` 22/22 + `smoke-failure-
+  reason` 10/10 (no regression from the gateway guard); `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** The `config.test.ts` doc-coverage guard Proxy-probes `loadConfig` and requires every
+  read `POSTHORN_*` key to appear in **both** `.env.example` and `docs/DEPLOY.md` — adding the three
+  HSTS vars forced (and verified) their documentation.
+- **Next:** Optionally let the gateway honor an upstream `X-Forwarded-Proto` so HSTS is emitted only
+  on requests it believes arrived over HTTPS (belt-and-suspenders vs. the proxy stripping it); audit
+  the admin/tenant dashboard views for any non-`esc()` interpolation (iter-0089 residual, still
+  unverified by reading); or the long-deferred `?failureReason=` triage filter on `GET /v1/deliveries`
+  (denormalize the latest failure reason onto `DeliveryTask` across all 3 backends + the worker fail
+  path — a core-FSM change, hence its repeated deferral).
+
 ## 2026-05-24T21:25 · iter-0091 · GREEN · no-store-cache-control-on-authenticated-html
 
 - **Baseline:** clean main @ `00fb920` (iter-0090 per-surface security headers), whose recorded

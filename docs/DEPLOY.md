@@ -148,6 +148,9 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_FANOUT_IDLE_POLL_MS` | `5000` | FanoutDispatcher: poll interval when the outbox is empty (ms). |
 | `POSTHORN_RETENTION_DAYS` | `0` | Delete delivered/expired data older than this many days on an hourly sweep. `0` (default) disables pruning; minimum 1 when set. |
 | `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` | `false` | Allow endpoint URLs that target private/internal addresses. `false` (default, secure) blocks loopback / RFC 1918 / link-local / CGNAT / cloud-metadata / internal-hostname destinations with `400 url_not_allowed` (SSRF defense). Set `true` only for a trusted single-tenant self-host delivering to internal services. See [SSRF protection](#ssrf-protection-private-network-webhooks). |
+| `POSTHORN_HSTS_MAX_AGE` | `0` | `Strict-Transport-Security` `max-age` in seconds. `0` (default) emits no HSTS header. Only safe once the origin is served over HTTPS — see [HSTS](#hsts-strict-transport-security). |
+| `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` | `false` | Append `; includeSubDomains` to the HSTS header (applies the policy to every subdomain). Requires `POSTHORN_HSTS_MAX_AGE > 0`. |
+| `POSTHORN_HSTS_PRELOAD` | `false` | Append `; preload` to the HSTS header (opt into browser preload lists). Requires `includeSubDomains=true` and `max-age ≥ 31536000` (1 year); otherwise startup fails fast. |
 | `POSTHORN_LOG_LEVEL` | `info` | Minimum severity of structured (JSON Lines) logs written to stdout: `debug`, `info`, `warn`, `error`, or `silent`. `info` (default) shows request access lines and errors while keeping `/healthz` + `/metrics` probe traffic (logged at `debug`) quiet; `silent` disables logging. See [Logging](#logging). |
 
 ---
@@ -181,6 +184,39 @@ Bind Posthorn to loopback when running behind a local proxy:
 ```env
 POSTHORN_HOST=127.0.0.1
 ```
+
+### HSTS (Strict Transport Security)
+
+Posthorn can emit a `Strict-Transport-Security` response header instructing
+browsers to refuse plain-HTTP requests to this origin for a fixed window. It is
+**off by default** and opt-in, because it is only meaningful — and only safe —
+when the origin is genuinely reached over HTTPS. Posthorn's own socket speaks
+plain HTTP and assumes **TLS is terminated upstream** (the reverse proxy above);
+the emitted header travels back through that proxy to the browser over the HTTPS
+hop, where it takes effect. It is inert on a plain-HTTP probe.
+
+```env
+# Start small and ramp up. 1 day while you confirm every path is HTTPS:
+POSTHORN_HSTS_MAX_AGE=86400
+# Once confident, the long-lived value (1 year):
+POSTHORN_HSTS_MAX_AGE=31536000
+POSTHORN_HSTS_INCLUDE_SUBDOMAINS=true
+```
+
+> **Warning — HSTS is a one-way door.** A browser that has seen the header will
+> refuse plain HTTP to this host for the full `max-age`; you cannot shorten that
+> window retroactively for clients that already cached it. Publish a large
+> `max-age` (or `includeSubDomains`) only after **every** host and subdomain of
+> the origin is confirmed HTTPS-ready, or you lock them out of plain HTTP until
+> the window expires. Most operators terminating TLS at a proxy set HSTS *there*;
+> this setting is for when you want Posthorn to assert it directly.
+
+`POSTHORN_HSTS_INCLUDE_SUBDOMAINS` and `POSTHORN_HSTS_PRELOAD` require a non-zero
+`max-age`. `preload` additionally requires `includeSubDomains` and a `max-age` of
+at least one year (`31536000`), mirroring the [hstspreload.org](https://hstspreload.org)
+submission rules — a configuration that cannot satisfy them is rejected at boot
+rather than shipped as a silent no-op. Preloading is effectively permanent and
+hard to reverse; enable it only when the whole domain is committed to HTTPS.
 
 ### Admin token strength
 

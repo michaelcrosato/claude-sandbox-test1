@@ -51,6 +51,7 @@ describe("loadConfig", () => {
       defaultRateLimit: null,
       allowPrivateNetworks: false,
       logLevel: DEFAULT_LOG_LEVEL,
+      hsts: { maxAgeSeconds: 0, includeSubDomains: false, preload: false },
       fanout: {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
@@ -87,6 +88,70 @@ describe("loadConfig", () => {
       expect(() =>
         loadConfig({ POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "yes" }),
       ).toThrow(ConfigError);
+    });
+  });
+
+  describe("POSTHORN_HSTS_* (Strict-Transport-Security)", () => {
+    it("defaults to disabled (max-age 0, no modifiers)", () => {
+      expect(loadConfig({}).hsts).toEqual({
+        maxAgeSeconds: 0,
+        includeSubDomains: false,
+        preload: false,
+      });
+    });
+
+    it("reads a bare max-age (modifiers default off)", () => {
+      expect(loadConfig({ POSTHORN_HSTS_MAX_AGE: "31536000" }).hsts).toEqual({
+        maxAgeSeconds: 31_536_000,
+        includeSubDomains: false,
+        preload: false,
+      });
+    });
+
+    it("reads max-age + includeSubDomains together", () => {
+      expect(
+        loadConfig({
+          POSTHORN_HSTS_MAX_AGE: "63072000",
+          POSTHORN_HSTS_INCLUDE_SUBDOMAINS: "true",
+        }).hsts,
+      ).toEqual({ maxAgeSeconds: 63_072_000, includeSubDomains: true, preload: false });
+    });
+
+    it("accepts a preload config that satisfies the preload-list rules", () => {
+      expect(
+        loadConfig({
+          POSTHORN_HSTS_MAX_AGE: "31536000",
+          POSTHORN_HSTS_INCLUDE_SUBDOMAINS: "true",
+          POSTHORN_HSTS_PRELOAD: "true",
+        }).hsts,
+      ).toEqual({ maxAgeSeconds: 31_536_000, includeSubDomains: true, preload: true });
+    });
+
+    it("rejects a modifier set without a max-age (nothing to extend)", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_HSTS_INCLUDE_SUBDOMAINS: "true" }),
+      ).toThrow(/require POSTHORN_HSTS_MAX_AGE > 0/);
+      expect(() => loadConfig({ POSTHORN_HSTS_PRELOAD: "true" })).toThrow(ConfigError);
+    });
+
+    it("rejects preload without includeSubDomains (preload-list rule)", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_HSTS_MAX_AGE: "31536000", POSTHORN_HSTS_PRELOAD: "true" }),
+      ).toThrow(/requires POSTHORN_HSTS_INCLUDE_SUBDOMAINS=true/);
+    });
+
+    it("rejects preload with a max-age below the one-year preload-list floor", () => {
+      expect(() =>
+        loadConfig({
+          POSTHORN_HSTS_MAX_AGE: "86400",
+          POSTHORN_HSTS_INCLUDE_SUBDOMAINS: "true",
+          POSTHORN_HSTS_PRELOAD: "true",
+        }),
+      ).toThrow(/POSTHORN_HSTS_MAX_AGE >= 31536000/);
+    });
+
+    it("rejects a negative max-age", () => {
+      expect(() => loadConfig({ POSTHORN_HSTS_MAX_AGE: "-1" })).toThrow(ConfigError);
     });
   });
 

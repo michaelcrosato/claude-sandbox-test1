@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { securityHeadersForPath, surfaceForPath } from "./security-headers.js";
+import {
+  hstsHeaderValue,
+  securityHeadersForPath,
+  surfaceForPath,
+} from "./security-headers.js";
 
 describe("surfaceForPath", () => {
   it("classifies portal paths (exact and nested)", () => {
@@ -97,5 +101,62 @@ describe("securityHeadersForPath", () => {
     expect(a).not.toBe(b);
     a["connection"] = "close";
     expect(b["connection"]).toBeUndefined();
+  });
+
+  it("omits Strict-Transport-Security by default (no hsts argument)", () => {
+    for (const path of ["/v1/endpoints", "/dashboard", "/portal", "/healthz"]) {
+      expect(securityHeadersForPath(path)["strict-transport-security"]).toBeUndefined();
+    }
+  });
+
+  it("stamps a supplied HSTS value on every surface (transport-level, not content)", () => {
+    const sts = "max-age=31536000; includeSubDomains";
+    for (const path of ["/v1/endpoints", "/dashboard", "/portal", "/healthz", "/openapi.json"]) {
+      expect(securityHeadersForPath(path, sts)["strict-transport-security"]).toBe(sts);
+    }
+  });
+
+  it("treats null / empty-string hsts as disabled (no header)", () => {
+    expect(securityHeadersForPath("/dashboard", null)["strict-transport-security"]).toBeUndefined();
+    expect(securityHeadersForPath("/dashboard", "")["strict-transport-security"]).toBeUndefined();
+  });
+
+  it("leaves the other per-surface headers intact when HSTS is added", () => {
+    const h = securityHeadersForPath("/dashboard/apps", "max-age=600");
+    expect(h["x-frame-options"]).toBe("DENY");
+    expect(h["cache-control"]).toBe("no-store");
+    expect(h["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(h["strict-transport-security"]).toBe("max-age=600");
+  });
+});
+
+describe("hstsHeaderValue", () => {
+  it("returns null when disabled (max-age <= 0 or non-finite)", () => {
+    const base = { includeSubDomains: false, preload: false };
+    expect(hstsHeaderValue({ ...base, maxAgeSeconds: 0 })).toBeNull();
+    expect(hstsHeaderValue({ ...base, maxAgeSeconds: -1 })).toBeNull();
+    expect(hstsHeaderValue({ ...base, maxAgeSeconds: Number.NaN })).toBeNull();
+    expect(hstsHeaderValue({ ...base, maxAgeSeconds: Number.POSITIVE_INFINITY })).toBeNull();
+  });
+
+  it("emits a bare max-age when no modifiers are set", () => {
+    expect(
+      hstsHeaderValue({ maxAgeSeconds: 31_536_000, includeSubDomains: false, preload: false }),
+    ).toBe("max-age=31536000");
+  });
+
+  it("appends includeSubDomains, then preload, in the conventional order", () => {
+    expect(
+      hstsHeaderValue({ maxAgeSeconds: 63_072_000, includeSubDomains: true, preload: false }),
+    ).toBe("max-age=63072000; includeSubDomains");
+    expect(
+      hstsHeaderValue({ maxAgeSeconds: 63_072_000, includeSubDomains: true, preload: true }),
+    ).toBe("max-age=63072000; includeSubDomains; preload");
+  });
+
+  it("floors a fractional max-age to an integer", () => {
+    expect(
+      hstsHeaderValue({ maxAgeSeconds: 100.9, includeSubDomains: false, preload: false }),
+    ).toBe("max-age=100");
   });
 });
