@@ -10,9 +10,13 @@
  * library *or* a standalone gateway"). It holds no domain logic of its own — every
  * decision still lives in the pure modules it composes; this file is pure plumbing.
  *
- * Backed by SQLite-on-disk (or `:memory:` for an ephemeral run): one file per store
- * under `dataDir`, no external Redis or Postgres — the "single process, no Redis"
- * operational wedge, made runnable.
+ * Backed by SQLite-on-disk by default (or `:memory:` for an ephemeral run): one file
+ * per store under `dataDir`, no external Redis — the "single process, no Redis"
+ * operational wedge, made runnable. Setting `POSTHORN_DATABASE_URL` instead selects
+ * the **Postgres backend**: all six stores share one Postgres database (still no
+ * Redis), the horizontally-scalable path for active/active and the hosted cloud tier.
+ * Which concrete stores are wired is the only thing that differs between the two —
+ * everything composed on top is backend-agnostic (it speaks the store interfaces).
  */
 
 import { mkdirSync } from "node:fs";
@@ -27,6 +31,13 @@ import { SqliteMessageStore } from "../storage/sqlite-store.js";
 import { SqliteDeliveryQueue } from "../queue/sqlite-queue.js";
 import { SqliteDeliveryAttemptStore } from "../attempts/sqlite-attempt-store.js";
 import { SqliteEventTypeStore } from "../event-types/sqlite-event-type-store.js";
+import { PostgresAppStore } from "../apps/postgres-app-store.js";
+import { PostgresEndpointStore } from "../endpoints/postgres-endpoint-store.js";
+import { PostgresMessageStore } from "../storage/postgres-store.js";
+import { PostgresDeliveryQueue } from "../queue/postgres-queue.js";
+import { PostgresDeliveryAttemptStore } from "../attempts/postgres-attempt-store.js";
+import { PostgresEventTypeStore } from "../event-types/postgres-event-type-store.js";
+import { createPostgresPool } from "../db/postgres.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
 import { createGuardedTransport } from "../net/guarded-transport.js";
@@ -119,8 +130,9 @@ export interface Gateway {
    */
   start(): Promise<GatewayAddress>;
   /**
-   * Stop accepting requests, drain the worker loop, and release all SQLite handles.
-   * Idempotent and safe to call after a failed/partial `start`.
+   * Stop accepting requests, drain the worker loop, and release the storage backend
+   * (close the SQLite handles, or drain the Postgres connection pool). Idempotent and
+   * safe to call after a failed/partial `start`.
    */
   stop(): Promise<void>;
 }
@@ -189,17 +201,86 @@ export function resolveLocations(dataDir: string): StoreLocations {
 }
 
 /**
- * Wire a complete Posthorn gateway from a validated {@link GatewayConfig}. The
- * returned {@link Gateway} is constructed but not yet listening — call
- * {@link Gateway.start}. All SQLite backends share the lifetime of the
- * gateway and are closed together by {@link Gateway.stop}.
+ * The set of durable stores a gateway runs on, plus the backend lifecycle hooks the
+ * {@link Gateway} drives. {@link openStoreBackend} constructs the concrete
+ * implementations (SQLite or Postgres) behind these interfaces, so everything the
+ * gateway composes on top stays backend-agnostic — it speaks only the store
+ * contracts, never a concrete class.
  */
-export function createGateway(
-  config: GatewayConfig,
-  options: CreateGatewayOptions = {},
-): Gateway {
-  const locations = resolveLocations(config.dataDir);
+interface StoreBackend {
+  readonly apps: AppStore;
+  readonly endpoints: EndpointStore;
+  readonly messages: MessageStore;
+  readonly queue: DeliveryQueue;
+  readonly attempts: DeliveryAttemptStore;
+  readonly eventTypes: EventTypeStore;
+  /** Backend label, surfaced on the `gateway started` log line. */
+  readonly kind: "sqlite" | "postgres";
+  /**
+   * Create/migrate every store's schema. A no-op for SQLite (each store does this
+   * synchronously in its constructor); for Postgres it runs the async DDL each store
+   * needs, sequentially so a failure is attributable to one store. Awaited by
+   * {@link Gateway.start} before the socket opens or the worker runs.
+   */
+  initialize(): Promise<void>;
+  /**
+   * Release backend resources: close the SQLite file handles, or drain the shared
+   * Postgres connection pool. Awaited by {@link Gateway.stop}.
+   */
+  dispose(): Promise<void>;
+}
 
+/**
+ * Construct the durable stores for a gateway. Branches on
+ * {@link GatewayConfig.databaseUrl}: a `postgres://` URL wires the six Postgres
+ * stores onto one shared connection pool; otherwise the six SQLite stores are opened
+ * under `dataDir` (the default). This is the **only** place the backend choice is
+ * made — the rest of {@link createGateway} consumes the returned store interfaces
+ * without knowing which backend backs them, the same store-contract abstraction the
+ * conformance suites guarantee both backends honor identically.
+ */
+function openStoreBackend(config: GatewayConfig): StoreBackend {
+  if (config.databaseUrl) {
+    // One pool shared by every Postgres store — Postgres connection slots are
+    // precious, so the composition root owns the single pool and drains it on stop.
+    const pool = createPostgresPool(config.databaseUrl);
+    const apps = new PostgresAppStore(pool);
+    const endpoints = new PostgresEndpointStore(pool);
+    const messages = new PostgresMessageStore(pool);
+    const queue = new PostgresDeliveryQueue(pool, {
+      visibilityTimeoutMs: config.worker.visibilityTimeoutMs,
+    });
+    const attempts = new PostgresDeliveryAttemptStore(pool);
+    const eventTypes = new PostgresEventTypeStore(pool);
+    return {
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      eventTypes,
+      kind: "postgres",
+      initialize: async () => {
+        // The six stores own independent tables (no cross-store foreign keys), so
+        // order is irrelevant; running them sequentially keeps a DDL failure
+        // attributable to a single store.
+        await apps.initialize();
+        await endpoints.initialize();
+        await messages.initialize();
+        await queue.initialize();
+        await attempts.initialize();
+        await eventTypes.initialize();
+      },
+      dispose: async () => {
+        await pool.end();
+      },
+    };
+  }
+
+  // Default backend: embedded SQLite, one file per store under dataDir (or an
+  // independent in-memory db each for :memory:). Each store creates its schema
+  // synchronously in its constructor, so initialize() has nothing async to do.
+  const locations = resolveLocations(config.dataDir);
   const apps = new SqliteAppStore({ location: locations.apps });
   const endpoints = new SqliteEndpointStore({ location: locations.endpoints });
   const messages = new SqliteMessageStore({ location: locations.messages });
@@ -209,6 +290,41 @@ export function createGateway(
   });
   const attempts = new SqliteDeliveryAttemptStore({ location: locations.attempts });
   const eventTypes = new SqliteEventTypeStore({ location: locations.eventTypes });
+  return {
+    apps,
+    endpoints,
+    messages,
+    queue,
+    attempts,
+    eventTypes,
+    kind: "sqlite",
+    initialize: async () => {
+      // SQLite schema is created in each store's constructor; nothing to do here.
+    },
+    dispose: async () => {
+      apps.close();
+      endpoints.close();
+      messages.close();
+      queue.close();
+      attempts.close();
+      eventTypes.close();
+    },
+  };
+}
+
+/**
+ * Wire a complete Posthorn gateway from a validated {@link GatewayConfig}. The
+ * returned {@link Gateway} is constructed but not yet listening — call
+ * {@link Gateway.start} (which first creates/migrates the backend schema). The
+ * storage backend (SQLite by default, Postgres when `POSTHORN_DATABASE_URL` is set)
+ * shares the lifetime of the gateway and is released by {@link Gateway.stop}.
+ */
+export function createGateway(
+  config: GatewayConfig,
+  options: CreateGatewayOptions = {},
+): Gateway {
+  const backend = openStoreBackend(config);
+  const { apps, endpoints, messages, queue, attempts, eventTypes } = backend;
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
@@ -428,6 +544,11 @@ export function createGateway(
       throw new Error("gateway already started");
     }
     started = true;
+    // Create/migrate the backend schema before the socket opens or the worker polls
+    // it. A no-op for SQLite (done in the store constructors); for Postgres this runs
+    // the async DDL each store needs, so a fresh database is provisioned on first boot
+    // and a pre-existing one is migrated in place. A failure here fails the boot.
+    await backend.initialize();
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error): void => reject(err);
       httpServer.once("error", onError);
@@ -455,9 +576,12 @@ export function createGateway(
     // `console.log` in the process shell, which broke JSON log ingestion).
     logger.info("gateway started", {
       component: "gateway",
+      backend: backend.kind,
       host: info.address,
       port: info.port,
-      dataDir: config.dataDir,
+      // dataDir is only meaningful for the SQLite backend. The Postgres connection
+      // URL is deliberately never logged — it carries credentials.
+      ...(backend.kind === "sqlite" ? { dataDir: config.dataDir } : {}),
     });
     return { host: info.address, port: info.port };
   };
@@ -482,14 +606,9 @@ export function createGateway(
       // Force-close idle keep-alive sockets so close() does not hang waiting on them.
       httpServer.closeAllConnections();
     });
-    // Release the SQLite handles so the files can be reopened (e.g. a restart) and
-    // temp dirs can be cleaned up.
-    apps.close();
-    endpoints.close();
-    messages.close();
-    queue.close();
-    attempts.close();
-    eventTypes.close();
+    // Release the backend: close the SQLite file handles (so the files can be
+    // reopened on a restart and temp dirs cleaned up) or drain the Postgres pool.
+    await backend.dispose();
     // The clean-shutdown marker. Guarded by `stopped`, so it fires exactly once even
     // though `stop()` is idempotent.
     logger.info("gateway stopped", { component: "gateway" });

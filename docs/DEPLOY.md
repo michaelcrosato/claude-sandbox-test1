@@ -35,7 +35,9 @@ procedures.
 | Network   | Outbound HTTPS | The delivery worker POSTs to your tenants' webhook endpoints. |
 
 External services required: **none**. Posthorn runs as a single process with an
-embedded SQLite store — no Postgres, no Redis.
+embedded SQLite store — no Redis, and no external database by default. A
+[PostgreSQL backend](#postgresql-backend) is available as an opt-in for
+horizontally-scaled / active-active deployments (still no Redis).
 
 ---
 
@@ -132,7 +134,8 @@ All configuration is environment-driven — no config file to manage.
 |----------|---------|-------------|
 | `POSTHORN_HOST` | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to restrict to loopback (behind a reverse proxy). |
 | `POSTHORN_PORT` | `3000` | TCP port for the HTTP API. |
-| `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the four SQLite files. Use `:memory:` for an ephemeral in-memory run (data lost on restart). |
+| `POSTHORN_DATA_DIR` | `./posthorn-data` | Directory for the SQLite store files (SQLite backend only — ignored when `POSTHORN_DATABASE_URL` is set). Use `:memory:` for an ephemeral in-memory run (data lost on restart). |
+| `POSTHORN_DATABASE_URL` | _(unset)_ | Postgres connection string (`postgres://` / `postgresql://`) selecting the [PostgreSQL backend](#postgresql-backend). Unset (default) = embedded SQLite under `POSTHORN_DATA_DIR`. The schema is created/migrated automatically on first boot. |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body cap in bytes (`413` if exceeded). |
 | `POSTHORN_PUBLIC_BASE_URL` | _(unset)_ | Canonical public origin for portal-session links (`portalUrl`). Unset (default) derives them from each request's `Host` + `X-Forwarded-Proto`. Set it to your public origin (e.g. `https://hooks.example.com`) behind a host-rewriting proxy. Must be a bare `http`/`https` origin — scheme + host (+ port), no path/query/fragment. See [Public base URL](#public-base-url-portal-links). |
 | `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
@@ -490,6 +493,47 @@ build a dashboard from the PromQL queries above.  Key panels:
 - **Dead-letter backlog** — `posthorn_delivery_tasks{status="dead_letter"}` (alert threshold visible)
 - **Queue depth** — `posthorn_delivery_tasks{status="pending"}`
 - **Uptime** — `posthorn_uptime_seconds`
+
+---
+
+## PostgreSQL backend
+
+By default Posthorn stores everything in embedded SQLite — the zero-dependency
+single-process deployment. For a **horizontally-scaled or active/active** setup,
+point every store at one shared PostgreSQL database instead by setting a single
+variable:
+
+```bash
+POSTHORN_DATABASE_URL=postgres://posthorn:secret@db:5432/posthorn?sslmode=require
+```
+
+When set, all six stores (apps, endpoints, messages, delivery queue, attempt audit
+log, event types) live in that one database and `POSTHORN_DATA_DIR` is unused. The
+`pg` driver ships with the image (an optional dependency), so nothing else to
+install. Use Postgres when you need to run **more than one gateway replica against
+the same data** (the SQLite backend is single-host); a single replica is perfectly
+happy on SQLite.
+
+**Why it is safe across replicas.** The delivery queue claims work with
+lease-based row locking and visibility timeouts (the same contract the SQLite queue
+honors, proven by a shared conformance suite), so multiple gateways draining one
+Postgres queue never double-deliver a task that another replica already holds, and a
+replica that dies mid-delivery has its lease reclaimed. Idempotency keys are enforced
+by a composite unique index, so concurrent ingests of the same key still dedup.
+
+**Schema.** Created and migrated automatically on first boot — the same
+forward-only, additive `ADD COLUMN IF NOT EXISTS` discipline as SQLite. No separate
+migration tool to run. The database role only needs `CREATE`/DDL on its schema plus
+normal DML.
+
+**Provisioning.** The `posthorn admin` CLI and the `/v1/admin/*` API both operate on
+the configured backend automatically — run the CLI with the same
+`POSTHORN_DATABASE_URL` in its environment and it provisions into Postgres, not a
+stray SQLite file.
+
+**Backup** is now your Postgres operator's job — `pg_dump` / managed snapshots /
+streaming replication — rather than the SQLite file copy described below. The
+SQLite-specific `.backup` guidance does not apply to a Postgres deployment.
 
 ---
 

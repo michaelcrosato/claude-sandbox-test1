@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -7,6 +7,13 @@ import { tmpdir } from "node:os";
 
 import { createGateway, type Gateway } from "./gateway.js";
 import { loadConfig } from "./config.js";
+import { createPostgresPool } from "../db/postgres.js";
+import { PostgresAppStore } from "../apps/postgres-app-store.js";
+import { PostgresEndpointStore } from "../endpoints/postgres-endpoint-store.js";
+import { PostgresMessageStore } from "../storage/postgres-store.js";
+import { PostgresDeliveryQueue } from "../queue/postgres-queue.js";
+import { PostgresDeliveryAttemptStore } from "../attempts/postgres-attempt-store.js";
+import { PostgresEventTypeStore } from "../event-types/postgres-event-type-store.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
 import { createLogger, type LogEntry } from "../logging/logger.js";
 import { POSTHORN_VERSION } from "../version.js";
@@ -82,6 +89,19 @@ function memoryConfig(overrides: Record<string, string> = {}) {
     POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
     // Keep the default JSON-to-stdout logger quiet during tests; the logging-wiring
     // test injects its own collecting logger and is unaffected by this.
+    POSTHORN_LOG_LEVEL: "silent",
+    ...overrides,
+  });
+}
+
+/** Like {@link memoryConfig} but backed by the Postgres database at `pgUrl`. */
+function pgConfig(pgUrl: string, overrides: Record<string, string> = {}) {
+  return loadConfig({
+    POSTHORN_HOST: "127.0.0.1",
+    POSTHORN_PORT: "0",
+    POSTHORN_DATABASE_URL: pgUrl,
+    POSTHORN_WORKER_IDLE_POLL_MS: "5",
+    POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
     POSTHORN_LOG_LEVEL: "silent",
     ...overrides,
   });
@@ -577,3 +597,132 @@ describe("createGateway", () => {
     expect(data.map((e) => e.id)).toContain(endpointId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Postgres-backed gateway. Proves the composition root actually *deploys* on the
+// optional Postgres backend — not merely that the PG stores conform in isolation
+// (the store conformance suites cover that). Gated on POSTHORN_TEST_PG_URL, like the
+// per-store Postgres suites; skipped when no live Postgres is available.
+// Run locally with a throwaway container:
+//   docker run -d --rm -e POSTGRES_PASSWORD=p -e POSTGRES_USER=u -e POSTGRES_DB=posthorn_test -p 5433:5432 postgres:16-alpine
+//   POSTHORN_TEST_PG_URL=postgres://u:p@127.0.0.1:5433/posthorn_test npx vitest run src/runtime/gateway.test.ts
+// ---------------------------------------------------------------------------
+const pgUrl = process.env.POSTHORN_TEST_PG_URL;
+
+if (!pgUrl) {
+  describe.skip("createGateway on Postgres — skipped (POSTHORN_TEST_PG_URL not set)", () => {});
+} else {
+  describe("createGateway on Postgres", () => {
+    // The gateway shares one Postgres database across these tests, and the worker
+    // claims queue work app-agnostically, so wipe any state left by a prior run to
+    // keep the worker from chasing dead receivers and to make assertions isolated.
+    beforeAll(async () => {
+      const pool = createPostgresPool(pgUrl);
+      const stores = [
+        new PostgresAppStore(pool),
+        new PostgresEndpointStore(pool),
+        new PostgresMessageStore(pool),
+        new PostgresDeliveryQueue(pool),
+        new PostgresDeliveryAttemptStore(pool),
+        new PostgresEventTypeStore(pool),
+      ];
+      try {
+        for (const store of stores) {
+          await store.initialize();
+          await store.truncate();
+        }
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it(
+      "boots, creates its schema, and delivers an ingested message with a verifiable signature",
+      async () => {
+        const gateway = createGateway(pgConfig(pgUrl));
+        gateways.push(gateway);
+        const address = await gateway.start();
+        const base = `http://127.0.0.1:${address.port}`;
+
+        const app = await gateway.apps.create({ name: "Acme PG" });
+        const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+        const authHeaders = {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        };
+
+        const receiver = await startReceiver();
+        receivers.push(receiver);
+
+        const createRes = await fetch(`${base}/v1/endpoints`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({ url: receiver.url, eventTypes: ["user.created"] }),
+        });
+        expect(createRes.status).toBe(201);
+        const { secret: endpointSecret } = (await createRes.json()) as { secret: string };
+
+        const payload = { hello: "postgres", n: 7 };
+        const ingestRes = await fetch(`${base}/v1/messages`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({ eventType: "user.created", payload }),
+        });
+        expect(ingestRes.status).toBe(202);
+
+        // The running worker claims the task from the Postgres queue and POSTs it.
+        const delivered = await receiver.received;
+        expect(delivered.body).toBe(JSON.stringify(payload));
+        expect(() =>
+          verify(
+            endpointSecret,
+            {
+              id: delivered.headers[HEADERS.id] as string,
+              timestamp: delivered.headers[HEADERS.timestamp] as string,
+              signature: delivered.headers[HEADERS.signature] as string,
+            },
+            delivered.body,
+          ),
+        ).not.toThrow();
+      },
+      20_000,
+    );
+
+    it(
+      "persists durable state across a restart — the shared Postgres DB, no local files",
+      async () => {
+        // First boot: provision a tenant + endpoint against Postgres, then shut down
+        // (which drains the connection pool).
+        const first = createGateway(pgConfig(pgUrl));
+        gateways.push(first);
+        const a1 = await first.start();
+        const app = await first.apps.create({ name: "Acme PG Restart" });
+        const { secret: apiKey } = await first.apps.createApiKey(app.id);
+        const createRes = await fetch(`http://127.0.0.1:${a1.port}/v1/endpoints`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            url: "https://acme.example/hook",
+            eventTypes: ["user.created"],
+          }),
+        });
+        expect(createRes.status).toBe(201);
+        const { id: endpointId } = (await createRes.json()) as { id: string };
+        await first.stop();
+
+        // Second boot against the same database: the key still authenticates (durable
+        // in Postgres, not a local file) and the endpoint survives.
+        const second = createGateway(pgConfig(pgUrl));
+        gateways.push(second);
+        const a2 = await second.start();
+        const listRes = await fetch(`http://127.0.0.1:${a2.port}/v1/endpoints`, {
+          headers: { authorization: `Bearer ${apiKey}` },
+        });
+        expect(listRes.status).toBe(200);
+        const { data } = (await listRes.json()) as { data: { id: string }[] };
+        expect(data.map((e) => e.id)).toContain(endpointId);
+      },
+      20_000,
+    );
+  });
+}

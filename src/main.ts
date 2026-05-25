@@ -15,6 +15,8 @@
  */
 
 import { SqliteAppStore } from "./apps/sqlite-app-store.js";
+import { PostgresAppStore } from "./apps/postgres-app-store.js";
+import { createPostgresPool } from "./db/postgres.js";
 import { loadConfig } from "./runtime/config.js";
 import { createGateway, resolveLocations } from "./runtime/gateway.js";
 import { runAdminCommand } from "./runtime/admin.js";
@@ -23,18 +25,33 @@ import { createLogger } from "./logging/logger.js";
 /**
  * Run a one-shot `posthorn admin` command against the configured data store, then
  * return its exit code. Opens only the app store (provisioning never touches the
- * other stores) at the same location the gateway uses, and always closes it.
+ * other stores) on the **same backend the gateway uses** — the Postgres database
+ * when `POSTHORN_DATABASE_URL` is set, otherwise the SQLite `apps.db` under the data
+ * directory — and always releases it, so the CLI and a live gateway can never
+ * provision into different stores.
  */
 async function runAdmin(args: readonly string[]): Promise<number> {
   const config = loadConfig(process.env);
+  const out = (line: string): void => console.log(line);
+  const err = (line: string): void => console.error(line);
+
+  if (config.databaseUrl) {
+    // Postgres backend: provision against the same shared database the gateway reads.
+    const pool = createPostgresPool(config.databaseUrl);
+    const store = new PostgresAppStore(pool);
+    try {
+      await store.initialize();
+      return await runAdminCommand(args, { store, out, err });
+    } finally {
+      await pool.end();
+    }
+  }
+
+  // Default SQLite backend: open the same apps.db file the gateway reads.
   const locations = resolveLocations(config.dataDir);
   const store = new SqliteAppStore({ location: locations.apps });
   try {
-    return await runAdminCommand(args, {
-      store,
-      out: (line) => console.log(line),
-      err: (line) => console.error(line),
-    });
+    return await runAdminCommand(args, { store, out, err });
   } finally {
     store.close();
   }

@@ -96,9 +96,21 @@ export interface GatewayConfig {
   readonly port: number;
   /**
    * Where durable state lives: a directory path (one SQLite file per store), or
-   * {@link MEMORY_DATA_DIR} for an ephemeral, process-lifetime store.
+   * {@link MEMORY_DATA_DIR} for an ephemeral, process-lifetime store. Ignored when
+   * {@link databaseUrl} selects the Postgres backend.
    */
   readonly dataDir: string;
+  /**
+   * Postgres connection string selecting the **PostgreSQL storage backend**, or
+   * `null` (the default — `POSTHORN_DATABASE_URL` unset) to use the embedded SQLite
+   * backend under {@link dataDir} (the "single process, no external database" wedge).
+   * When set, all six stores (apps, endpoints, messages, queue, attempts, event
+   * types) share the one Postgres database it names — the horizontally-scalable
+   * backend enabling active/active deployments and the hosted cloud tier; {@link
+   * dataDir} is then unused. Must be a `postgres:`/`postgresql:` URL.
+   * See `POSTHORN_DATABASE_URL`.
+   */
+  readonly databaseUrl: string | null;
   /** Request-body cap, in bytes (`413` beyond it). */
   readonly maxBodyBytes: number;
   /**
@@ -383,6 +395,46 @@ function readPublicBaseUrl(env: Env): string | null {
 }
 
 /**
+ * Read the optional Postgres connection string that selects the **PostgreSQL
+ * storage backend**. Unset or blank yields `null` — the gateway then runs on the
+ * default embedded SQLite backend (one file per store under `POSTHORN_DATA_DIR`,
+ * the "single process, no external database" wedge).
+ *
+ * When set, every store (apps, endpoints, messages, queue, attempts, event types)
+ * is backed by the one shared Postgres database this points at, enabling
+ * horizontally-scaled / active-active deployments and the hosted cloud tier. The
+ * value must be an absolute `postgres:` / `postgresql:` URL — the form the `pg`
+ * driver accepts (e.g. `postgres://user:pass@host:5432/dbname`); it is validated
+ * here so a malformed or wrong-scheme value fails fast at boot rather than on the
+ * first query. The string is passed through **verbatim** (credentials and query
+ * parameters such as `?sslmode=require` preserved) — only the scheme is checked.
+ */
+function readDatabaseUrl(env: Env): string | null {
+  const raw = env["POSTHORN_DATABASE_URL"];
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new ConfigError(
+      `POSTHORN_DATABASE_URL must be a valid postgres:// connection string, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new ConfigError(
+      `POSTHORN_DATABASE_URL must use the postgres or postgresql scheme, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return trimmed;
+}
+
+/**
  * The HSTS preload list's floor for `max-age`: one year in seconds. A `preload`
  * directive is rejected by the browser preload submission rules below this, so
  * configuring `preload` with a shorter `max-age` is a guaranteed no-op — rejected
@@ -430,7 +482,9 @@ function readHstsConfig(env: Env): HstsPolicy {
  * malformed value.
  *
  * Recognized variables (all optional; sensible defaults otherwise):
- * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`, `POSTHORN_MAX_BODY_BYTES`,
+ * `POSTHORN_HOST`, `POSTHORN_PORT`, `POSTHORN_DATA_DIR`,
+ * `POSTHORN_DATABASE_URL` (a `postgres://` URL selects the Postgres backend; unset = embedded SQLite),
+ * `POSTHORN_MAX_BODY_BYTES`,
  * `POSTHORN_PUBLIC_BASE_URL` (canonical origin for portal links; unset = derive from the request Host),
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
@@ -454,6 +508,7 @@ export function loadConfig(env: Env): GatewayConfig {
       max: MAX_PORT,
     }),
     dataDir: readString(env, "POSTHORN_DATA_DIR", DEFAULT_DATA_DIR),
+    databaseUrl: readDatabaseUrl(env),
     maxBodyBytes: readInt(env, "POSTHORN_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, {
       min: 1,
     }),

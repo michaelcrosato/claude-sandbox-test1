@@ -36,6 +36,7 @@ describe("loadConfig", () => {
       host: DEFAULT_HOST,
       port: DEFAULT_PORT,
       dataDir: DEFAULT_DATA_DIR,
+      databaseUrl: null,
       maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
       publicBaseUrl: null,
       adminToken: null,
@@ -366,6 +367,48 @@ describe("loadConfig", () => {
       expect(() =>
         loadConfig({ POSTHORN_PUBLIC_BASE_URL: "https://user:pass@hooks.example.com" }),
       ).toThrow(/must not embed credentials/);
+    });
+  });
+
+  describe("POSTHORN_DATABASE_URL (Postgres backend selector)", () => {
+    it("defaults to null (embedded SQLite backend) when unset or blank", () => {
+      expect(loadConfig({}).databaseUrl).toBeNull();
+      expect(loadConfig({ POSTHORN_DATABASE_URL: "   " }).databaseUrl).toBeNull();
+    });
+
+    it("passes a postgres:// connection string through verbatim, trimming whitespace", () => {
+      expect(
+        loadConfig({ POSTHORN_DATABASE_URL: "postgres://u:p@db:5432/posthorn" }).databaseUrl,
+      ).toBe("postgres://u:p@db:5432/posthorn");
+      expect(
+        loadConfig({ POSTHORN_DATABASE_URL: "  postgres://u:p@db:5432/posthorn  " }).databaseUrl,
+      ).toBe("postgres://u:p@db:5432/posthorn");
+    });
+
+    it("accepts the postgresql:// scheme alias", () => {
+      expect(
+        loadConfig({ POSTHORN_DATABASE_URL: "postgresql://u:p@db/posthorn" }).databaseUrl,
+      ).toBe("postgresql://u:p@db/posthorn");
+    });
+
+    it("preserves credentials and query parameters verbatim (e.g. sslmode)", () => {
+      const url = "postgres://u:p%40ss@db:5432/posthorn?sslmode=require";
+      expect(loadConfig({ POSTHORN_DATABASE_URL: url }).databaseUrl).toBe(url);
+    });
+
+    it("rejects a non-postgres scheme", () => {
+      expect(() => loadConfig({ POSTHORN_DATABASE_URL: "mysql://db/posthorn" })).toThrow(
+        /must use the postgres or postgresql scheme/,
+      );
+      expect(() => loadConfig({ POSTHORN_DATABASE_URL: "https://db/posthorn" })).toThrow(
+        ConfigError,
+      );
+    });
+
+    it("rejects a value that is not a valid URL", () => {
+      expect(() => loadConfig({ POSTHORN_DATABASE_URL: "not a url" })).toThrow(
+        /must be a valid postgres:\/\/ connection string/,
+      );
     });
   });
 
