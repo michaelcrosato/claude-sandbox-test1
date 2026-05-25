@@ -161,6 +161,57 @@ describe("buildOpenApiDocument — reference integrity", () => {
   });
 });
 
+describe("buildOpenApiDocument — url_not_allowed (SSRF) surfacing", () => {
+  // The four routes whose handler runs assertUrlDeliverable and can return
+  // `400 url_not_allowed` (api.ts): endpoint + admin-app create/update.
+  const URL_GUARDED_OPS = [
+    "POST /v1/endpoints",
+    "PATCH /v1/endpoints/{id}",
+    "POST /v1/admin/apps",
+    "PATCH /v1/admin/apps/{id}",
+  ];
+
+  it("lists url_not_allowed among the documented Error codes", () => {
+    const doc = buildOpenApiDocument();
+    const error = doc.components.schemas["Error"] as {
+      properties: { error: { properties: { code: { examples: string[] } } } };
+    };
+    expect(error.properties.error.properties.code.examples).toContain("url_not_allowed");
+  });
+
+  it("surfaces url_not_allowed in the 400 of every URL-guarded route (description + example)", () => {
+    const doc = buildOpenApiDocument();
+    const byKey = new Map(eachOperation(doc).map(({ key, op }) => [key, op]));
+    for (const key of URL_GUARDED_OPS) {
+      const op = byKey.get(key);
+      expect(op, `${key} should be documented`).toBeDefined();
+      const r400 = (op!.responses as Record<string, unknown>)["400"] as {
+        description: string;
+        content: { "application/json": { examples: Record<string, { value: unknown }> } };
+      };
+      expect(r400, `${key} should document a 400`).toBeDefined();
+      expect(r400.description, `${key} 400 description`).toContain("url_not_allowed");
+      const example = r400.content["application/json"].examples["url_not_allowed"];
+      expect(example, `${key} 400 url_not_allowed example`).toBeDefined();
+      expect((example!.value as { error: { code: string } }).error.code).toBe("url_not_allowed");
+    }
+  });
+
+  it("does not claim url_not_allowed on routes that run no URL guard", () => {
+    const doc = buildOpenApiDocument();
+    const guarded = new Set(URL_GUARDED_OPS);
+    for (const { key, op } of eachOperation(doc)) {
+      if (guarded.has(key)) continue;
+      const r400 = (op.responses as Record<string, { description?: string }>)["400"];
+      if (r400?.description) {
+        expect(r400.description, `${key} 400 must not mention url_not_allowed`).not.toContain(
+          "url_not_allowed",
+        );
+      }
+    }
+  });
+});
+
 describe("patternToOpenApiPath", () => {
   it("converts `:param` segments to `{param}` and leaves static paths intact", () => {
     expect(patternToOpenApiPath("/healthz")).toBe("/healthz");

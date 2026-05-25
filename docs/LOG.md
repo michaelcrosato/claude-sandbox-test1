@@ -41,6 +41,36 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:45 · iter-0083 · GREEN · openapi-surface-url-not-allowed-400
+
+- **Baseline:** clean main @ `5369313` (iter-0082 system-event per-attempt timeout). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1630/1630** (49 files, 6 PG-skipped, no flaky exit),
+  `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Close the API-contract gap deferred three times (iter-80/81/82 Next): the SSRF guard
+  added a real `400 url_not_allowed` error code on the four URL-accepting routes, but the published
+  OpenAPI never documented it — clients/codegen couldn't branch on a code the API actually returns.
+- **Changed:**
+  - `src/http/openapi.ts`: new `urlGuardedErrorResponse(description)` helper — one shared definition
+    for the four routes that run `assertUrlDeliverable`, so their 400 wording can't drift apart. It
+    appends the `url_not_allowed` condition to the description (human-facing) **and** attaches a
+    concrete `application/json` envelope `example` (machine/codegen-facing) showing the exact shape.
+  - Applied it to the four 400s: `POST /v1/endpoints`, `PATCH /v1/endpoints/{id}`,
+    `POST /v1/admin/apps`, `PATCH /v1/admin/apps/{id}`.
+  - Added `url_not_allowed` to the shared `Error.code` `examples` enum (the discoverability list).
+  - Tests: +3 (`openapi.test.ts`) — code is in the Error enum; every URL-guarded route's 400 carries
+    both the description mention and the `url_not_allowed` example; and a **reverse** guard that no
+    other route's 400 falsely claims `url_not_allowed`.
+- **Decisions:** Doc/spec only — zero product-code or runtime change (lowest risk; the green code
+  baseline stands). Shared helper over four hand-edited strings to enforce the repo's "one source of
+  truth, can't drift" discipline. Example message mirrors the real `BlockedUrlError` text. Reverse
+  guard prevents over-claiming the code on unguarded routes.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1633/1633** (+3, 6 PG-skipped); `npm run build` 0;
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); compiled-`dist` ESM smoke **PASS** (the built
+  `openapi.js` carries the code in `Error.code` and the desc+example on all four 400s).
+- **Next:** Connect-vs-total split on the delivery timeout (Svix exposes both; today one deadline
+  spans DNS+connect+response) — iter-82 Next #2; or a `code`-enumerating error-table in the README so
+  the human docs match the OpenAPI `Error.code` list.
+
 ## 2026-05-24T18:25 · iter-0082 · GREEN · system-event-delivery-per-attempt-timeout
 
 - **Baseline:** clean main @ `546c94d` (iter-0081 two-layer SSRF guard on system-webhook URLs).

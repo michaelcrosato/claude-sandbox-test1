@@ -87,6 +87,39 @@ const jsonResponse = (description: string, schema: SchemaObject): Record<string,
 const errorResponse = (description: string): Record<string, unknown> =>
   jsonResponse(description, ref("Error"));
 
+/**
+ * A `400` response for a route that runs the SSRF URL guard
+ * ({@link assertUrlDeliverable} in `api.ts`). Beyond the route's own validation
+ * errors (carried by `description`), a destination URL that resolves to a
+ * private/internal address is rejected with the stable `url_not_allowed` code.
+ * Both the description (human-facing) and a concrete envelope `example`
+ * (machine-facing) surface it, so SDK/codegen consumers can branch on it.
+ * One shared definition keeps the four URL-guarded routes from drifting apart.
+ */
+const urlGuardedErrorResponse = (description: string): Record<string, unknown> => ({
+  description:
+    `${description} A URL whose host is (or resolves to) a private or internal address ` +
+    "is rejected with `url_not_allowed`.",
+  content: {
+    "application/json": {
+      schema: ref("Error"),
+      examples: {
+        url_not_allowed: {
+          summary: "The destination URL targets a private/internal address",
+          value: {
+            error: {
+              code: "url_not_allowed",
+              message:
+                'webhook destination host "10.0.0.1" is a private or internal address; ' +
+                "set POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=true to allow delivery to private networks",
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
 /** An epoch-millisecond timestamp. */
 const epochMs = (description: string): SchemaObject => ({
   type: "integer",
@@ -434,7 +467,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           requestBody: jsonBody(ref("NewEndpoint")),
           responses: {
             "201": jsonResponse("The created endpoint, including its one-time secret.", ref("EndpointWithSecret")),
-            "400": errorResponse("Malformed request body (e.g. a non-http(s) URL)."),
+            "400": urlGuardedErrorResponse("Malformed request body (e.g. a non-http(s) URL)."),
             "401": errorResponse("Missing or invalid API key."),
           },
         },
@@ -464,7 +497,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           requestBody: jsonBody(ref("EndpointUpdate")),
           responses: {
             "200": jsonResponse("The updated endpoint (without its secret).", ref("Endpoint")),
-            "400": errorResponse("Malformed request body."),
+            "400": urlGuardedErrorResponse("Malformed request body."),
             "401": errorResponse("Missing or invalid API key."),
             "404": errorResponse("No such endpoint for this tenant."),
           },
@@ -967,7 +1000,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
               "The created tenant, including the one-time system webhook secret (if a URL was set).",
               ref("CreatedApp"),
             ),
-            "400": errorResponse("Malformed request body."),
+            "400": urlGuardedErrorResponse("Malformed request body."),
             "401": errorResponse("Missing or invalid admin token."),
             "404": errorResponse("The admin API is not enabled on this instance."),
           },
@@ -1012,7 +1045,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
           requestBody: jsonBody(ref("AppUpdate")),
           responses: {
             "200": jsonResponse("The updated tenant.", ref("App")),
-            "400": errorResponse("Malformed request body (e.g. a negative or non-integer quota)."),
+            "400": urlGuardedErrorResponse("Malformed request body (e.g. a negative or non-integer quota)."),
             "401": errorResponse("Missing or invalid admin token."),
             "404": errorResponse("No such app (or the admin API is not enabled)."),
           },
@@ -1229,7 +1262,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 code: {
                   type: "string",
                   description: "A stable, machine-readable error code.",
-                  examples: ["not_found", "unauthorized", "invalid_request", "idempotency_conflict", "quota_exceeded"],
+                  examples: [
+                    "not_found",
+                    "unauthorized",
+                    "invalid_request",
+                    "idempotency_conflict",
+                    "quota_exceeded",
+                    "url_not_allowed",
+                  ],
                 },
                 message: { type: "string", description: "A human-readable explanation." },
               },
