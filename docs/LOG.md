@@ -41,6 +41,40 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T17:45 · iter-0080 · GREEN · connection-time-ssrf-guard-on-delivery
+
+- **Baseline:** clean main @ `a501770` (iter-0079 hex/NAT64 SSRF fix). Verified green first:
+  `tsc --noEmit` exit 0, vitest **1585/1585** (6 PG-skipped), `npm run build` exit 0,
+  `assert-gate-integrity.ps1` exit 0.
+- **Move:** Close the explicitly-documented SSRF residual — a *hostname* that resolves (or rebinds)
+  to a private/internal IP, invisible to the registration-time literal-host guard, which cannot do
+  DNS. Add a connection-time resolved-IP check on the actual delivery path.
+- **Changed:**
+  - `src/net/guarded-lookup.ts` (new): `createGuardedLookup(policy, resolver?)` builds a Node
+    `lookup` for `http/https request({lookup})`. Resolves all addresses, blocks the connection if
+    **any** is private/internal (fail-closed vs round-robin/0-TTL rebinding), else hands Node the
+    resolved set so it connects without re-resolving — no TOCTOU window. Pass-through under the
+    `allowPrivateNetworks` opt-out; genuine resolution errors surface unchanged.
+  - `src/net/guarded-transport.ts` (new): `createGuardedTransport(policy)` — a `Transport` over
+    built-in `node:http/https` (**zero new deps**, preserving the no-deps wedge; `undici` is not
+    importable here). Same `HttpDeliveryResponse` contract as `fetchTransport`; additionally refuses
+    private resolved IPs and does **not** follow redirects (closes a 3xx→internal SSRF hop that
+    `fetch` auto-following allowed).
+  - `src/runtime/gateway.ts`: worker + test-send (`POST /v1/endpoints/:id/test`) now use the guarded
+    transport, built from `config.allowPrivateNetworks`.
+  - `src/net/ssrf-guard.ts`: module doc updated to the two-layer model; `src/index.ts`: export the
+    two factories. +25 tests (lookup decisions via fake resolver; transport over a real loopback
+    receiver incl. hostname block + pinned-delivery).
+- **Decisions:** node:http+lookup over adding `undici` (dep cost) or resolve-then-fetch (TOCTOU /
+  HTTPS-SNI-breaking). Connection guard shares the single `allowPrivateNetworks` opt-out — when set,
+  both layers pass-through (tests run that way, unaffected). Literal-IP hosts skip DNS, so the
+  connection guard covers only hostnames (literals stay the registration guard's job).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1610/1610** (+25, 6 PG-skipped); `npm run build`
+  0; `assert-gate-integrity.ps1` 0 (zero substrate edits); compiled-`dist` ESM smoke 4/4 (metadata +
+  RFC1918 rebind blocked; opt-out + literal-IP deliver).
+- **Next:** Extend the guard to the system-event transport (app-configured system-webhook URLs are
+  also remotely-influenced); surface `url_not_allowed`/blocked-resolution in the OpenAPI 400s.
+
 ## 2026-05-24T17:21 · iter-0079 · GREEN · close-ipv6-embedded-ipv4-ssrf-bypass
 
 - **Baseline:** clean main @ `0bc883a` (iter-0078 SSRF guard). Code baseline verified green first:

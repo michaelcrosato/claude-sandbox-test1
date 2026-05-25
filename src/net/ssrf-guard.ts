@@ -23,14 +23,23 @@
  *
  * ## Where it is enforced
  *
- * At the untrusted boundary only: endpoint **create/update** over the JSON API
- * (`POST/PATCH /v1/endpoints`) and the always-on consumer portal. A stored URL
- * is thus validated when it is *set*; delivery and the test-send operate on
- * already-validated data and do not re-check, so an operator who deliberately
- * registers an internal URL through the trusted local `posthorn admin`/library
- * path is never second-guessed at delivery time (a coherent "validate at
- * registration" model — no surprising, hard-to-diagnose delivery breakage on a
- * policy change or upgrade).
+ * Two layers, both governed by the single {@link SsrfPolicy.allowPrivateNetworks}
+ * opt-out:
+ *  1. **Registration time** (this module): endpoint **create/update** over the JSON
+ *     API (`POST/PATCH /v1/endpoints`) and the always-on consumer portal validate a
+ *     URL's *literal* host when it is set, rejecting a private/internal target.
+ *  2. **Connection time** ({@link import("./guarded-lookup.js")}, wired into the
+ *     delivery transport): every actual webhook send — the worker's delivery loop and
+ *     the `POST /v1/endpoints/:id/test` one-shot — re-checks the destination's
+ *     *resolved* IP and refuses to connect to a private/internal address. This is the
+ *     deeper defense that the registration guard cannot provide, since it requires
+ *     DNS: a public hostname that resolves to a private IP, or a name that rebinds to
+ *     one after passing registration.
+ *
+ * The trusted local `posthorn admin`/library path still bypasses *registration*
+ * validation (its `EndpointStore` writes are not API requests), but a self-hoster who
+ * genuinely delivers to internal services must set the opt-out below — which disables
+ * both layers together — rather than relying on delivery never re-checking.
  *
  * ## Opt-out
  *
@@ -42,13 +51,13 @@
  *
  * ## Limitations
  *
- * This is a registration-time, literal-host guard. It does not resolve DNS, so a
- * public hostname that resolves to a private IP (or a DNS-rebinding attack that
- * re-points a name *after* registration) is not caught here; a connection-time
- * resolved-IP check is the deeper defense and a noted follow-up. Literal IPv6
- * embedded-IPv4 forms, however, *are* fully decoded regardless of spelling — the
- * hex form `::ffff:7f00:1` is classified identically to the dotted
- * `::ffff:127.0.0.1`.
+ * This module is a registration-time, literal-host guard: it does not resolve DNS,
+ * so a public hostname that resolves to a private IP (or a DNS-rebinding attack that
+ * re-points a name *after* registration) is not caught *here*. That residual is now
+ * closed at connection time by {@link import("./guarded-lookup.js")}, which the
+ * delivery transport installs as its DNS `lookup`. Literal IPv6 embedded-IPv4 forms
+ * are fully decoded regardless of spelling — the hex form `::ffff:7f00:1` is
+ * classified identically to the dotted `::ffff:127.0.0.1`.
  */
 
 import { isIP } from "node:net";

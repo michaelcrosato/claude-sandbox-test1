@@ -28,6 +28,7 @@ import { SqliteDeliveryAttemptStore } from "../attempts/sqlite-attempt-store.js"
 import { SqliteEventTypeStore } from "../event-types/sqlite-event-type-store.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import { DeliveryWorker } from "../worker/delivery-worker.js";
+import { createGuardedTransport } from "../net/guarded-transport.js";
 import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { DataPruner } from "../pruner/data-pruner.js";
 import { createHttpServer } from "../http/server.js";
@@ -177,6 +178,17 @@ export function createGateway(config: GatewayConfig): Gateway {
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
+  // The webhook delivery transport for every tenant-URL send (the worker's
+  // continuous delivery loop and the `POST /v1/endpoints/:id/test` one-shot). It
+  // POSTs over Node's built-in http/https with a connection-time SSRF guard on DNS
+  // resolution — the deeper defense that catches a hostname resolving (or rebinding)
+  // to a private/internal IP, which the registration-time guard cannot see. Governed
+  // by the same POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS opt-out: when set, the guard
+  // is a transparent pass-through.
+  const deliveryTransport = createGuardedTransport({
+    allowPrivateNetworks: config.allowPrivateNetworks,
+  });
+
   /** Simple fetch-based transport for system webhook delivery. */
   const systemEventTransport: SystemEventTransport = async (url, init) => {
     const res = await fetch(url, {
@@ -194,6 +206,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     resolveEndpoint: storeBackedResolver(endpoints, {
       defaultRateLimit: config.defaultRateLimit,
     }),
+    transport: deliveryTransport,
     batchSize: config.worker.batchSize,
     concurrency: config.worker.concurrency,
     requestTimeoutMs: config.worker.requestTimeoutMs,
@@ -309,6 +322,9 @@ export function createGateway(config: GatewayConfig): Gateway {
       // SSRF guard policy for endpoint create/update (block private/internal
       // targets unless the operator opts in via POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS).
       allowPrivateNetworks: config.allowPrivateNetworks,
+      // The one-shot test-send (POST /v1/endpoints/:id/test) hits a tenant URL too,
+      // so it uses the same connection-time SSRF-guarded transport as the worker.
+      transport: deliveryTransport,
       // Enable the admin/control-plane routes only when a token is configured; when
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),

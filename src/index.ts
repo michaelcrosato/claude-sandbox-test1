@@ -488,4 +488,14 @@ export {
   type SsrfPolicy,
 } from "./net/ssrf-guard.js";
 
+export {
+  createGuardedLookup,
+  type AddressResolver,
+} from "./net/guarded-lookup.js";
+
+export {
+  createGuardedTransport,
+  type GuardedTransportOptions,
+} from "./net/guarded-transport.js";
+
 export { POSTHORN_VERSION } from "./version.js";
