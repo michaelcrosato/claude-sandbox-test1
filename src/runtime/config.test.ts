@@ -46,11 +46,43 @@ describe("loadConfig", () => {
       },
       retentionDays: 0,
       defaultRateLimit: null,
+      allowPrivateNetworks: false,
       fanout: {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
         idlePollMs: DEFAULT_FANOUT_IDLE_POLL_MS,
       },
+    });
+  });
+
+  describe("POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS (SSRF guard opt-out)", () => {
+    it("defaults to false (block private/internal destinations)", () => {
+      expect(loadConfig({}).allowPrivateNetworks).toBe(false);
+    });
+
+    it.each([
+      ["true", true],
+      ["TRUE", true],
+      ["  true  ", true],
+      ["1", true],
+      ["false", false],
+      ["0", false],
+    ] as const)("parses %j → %s", (raw, expected) => {
+      expect(
+        loadConfig({ POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: raw }).allowPrivateNetworks,
+      ).toBe(expected);
+    });
+
+    it("treats blank as unset (false)", () => {
+      expect(
+        loadConfig({ POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "  " }).allowPrivateNetworks,
+      ).toBe(false);
+    });
+
+    it("rejects a non-boolean value with a ConfigError", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "yes" }),
+      ).toThrow(ConfigError);
     });
   });
 

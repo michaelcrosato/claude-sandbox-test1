@@ -75,6 +75,9 @@ function memoryConfig(overrides: Record<string, string> = {}) {
     POSTHORN_PORT: "0",
     POSTHORN_DATA_DIR: ":memory:",
     POSTHORN_WORKER_IDLE_POLL_MS: "5",
+    // Tests deliver to a loopback receiver, a trusted destination in-test; opt out
+    // of the SSRF guard so endpoint creation to 127.0.0.1 is permitted.
+    POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
     ...overrides,
   });
 }

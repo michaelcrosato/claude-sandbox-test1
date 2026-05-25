@@ -154,6 +154,7 @@ import {
   type Transport,
 } from "../worker/delivery-worker.js";
 import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
+import { BlockedUrlError, assertUrlDeliverable } from "../net/ssrf-guard.js";
 import {
   PROMETHEUS_CONTENT_TYPE,
   renderPrometheus,
@@ -223,6 +224,15 @@ export interface ApiDeps {
    * {@link DEFAULT_REQUEST_TIMEOUT_MS}. `0` disables the timeout.
    */
   readonly testRequestTimeoutMs?: number;
+  /**
+   * Allow endpoint URLs that target private/internal addresses. Defaults to
+   * `false` (block) — the SSRF defense for a webhook sender: creating or updating
+   * an endpoint whose URL points at loopback, a private/link-local range, the
+   * cloud-metadata address, or an internal hostname is rejected with
+   * `400 url_not_allowed`. See {@link assertUrlDeliverable} and
+   * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS`.
+   */
+  readonly allowPrivateNetworks?: boolean;
 }
 
 /**
@@ -313,6 +323,12 @@ function toErrorResponse(err: unknown): ApiResponse {
   }
   if (err instanceof DuplicateEventTypeError) {
     return json(409, { error: { code: "conflict", message: err.message } });
+  }
+  if (err instanceof BlockedUrlError) {
+    // A tenant tried to point an endpoint at a private/internal address; the SSRF
+    // guard rejected it. A distinct code lets clients tell this apart from a
+    // generic validation error.
+    return json(400, { error: { code: "url_not_allowed", message: err.message } });
   }
   // Validators throw TypeError for type mismatches and RangeError for out-of-range
   // values (e.g. a `limit` outside `[1, MAX]`). Both are client errors on request paths.
@@ -923,6 +939,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
   /** Clock for the monthly-quota window; defaults to the real one. */
   const now = deps.now ?? Date.now;
 
+  /** SSRF policy for endpoint URLs; blocking private/internal targets by default. */
+  const ssrfPolicy = { allowPrivateNetworks: deps.allowPrivateNetworks ?? false };
+
   /** Wrap an authenticated handler with bearer-token resolution to a tenant. */
   const authed =
     (handler: AuthedHandler): RouteHandler =>
@@ -1323,6 +1342,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
       ...("rateLimit" in body ? { rateLimit: body["rateLimit"] as number | null } : {}),
     };
+    // SSRF guard: reject a destination that points at a private/internal address
+    // before it is ever stored (BlockedUrlError → 400 url_not_allowed).
+    assertUrlDeliverable(input.url, ssrfPolicy);
     const created = await deps.endpoints.create(input);
     // The signing secret is returned exactly once, here, so the tenant can
     // configure receiver-side verification. Never echoed by list/get/update.
@@ -1360,6 +1382,11 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...("channel" in body ? { channel: body["channel"] as string | null } : {}),
       ...("rateLimit" in body ? { rateLimit: body["rateLimit"] as number | null } : {}),
     };
+    // SSRF guard: re-check on update, but only when the URL is actually changing
+    // (an unrelated patch must not be blocked by a pre-existing internal URL).
+    if (patch.url !== undefined) {
+      assertUrlDeliverable(patch.url, ssrfPolicy);
+    }
     const updated = await deps.endpoints.update(id, patch);
     return json(200, endpointView(updated));
   };

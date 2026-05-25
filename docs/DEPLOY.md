@@ -145,6 +145,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_FANOUT_BATCH_SIZE` | `50` | FanoutDispatcher: messages processed per sweep. |
 | `POSTHORN_FANOUT_IDLE_POLL_MS` | `5000` | FanoutDispatcher: poll interval when the outbox is empty (ms). |
 | `POSTHORN_RETENTION_DAYS` | `0` | Delete delivered/expired data older than this many days on an hourly sweep. `0` (default) disables pruning; minimum 1 when set. |
+| `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` | `false` | Allow endpoint URLs that target private/internal addresses. `false` (default, secure) blocks loopback / RFC 1918 / link-local / CGNAT / cloud-metadata / internal-hostname destinations with `400 url_not_allowed` (SSRF defense). Set `true` only for a trusted single-tenant self-host delivering to internal services. See [SSRF protection](#ssrf-protection-private-network-webhooks). |
 
 ---
 
@@ -224,6 +225,41 @@ Tenancy is enforced by the authenticated API key — every route resolves the
 caller from the key, never from a request-body or URL `appId`.  Cross-tenant
 access returns `404` (existence is never revealed).  The admin API and tenant
 API use distinct credentials that cannot be substituted for each other.
+
+### SSRF protection (private-network webhooks)
+
+Posthorn *sends* webhooks, so an endpoint's destination URL is a
+tenant-controlled input and a classic Server-Side Request Forgery vector: a
+tenant who registers `http://169.254.169.254/…` (cloud instance metadata),
+`http://localhost:6379/`, or `http://10.0.0.5/admin` could otherwise coerce the
+gateway into making requests against your private network.
+
+By default Posthorn **refuses to register** an endpoint whose URL targets:
+
+- loopback (`127.0.0.0/8`, `::1`),
+- RFC 1918 private ranges (`10/8`, `172.16/12`, `192.168/16`),
+- link-local (`169.254.0.0/16`, including the `169.254.169.254` metadata
+  address; `fe80::/10`),
+- CGNAT (`100.64.0.0/10`), unique-local IPv6 (`fc00::/7`), multicast/reserved,
+- internal hostnames: `localhost`, any `.localhost` / `.local` / `.internal`
+  suffix, and bare single-label names (`http://redis/`, `http://db/`).
+
+A blocked registration returns `400 url_not_allowed` on `POST`/`PATCH
+/v1/endpoints` (and inline on the consumer portal). The check runs at
+**registration** time; already-stored URLs are delivered as-is.
+
+```env
+# Multi-tenant / hosted: keep the default (block).
+POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=false
+
+# Trusted single-tenant self-host that delivers to internal services: opt out.
+POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=true
+```
+
+> **Limitation:** this is a literal-host guard and does not resolve DNS, so a
+> public hostname that resolves to a private IP (or DNS rebinding after
+> registration) is not caught here. Restrict egress at the network layer for
+> defense in depth in hostile multi-tenant environments.
 
 ---
 

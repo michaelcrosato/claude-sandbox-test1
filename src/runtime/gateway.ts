@@ -289,7 +289,13 @@ export function createGateway(config: GatewayConfig): Gateway {
   // The consumer portal is always enabled — it adds no new credential surface beyond
   // the existing JSON API: a portal session can only be minted with a valid tenant API
   // key, and the portal itself only manages endpoints for the session's tenant.
-  const portalHandler = createPortalHandler({ endpoints, queue, sessions: portalSessions, eventTypes });
+  const portalHandler = createPortalHandler({
+    endpoints,
+    queue,
+    sessions: portalSessions,
+    eventTypes,
+    allowPrivateNetworks: config.allowPrivateNetworks,
+  });
 
   const httpServer = createHttpServer(
     {
@@ -300,6 +306,9 @@ export function createGateway(config: GatewayConfig): Gateway {
       attempts,
       metrics,
       eventTypes,
+      // SSRF guard policy for endpoint create/update (block private/internal
+      // targets unless the operator opts in via POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS).
+      allowPrivateNetworks: config.allowPrivateNetworks,
       // Enable the admin/control-plane routes only when a token is configured; when
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),

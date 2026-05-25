@@ -32,10 +32,15 @@ const receiverUrl = `http://127.0.0.1:${receiverPort}`;
 
 // ── Boot the gateway ───────────────────────────────────────────────────────
 const gw = createGateway(
-  loadConfig({ POSTHORN_DATA_DIR: ":memory:", POSTHORN_ADMIN_TOKEN: "smoke-test-token-for-iter44" }),
+  loadConfig({
+    POSTHORN_DATA_DIR: ":memory:",
+    POSTHORN_ADMIN_TOKEN: "smoke-test-token-for-iter44",
+    // This smoke delivers to a loopback receiver; opt out of the SSRF guard.
+    POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
+  }),
 );
 const addr = await gw.start();
-const base = `http://localhost:${addr.port}`;
+const base = `http://127.0.0.1:${addr.port}`;
 
 async function api(method, path, body, auth) {
   const headers = { "Content-Type": "application/json" };

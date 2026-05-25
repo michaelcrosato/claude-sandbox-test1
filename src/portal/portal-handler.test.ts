@@ -125,6 +125,56 @@ describe("createPortalHandler", () => {
     expect(html).toContain("whsec_");
   });
 
+  it("POST /portal/endpoints rejects a private/internal URL (SSRF guard) and does not create it", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const r = withCookie(
+      req({
+        method: "POST",
+        path: "/portal/endpoints",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        rawBody: "url=http%3A%2F%2Flocalhost%3A6379%2F", // http://localhost:6379/
+      }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    const html = String(res.body);
+    expect(html).toContain("private or internal address"); // inline error surfaced
+    expect(html).not.toContain("whsec_"); // no secret banner — nothing was created
+    expect(await endpoints.listByApp("app_1")).toHaveLength(0);
+  });
+
+  it("POST /portal/endpoints permits an internal URL when allowPrivateNetworks is set", async () => {
+    const endpoints = new InMemoryEndpointStore();
+    const queue = new InMemoryDeliveryQueue();
+    const sessions = new InMemoryPortalSessionStore();
+    const now = 1_000_000;
+    const handler = createPortalHandler({
+      endpoints,
+      queue,
+      sessions,
+      now: () => now,
+      allowPrivateNetworks: true,
+    });
+    const token = sessions.createSession("app_1", "user_42", now);
+    const r = withCookie(
+      req({
+        method: "POST",
+        path: "/portal/endpoints",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        rawBody: "url=http%3A%2F%2F127.0.0.1%3A8080%2Fhook",
+      }),
+      COOKIE,
+      token,
+    );
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    expect(String(res.body)).toContain("whsec_"); // created, secret shown
+    expect(await endpoints.listByApp("app_1")).toHaveLength(1);
+  });
+
   it("GET /portal/endpoints/:id returns endpoint detail", async () => {
     const { endpoints, sessions, handler, clock } = setup();
     const token = sessions.createSession("app_1", "user_42", clock.t);

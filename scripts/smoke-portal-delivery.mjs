@@ -1,8 +1,13 @@
 import { createGateway, loadConfig } from "../dist/index.js";
 
-const gw = createGateway(loadConfig({ POSTHORN_DATA_DIR: ":memory:", POSTHORN_ADMIN_TOKEN: "smoke-test-token-42" }));
+const gw = createGateway(loadConfig({
+  POSTHORN_DATA_DIR: ":memory:",
+  POSTHORN_ADMIN_TOKEN: "smoke-test-token-42",
+  // This smoke delivers to a loopback receiver; opt out of the SSRF guard.
+  POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
+}));
 const addr = await gw.start();
-const base = `http://localhost:${addr.port}`;
+const base = `http://127.0.0.1:${addr.port}`;
 
 let pass = 0; let fail = 0;
 function check(label, ok, extra = "") {

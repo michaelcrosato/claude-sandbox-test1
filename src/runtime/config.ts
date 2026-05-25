@@ -117,6 +117,17 @@ export interface GatewayConfig {
    * See `POSTHORN_DEFAULT_RATE_LIMIT`.
    */
   readonly defaultRateLimit: number | null;
+  /**
+   * Allow webhook endpoints to target private/internal addresses. `false` (the
+   * default) is secure-by-default: registering an endpoint whose URL points at
+   * loopback, an RFC 1918 / link-local / CGNAT range, the cloud-metadata address
+   * (`169.254.169.254`), or a bare single-label/`.local`/`.internal` host is
+   * rejected with `400 url_not_allowed` — the SSRF defense for a webhook *sender*.
+   * Set `true` only when this instance legitimately delivers to trusted internal
+   * services (a single-tenant self-host inside a private network).
+   * See `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` and `net/ssrf-guard.ts`.
+   */
+  readonly allowPrivateNetworks: boolean;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -173,6 +184,32 @@ function readString(env: Env, key: string, fallback: string): string {
   }
   const trimmed = raw.trim();
   return trimmed === "" ? fallback : trimmed;
+}
+
+/**
+ * Read a boolean env var: `"true"`/`"1"` → `true`, `"false"`/`"0"` → `false`
+ * (case-insensitive, surrounding whitespace ignored). Unset or blank yields
+ * `fallback`; any other value is a {@link ConfigError} (fail fast rather than
+ * silently coercing a typo like `"yes"` to `false`).
+ */
+function readBool(env: Env, key: string, fallback: boolean): boolean {
+  const raw = env[key];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "") {
+    return fallback;
+  }
+  if (trimmed === "true" || trimmed === "1") {
+    return true;
+  }
+  if (trimmed === "false" || trimmed === "0") {
+    return false;
+  }
+  throw new ConfigError(
+    `${key} must be "true" or "false" (or 1/0), got ${JSON.stringify(raw)}`,
+  );
 }
 
 /**
@@ -247,7 +284,8 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
  * `POSTHORN_FANOUT_IDLE_POLL_MS`,
  * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default),
- * `POSTHORN_DEFAULT_RATE_LIMIT` (gateway-wide deliveries/min cap for endpoints without an explicit limit; unset = no default).
+ * `POSTHORN_DEFAULT_RATE_LIMIT` (gateway-wide deliveries/min cap for endpoints without an explicit limit; unset = no default),
+ * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (`false` = block delivery to private/internal addresses, the SSRF default).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -295,6 +333,7 @@ export function loadConfig(env: Env): GatewayConfig {
     }),
     retentionDays: readInt(env, "POSTHORN_RETENTION_DAYS", 0, { min: 0 }),
     defaultRateLimit: readDefaultRateLimit(env),
+    allowPrivateNetworks: readBool(env, "POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS", false),
     fanout: Object.freeze<FanoutConfig>({
       graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
         min: 0,

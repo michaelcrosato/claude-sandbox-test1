@@ -161,6 +161,73 @@ describe("createApi — authentication", () => {
   });
 });
 
+describe("createApi — SSRF guard on endpoint URLs", () => {
+  it.each([
+    "http://127.0.0.1:6379/",
+    "http://localhost:8080/hook",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://10.0.0.5/admin",
+    "http://[::1]:9200/",
+    "http://redis:6379/",
+    "https://metadata.google.internal/",
+  ])("rejects creating an endpoint pointed at %s with 400 url_not_allowed", async (url) => {
+    const { api, secret } = await setup();
+    const res = await api(jsonRequest("POST", "/v1/endpoints", { url }, secret));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("url_not_allowed");
+  });
+
+  it("rejects updating an endpoint's URL to an internal address", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const id = body(created).id as string;
+    const res = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { url: "http://169.254.169.254/" }, secret),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("url_not_allowed");
+  });
+
+  it("permits a non-URL patch even though it does not re-validate the stored URL", async () => {
+    const { api, secret } = await setup();
+    const created = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
+    );
+    const id = body(created).id as string;
+    const res = await api(
+      jsonRequest("PATCH", `/v1/endpoints/${id}`, { description: "prod" }, secret),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("allows an internal URL when allowPrivateNetworks is enabled (self-host opt-out)", async () => {
+    const { apps, endpoints, messages, queue, attempts, secret } = await setup();
+    const eventTypes = new InMemoryEventTypeStore();
+    const api = createApi({
+      apps,
+      endpoints,
+      messages,
+      queue,
+      attempts,
+      eventTypes,
+      allowPrivateNetworks: true,
+    });
+    const res = await api(
+      jsonRequest("POST", "/v1/endpoints", { url: "http://127.0.0.1:8080/hook" }, secret),
+    );
+    expect(res.status).toBe(201);
+  });
+
+  it("still rejects a syntactically-invalid URL as a generic 400 (guard defers to the store)", async () => {
+    const { api, secret } = await setup();
+    const res = await api(jsonRequest("POST", "/v1/endpoints", { url: "not-a-url" }, secret));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});
+
 describe("createApi — POST /v1/messages (ingest)", () => {
   it("accepts a message and fans it out to a subscribed endpoint", async () => {
     const { api, secret, queue } = await setup();

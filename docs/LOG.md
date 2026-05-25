@@ -41,6 +41,50 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T17:12 · iter-0078 · GREEN · ssrf-guard-on-endpoint-urls
+
+- **Baseline:** clean main @ `5eaab3b` (iter-0077 config-docs drift guard). Code baseline verified
+  green first: `tsc --noEmit` clean, vitest **1469/1469** (6 PG-skipped, no flaky worker exit),
+  `npm run build` clean, `assert-gate-integrity.ps1` + `validate-log-compliance.py` PASS.
+- **Move:** Close a real, unaddressed security hole. Posthorn is a webhook *sender*, but the only
+  endpoint-URL validation was "syntactically http(s)". A tenant could register
+  `http://169.254.169.254/…` (cloud metadata), `http://localhost:6379/`, `http://10.0.0.5/`, or
+  `http://redis/` and coerce the gateway into requests against the operator's private network —
+  textbook SSRF, which every incumbent (Svix/Hookdeck/Convoy) blocks and which is a showstopper for
+  the hosted/multi-tenant P5 control plane that is the monetization path.
+- **Changed:**
+  - New pure, zero-dep `src/net/ssrf-guard.ts`: classifies a URL host (literal IPv4/IPv6 incl.
+    IPv4-mapped, or a hostname) against loopback / RFC-1918 / link-local (incl. the metadata
+    address) / CGNAT / unique-local / multicast ranges + internal names (`localhost`,
+    `*.local`/`*.internal`, bare single-label). `assertUrlDeliverable`/`isUrlDeliverable`/
+    `BlockedUrlError` (+77 unit tests).
+  - Enforced at the **untrusted registration boundary only** — endpoint create/update on the JSON
+    API (`BlockedUrlError`→`400 url_not_allowed` via `toErrorResponse`) and the always-on portal
+    (inline error). Delivery/test run on already-validated stored URLs (a coherent "validate at
+    registration" model: no silent on-upgrade delivery breakage, no resolver/worker churn).
+  - Config `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (new `readBool`; default **false** =
+    secure-by-default block) on `GatewayConfig.allowPrivateNetworks`, threaded into ApiDeps +
+    PortalDeps by the gateway; exported from `index.ts`; documented in `.env.example` +
+    `docs/DEPLOY.md` (forced by iter-77's config-docs drift guard).
+  - Tests: 3 e2e config helpers + 2 ad-hoc smokes opt out (loopback receiver = trusted in-test);
+    api + portal suites cover block/allow/non-url-patch/invalid-url.
+- **Decisions:** Secure-by-default block — the dangerous deployment is multi-tenant; a self-hoster
+  flips one documented env var. Guard at registration, not delivery — avoids dead-lettering
+  intentional internal endpoints on upgrade and leaves the trusted CLI/library path unconstrained.
+  Distinct `url_not_allowed` code so clients separate an SSRF block from generic validation.
+  Literal-host only — DNS-rebinding is a documented residual gap and a Next.
+- **Validation:** `tsc --noEmit` exit 0; `vitest run` **1570/1570** (+101; 6 PG-skipped, no flaky
+  exit); `npm run build` exit 0; `assert-gate-integrity.ps1` exit 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`. Compiled-`dist` ESM smoke: guard blocks the 5 canonical
+  SSRF targets, permits public + opt-out, config rejects a bad bool. `smoke-test-endpoint` and
+  `smoke-portal-delivery` pass (loopback endpoint create 201/200 under the opt-out).
+- **Notes:** Also fixed pre-existing `localhost`→`127.0.0.1` bit-rot in the two smokes I touched
+  (the gateway binds IPv4; `localhost` resolved to a 404 path on this Windows box) — unrelated to
+  SSRF. A Windows-only libuv teardown assertion still prints on those two after all checks pass.
+- **Next:** Connection-time resolved-IP check (DNS-rebinding defense) via a custom undici
+  `lookup`/connect hook; or surface `url_not_allowed` in the OpenAPI 400 responses of the endpoint
+  create/update operations.
+
 ## 2026-05-24T16:52 · iter-0077 · GREEN · config-docs-drift-guard
 
 - **Baseline:** clean main @ `2c6c952` (iter-0076 ledger migration). Code baseline verified green

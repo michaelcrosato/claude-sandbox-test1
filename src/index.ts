@@ -477,4 +477,15 @@ export {
   type DeliveryCountsByStatus,
 } from "./queue/delivery-queue.js";
 
+export {
+  BlockedUrlError,
+  assertUrlDeliverable,
+  isUrlDeliverable,
+  isBlockedHost,
+  isBlockedHostname,
+  isBlockedIpv4,
+  isBlockedIpv6,
+  type SsrfPolicy,
+} from "./net/ssrf-guard.js";
+
 export { POSTHORN_VERSION } from "./version.js";

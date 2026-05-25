@@ -44,6 +44,7 @@ import {
   type Transport,
 } from "../worker/delivery-worker.js";
 import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
+import { assertUrlDeliverable } from "../net/ssrf-guard.js";
 import { verify as verifySignature } from "../signing/webhook-signature.js";
 import {
   portalExpiredPage,
@@ -70,6 +71,13 @@ export interface PortalDeps {
    * inject a fake in tests.
    */
   readonly transport?: Transport;
+  /**
+   * Allow endpoint URLs that target private/internal addresses. Defaults to
+   * `false` (block) — the SSRF guard mirrors the JSON API: a customer who tries to
+   * point an endpoint at loopback/private/metadata/internal-host through the portal
+   * sees the rejection inline. See `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS`.
+   */
+  readonly allowPrivateNetworks?: boolean;
 }
 
 /** Cookie name for the portal session. Distinct from the admin and tenant dashboard cookies. */
@@ -175,6 +183,7 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const clock = deps.now ?? (() => Date.now());
   const eventTypesStore = deps.eventTypes;
   const send = deps.transport ?? fetchTransport;
+  const ssrfPolicy = { allowPrivateNetworks: deps.allowPrivateNetworks ?? false };
 
   function sessionCookie(token: string): string {
     return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal`;
@@ -273,6 +282,8 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       };
       let secret: string;
       try {
+        // SSRF guard: reject a private/internal destination (surfaced inline below).
+        assertUrlDeliverable(input.url, ssrfPolicy);
         const created = await endpoints.create(input);
         secret = created.secret;
       } catch (err) {
@@ -339,6 +350,10 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       };
       let updated: typeof ep;
       try {
+        // SSRF guard: re-check only when the URL is actually changing.
+        if (patch.url !== undefined) {
+          assertUrlDeliverable(patch.url, ssrfPolicy);
+        }
         updated = await endpoints.update(s1, patch);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : "Invalid input.";

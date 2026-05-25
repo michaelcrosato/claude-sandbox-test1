@@ -149,6 +149,8 @@ function memoryConfigWithAdmin(adminToken: string) {
     POSTHORN_DATA_DIR: ":memory:",
     POSTHORN_WORKER_IDLE_POLL_MS: "5",
     POSTHORN_ADMIN_TOKEN: adminToken,
+    // Loopback receiver is a trusted destination in-test; opt out of the SSRF guard.
+    POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
   });
 }
 
