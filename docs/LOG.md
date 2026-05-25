@@ -41,6 +41,41 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T17:21 · iter-0079 · GREEN · close-ipv6-embedded-ipv4-ssrf-bypass
+
+- **Baseline:** clean main @ `0bc883a` (iter-0078 SSRF guard). Code baseline verified green first:
+  `tsc --noEmit` clean, vitest **1570/1570** (6 PG-skipped, no flaky exit), `npm run build` clean,
+  `assert-gate-integrity.ps1` + `validate-log-compliance.py` PASS.
+- **Move:** Close a live, exploitable bypass *inside* the SSRF guard iter-78 just shipped. The IPv6
+  classifier only unwrapped IPv4-mapped addresses in dotted form (`::ffff:127.0.0.1`); the
+  equivalent all-hex spelling slipped through. Confirmed against compiled `dist`:
+  `http://[::ffff:a9fe:a9fe]/` (== cloud metadata `169.254.169.254`) and `::ffff:7f00:1`
+  (== `127.0.0.1`) were reported **deliverable** — the exact target the guard exists to block.
+- **Changed:**
+  - `src/net/ssrf-guard.ts`: new pure `expandIpv6` expands any literal to its 8 hextets (resolves
+    `::`, folds a trailing dotted-quad to hex). `isBlockedIpv6` rewritten to classify on the
+    expanded bits, routing every embedded-IPv4 form — IPv4-mapped (`::ffff:0:0/96`), deprecated
+    IPv4-compatible (`::/96`), NAT64 (`64:ff9b::/96`) — through `isBlockedIpv4` in *any* spelling;
+    link-local/ULA/multicast become exact masked-prefix checks; an unparseable literal fails closed.
+    Module-doc Limitations updated (hex caveat removed; DNS-rebinding gap retained).
+  - `src/net/ssrf-guard.test.ts`: +15 golden vectors — hex mapped loopback/private/metadata,
+    fully-expanded form, compatible + NAT64, uppercase; public hex-mapped + NAT64 still permitted;
+    fail-closed cases; two URL-level regressions (`http://[::ffff:a9fe:a9fe]/…`).
+- **Decisions:** Expand-then-classify over more string regexes — judging actual bits is spelling-
+  independent and kills the whole bypass class, not just the one reported form. NAT64 included (real
+  translation prefix; fail-closed for a private low-32). Public embedded v4 (`::ffff:8.8.8.8`) stays
+  deliverable — extract-and-classify, never block all of `::/96`. Signature unchanged; only
+  re-exported via `index.ts`, so no delivery-path caller churn.
+- **Validation:** `tsc --noEmit` exit 0; `vitest run` **1585/1585** (+15; 6 PG-skipped, no flaky
+  exit); `npm run build` exit 0; compiled-`dist` ESM probe: the 3 hex/NAT64 SSRF targets now
+  blocked, public mapped + named still deliverable; `assert-gate-integrity.ps1` exit 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** Registration-time, literal-host scope is unchanged — this hardens the existing guard,
+  it does not widen where it runs.
+- **Next:** Connection-time resolved-IP check (DNS-rebinding defense) via an undici `lookup`/connect
+  hook — the remaining documented SSRF residual; or surface `url_not_allowed` in the OpenAPI 400
+  responses of endpoint create/update.
+
 ## 2026-05-24T17:12 · iter-0078 · GREEN · ssrf-guard-on-endpoint-urls
 
 - **Baseline:** clean main @ `5eaab3b` (iter-0077 config-docs drift guard). Code baseline verified

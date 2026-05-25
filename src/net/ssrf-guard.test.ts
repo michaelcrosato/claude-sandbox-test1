@@ -73,7 +73,26 @@ describe("isBlockedIpv6", () => {
     "::ffff:127.0.0.1", // IPv4-mapped loopback
     "::ffff:10.0.0.1", // IPv4-mapped private
     "::ffff:169.254.169.254", // IPv4-mapped metadata
+    "FE80::1", // uppercase is normalized before classifying
   ])("blocks private/internal %s", (ip) => {
+    expect(isBlockedIpv6(ip)).toBe(true);
+  });
+
+  // Regression: the hex spelling of an embedded IPv4 must be blocked exactly like
+  // its dotted form. Before the IPv6 expander, `::ffff:7f00:1` (== 127.0.0.1) and
+  // `::ffff:a9fe:a9fe` (== 169.254.169.254, cloud metadata) slipped through the
+  // guard untouched — a live SSRF bypass of the dotted-only matcher.
+  it.each([
+    "::ffff:7f00:1", // hex IPv4-mapped loopback (== 127.0.0.1)
+    "::ffff:0a00:0005", // hex IPv4-mapped private (== 10.0.0.5)
+    "::ffff:a9fe:a9fe", // hex IPv4-mapped cloud metadata (== 169.254.169.254)
+    "0:0:0:0:0:ffff:7f00:1", // fully-expanded hex mapped loopback
+    "::ffff:c0a8:0001", // hex IPv4-mapped 192.168.0.1
+    "::7f00:1", // deprecated IPv4-compatible hex loopback (== ::127.0.0.1)
+    "::127.0.0.1", // IPv4-compatible dotted loopback
+    "64:ff9b::7f00:1", // NAT64 well-known prefix embedding 127.0.0.1
+    "64:ff9b::a9fe:a9fe", // NAT64 embedding cloud metadata
+  ])("blocks embedded-IPv4 spelling %s", (ip) => {
     expect(isBlockedIpv6(ip)).toBe(true);
   });
 
@@ -81,8 +100,16 @@ describe("isBlockedIpv6", () => {
     "2001:4860:4860::8888", // public (Google DNS)
     "2606:4700:4700::1111", // public (Cloudflare DNS)
     "::ffff:8.8.8.8", // IPv4-mapped public
+    "::ffff:0808:0808", // hex IPv4-mapped public (== 8.8.8.8)
+    "64:ff9b::8.8.8.8", // NAT64 embedding a public v4 routes to 8.8.8.8
   ])("permits public %s", (ip) => {
     expect(isBlockedIpv6(ip)).toBe(false);
+  });
+
+  it("fails closed on an unparseable literal", () => {
+    // isIP gates real callers, but a defensively-unexpandable string must block.
+    expect(isBlockedIpv6("1:2:3")).toBe(true);
+    expect(isBlockedIpv6("gggg::1")).toBe(true);
   });
 
   it("ignores a zone id when classifying", () => {
@@ -142,6 +169,8 @@ describe("isUrlDeliverable / assertUrlDeliverable", () => {
     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
     "http://10.0.0.5/admin",
     "http://[::1]:9200/", // bracketed IPv6 literal in a URL
+    "http://[::ffff:7f00:1]/", // hex IPv4-mapped loopback in a URL (was a bypass)
+    "http://[::ffff:a9fe:a9fe]/latest/meta-data/", // hex-mapped metadata (was a bypass)
     "http://redis:6379/",
     "https://metadata.google.internal/computeMetadata/v1/",
   ])("blocks internal destination %s", (url) => {

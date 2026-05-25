@@ -45,9 +45,10 @@
  * This is a registration-time, literal-host guard. It does not resolve DNS, so a
  * public hostname that resolves to a private IP (or a DNS-rebinding attack that
  * re-points a name *after* registration) is not caught here; a connection-time
- * resolved-IP check is the deeper defense and a noted follow-up. The unusual
- * all-hex textual form of an IPv4-mapped IPv6 address (`::ffff:7f00:1`) is also
- * not decoded — only the canonical dotted form (`::ffff:127.0.0.1`) is.
+ * resolved-IP check is the deeper defense and a noted follow-up. Literal IPv6
+ * embedded-IPv4 forms, however, *are* fully decoded regardless of spelling — the
+ * hex form `::ffff:7f00:1` is classified identically to the dotted
+ * `::ffff:127.0.0.1`.
  */
 
 import { isIP } from "node:net";
@@ -112,21 +113,86 @@ export function isBlockedIpv4(ip: string): boolean {
 }
 
 /**
+ * Expand an IPv6 literal into its eight 16-bit hextets (each `0`–`0xffff`), or
+ * `null` if the string is not a parseable IPv6 address. Resolves `::`
+ * zero-compression and converts a trailing embedded IPv4 written in dotted form
+ * (`::ffff:127.0.0.1` → the final two hextets become `0x7f00`, `0x0001`) so the
+ * whole address is uniform hex. The input must already be lowercased with any
+ * zone id stripped. Expanding (rather than string-prefix matching) lets the
+ * classifier judge an address by its actual bits, independent of textual form.
+ */
+function expandIpv6(addr: string): number[] | null {
+  let s = addr;
+  // Fold a trailing dotted-quad (IPv4-mapped/compatible written canonically) into
+  // two hextets so the address is pure hex before the "::" split below.
+  const dotted = s.match(/^(.*:)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted !== null) {
+    const o = ipv4Octets(dotted[2]!);
+    if (o === null) return null;
+    const hex = `${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
+    s = dotted[1]! + hex;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null; // at most one "::" run is legal
+  const parseGroups = (part: string): number[] | null => {
+    if (part === "") return [];
+    const out: number[] = [];
+    for (const g of part.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+      out.push(parseInt(g, 16));
+    }
+    return out;
+  };
+  const head = parseGroups(halves[0]!);
+  if (head === null) return null;
+  if (halves.length === 1) {
+    return head.length === 8 ? head : null; // no "::" → must be exactly 8 groups
+  }
+  const tail = parseGroups(halves[1]!);
+  if (tail === null) return null;
+  const fill = 8 - head.length - tail.length;
+  if (fill < 1) return null; // "::" must stand for at least one zero group
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
+}
+
+/**
  * Classify a literal IPv6 address as private/internal. Blocks loopback (`::1`),
  * the unspecified address (`::`), link-local (`fe80::/10`), unique-local
- * (`fc00::/7`), and multicast (`ff00::/8`). An IPv4-mapped/embedded address in
- * the canonical dotted form (`::ffff:127.0.0.1`, `::127.0.0.1`) is unwrapped and
- * classified by its embedded v4.
+ * (`fc00::/7`), and multicast (`ff00::/8`). Any address carrying an embedded IPv4
+ * — IPv4-mapped (`::ffff:0:0/96`), the deprecated IPv4-compatible block (`::/96`),
+ * or the NAT64 well-known prefix (`64:ff9b::/96`) — is unwrapped and judged by its
+ * embedded v4 via {@link isBlockedIpv4}, in **every** textual spelling: the dotted
+ * form (`::ffff:127.0.0.1`) *and* the all-hex form (`::ffff:7f00:1`,
+ * `0:0:0:0:0:ffff:7f00:1`) both resolve to `127.0.0.1` and are blocked, closing
+ * the bypass where only the dotted form was caught. The address is expanded to its
+ * 128 bits first, so classification is independent of how `::`/leading zeros are
+ * written. An unparseable literal fails closed (blocked).
  */
 export function isBlockedIpv6(ip: string): boolean {
   const addr = ip.toLowerCase().split("%")[0]!; // drop any zone id (fe80::1%eth0)
-  // IPv4-mapped/embedded in dotted form — classify the embedded v4.
-  const v4 = addr.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (v4 !== null) return isBlockedIpv4(v4[1]!);
-  if (addr === "::1" || addr === "::") return true; // loopback / unspecified
-  if (/^fe[89ab]/.test(addr)) return true; // fe80::/10 — link-local
-  if (/^f[cd]/.test(addr)) return true; // fc00::/7 — unique-local
-  if (/^ff/.test(addr)) return true; // ff00::/8 — multicast
+  const h = expandIpv6(addr);
+  if (h === null) return true; // isIP accepted it but we can't expand — fail closed
+
+  // Embedded-IPv4 forms route to the v4 classifier so the hex spelling of a mapped
+  // address is caught exactly like its dotted form. `top5Zero` (the address sits in
+  // ::/80) covers both IPv4-mapped (h[5] === 0xffff) and the IPv4-compatible block
+  // (h[5] === 0, which also subsumes `::` → 0.0.0.0 and `::1` → 0.0.0.1, both blocked
+  // by isBlockedIpv4); NAT64 is the distinct 64:ff9b::/96 prefix.
+  const top5Zero =
+    h[0]! === 0 && h[1]! === 0 && h[2]! === 0 && h[3]! === 0 && h[4]! === 0;
+  const isMapped = top5Zero && h[5]! === 0xffff;
+  const isCompatible = top5Zero && h[5]! === 0;
+  const isNat64 =
+    h[0]! === 0x0064 && h[1]! === 0xff9b && h[2]! === 0 && h[3]! === 0 &&
+    h[4]! === 0 && h[5]! === 0;
+  if (isMapped || isCompatible || isNat64) {
+    const v4 = `${h[6]! >> 8}.${h[6]! & 0xff}.${h[7]! >> 8}.${h[7]! & 0xff}`;
+    return isBlockedIpv4(v4);
+  }
+
+  if ((h[0]! & 0xffc0) === 0xfe80) return true; // fe80::/10 — link-local
+  if ((h[0]! & 0xfe00) === 0xfc00) return true; // fc00::/7 — unique-local
+  if ((h[0]! & 0xff00) === 0xff00) return true; // ff00::/8 — multicast
   return false;
 }
 
