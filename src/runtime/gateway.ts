@@ -17,6 +17,7 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -129,9 +130,18 @@ export interface CreateGatewayOptions {
    * Replace the structured logger. Defaults to a JSON-Lines-to-stdout logger at
    * `config.logLevel`. A library embedder injects their own {@link Logger} (or a
    * custom sink) to route Posthorn's runtime logs into their logging stack; a test
-   * injects a collecting logger to assert on emitted entries.
+   * injects a collecting logger to assert on emitted entries. Whatever is supplied,
+   * the gateway binds `instance` + `version` onto it (see {@link instanceId}), so an
+   * embedder's sink still receives those identity fields on every Posthorn line.
    */
   readonly logger?: Logger;
+  /**
+   * Identity stamped onto **every** log line this gateway emits, so lines from
+   * different processes/replicas sharing one log stream stay distinguishable.
+   * Defaults to a fresh random id per gateway instance. Inject a stable value for
+   * deterministic tests, or to align the id with an external orchestrator's name.
+   */
+  readonly instanceId?: string;
 }
 
 /** Per-store SQLite locations resolved from a `dataDir`. */
@@ -202,9 +212,16 @@ export function createGateway(
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
   // Structured operational logging (JSON Lines → stdout at the configured level,
-  // unless an embedder/test injects its own). Each runtime component gets a child
-  // logger bound to its `component` so the unified stream stays filterable.
-  const logger = options.logger ?? createLogger({ level: config.logLevel });
+  // unless an embedder/test injects its own). Bind this gateway's identity —
+  // `instance` (unique per process/replica) and `version` (the running build) —
+  // onto the root so it rides every line, making logs from multiple replicas in one
+  // aggregated stream correlatable. Each runtime component additionally tags its
+  // entries with a `component` so the unified stream stays filterable.
+  const instanceId = options.instanceId ?? randomUUID();
+  const logger = (options.logger ?? createLogger({ level: config.logLevel })).child({
+    instance: instanceId,
+    version: POSTHORN_VERSION,
+  });
 
   // The webhook delivery transport for every tenant-URL send (the worker's
   // continuous delivery loop and the `POST /v1/endpoints/:id/test` one-shot). It
@@ -416,6 +433,16 @@ export function createGateway(
       throw new Error("gateway HTTP server is not bound to a TCP address");
     }
     const info = address as AddressInfo;
+    // The canonical "service is up" marker — a structured line carrying the bound
+    // address and data location, so the single most operationally useful event is in
+    // the same parseable JSON stream as everything else (it used to be a human-only
+    // `console.log` in the process shell, which broke JSON log ingestion).
+    logger.info("gateway started", {
+      component: "gateway",
+      host: info.address,
+      port: info.port,
+      dataDir: config.dataDir,
+    });
     return { host: info.address, port: info.port };
   };
 
@@ -447,6 +474,9 @@ export function createGateway(
     queue.close();
     attempts.close();
     eventTypes.close();
+    // The clean-shutdown marker. Guarded by `stopped`, so it fires exactly once even
+    // though `stop()` is idempotent.
+    logger.info("gateway stopped", { component: "gateway" });
   };
 
   return {

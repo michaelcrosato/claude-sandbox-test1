@@ -41,6 +41,44 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:47 · iter-0085 · GREEN · structured-gateway-lifecycle-logging
+
+- **Baseline:** clean main @ `85d4bc2` (iter-0084 structured logging). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1665/1665** (50 files, 6 PG-skipped; one flaky tinypool
+  "worker exited" on the first run, clean on re-run), `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Finish iter-0084's structured logging by closing its own defect — the gateway's
+  **lifecycle** still went through human `console.log` in the process shell (`[posthorn] listening`,
+  `stopped`, …), so a deployed Posthorn wrote a **mix of prose and JSON to stdout**, which breaks
+  every JSON-Lines collector (Loki/CloudWatch/Datadog). The most operationally useful markers
+  (service up / down / on which port) were the ones *not* machine-parseable, and no `instance`/
+  `version` stamp existed for multi-replica log correlation. This is iter-0084's documented Next.
+- **Changed:**
+  - `runtime/gateway.ts`: bind `instance` (fresh `randomUUID` per gateway, overridable via new
+    `CreateGatewayOptions.instanceId`) + `version` (`POSTHORN_VERSION`) onto the root logger via
+    `.child(...)`, so **every** line — including sub-component lines and an embedder's own — carries
+    gateway identity. `start()` emits `info` `gateway started` (host/port/dataDir) after bind;
+    `stop()` emits `info` `gateway stopped` once (guarded by `stopped`, idempotent-safe).
+  - `main.ts`: dropped the human banner + `[posthorn]` lifecycle prints; signal/shutdown logging now
+    rides `gateway.logger`; the pre-gateway startup-failure catch emits a structured `error` line via
+    a default logger — so the **entire** process stdout is uniform JSON Lines, even on fatal boot.
+  - `gateway.test.ts`: reworked the logger-contract test (identity now bound, not `===`); +2 tests
+    (lifecycle started/stopped fires-once; distinct default instance id per gateway).
+  - `scripts/smoke-logging.mjs`: +5 checks (injected identity, lifecycle lines, and a default-sink
+    section proving every captured start+stop stdout line parses as JSON). 17 → 22.
+  - `docs/DEPLOY.md`: Logging section documents the `instance`/`version` stamp + lifecycle lines;
+    replaced the stale `[posthorn] listening…` standalone-run example with the real JSON boot line.
+- **Decisions:** Expose the **bound** child as `gateway.logger` (not the raw injected logger) so an
+  embedder's own lines also carry instance/version — chose stream-identity coherence over the prior
+  `toBe(injected)` identity contract (updated the one unit + one smoke assertion). Startup-failure
+  log goes to stdout (not stderr) to keep one uniform JSON stream, matching the gateway's own errors.
+  `admin` CLI output stays `console.log` (user-facing command results, not operational logs).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1667/1667** (+2; 50 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-logging.mjs` **22/22** (real JSON `gateway started`/
+  `gateway stopped` lines observed on the default stdout sink); `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Bind `instance`/`version` onto the worker/dispatcher metrics labels too (log↔metric
+  correlation), or emit a periodic `info` heartbeat with queue depth for liveness without scraping.
+
 ## 2026-05-24T18:46 · iter-0084 · GREEN · structured-operational-logging
 
 - **Baseline:** clean main @ `a79d56d` (iter-0083 OpenAPI `url_not_allowed`). Verified green

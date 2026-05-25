@@ -319,13 +319,18 @@ Datadog, Vector, …) ingests without configuration. In a container, capture the
 with `docker logs` or your platform's stdout pipeline; there is no log file to
 rotate.
 
-Each line carries `time` (ISO-8601), `level`, `msg`, and event-specific fields,
-for example:
+Each line carries `time` (ISO-8601), `level`, `msg`, and event-specific fields.
+Every line also carries the gateway's identity — `instance` (a unique id minted per
+process, so lines from multiple replicas sharing one log stream stay distinguishable)
+and `version` (the running build) — and lifecycle transitions (`gateway started` /
+`gateway stopped`) are part of the same parseable stream rather than a separate
+human banner. For example:
 
 ```json
-{"time":"2026-05-24T18:45:01.002Z","level":"info","msg":"request","component":"http","method":"POST","path":"/v1/messages","status":202,"durationMs":4}
-{"time":"2026-05-24T18:45:09.117Z","level":"error","msg":"unhandled request error","component":"http","method":"GET","path":"/v1/messages/abc","err":{"name":"TypeError","message":"...","stack":"..."}}
-{"time":"2026-05-24T18:45:30.500Z","level":"error","msg":"delivery worker error","component":"worker","err":{"name":"Error","message":"..."}}
+{"time":"2026-05-24T18:45:00.900Z","level":"info","msg":"gateway started","instance":"7f3c…","version":"0.1.0","component":"gateway","host":"0.0.0.0","port":3000,"dataDir":"/var/lib/posthorn"}
+{"time":"2026-05-24T18:45:01.002Z","level":"info","msg":"request","instance":"7f3c…","version":"0.1.0","component":"http","method":"POST","path":"/v1/messages","status":202,"durationMs":4}
+{"time":"2026-05-24T18:45:09.117Z","level":"error","msg":"unhandled request error","instance":"7f3c…","version":"0.1.0","component":"http","method":"GET","path":"/v1/messages/abc","err":{"name":"TypeError","message":"...","stack":"..."}}
+{"time":"2026-05-24T18:45:30.500Z","level":"error","msg":"delivery worker error","instance":"7f3c…","version":"0.1.0","component":"worker","err":{"name":"Error","message":"..."}}
 ```
 
 Set the minimum severity with **`POSTHORN_LOG_LEVEL`** (`debug` | `info` | `warn` |
@@ -456,9 +461,9 @@ cd posthorn
 npm ci
 npm run build
 
-# Run:
+# Run (stdout is JSON Lines — the boot marker is the first line):
 POSTHORN_ADMIN_TOKEN=your_token POSTHORN_DATA_DIR=/var/lib/posthorn npm start
-# [posthorn] listening on http://0.0.0.0:3000 (data: /var/lib/posthorn)
+# {"time":"…","level":"info","msg":"gateway started","instance":"…","version":"…","component":"gateway","host":"0.0.0.0","port":3000,"dataDir":"/var/lib/posthorn"}
 ```
 
 For a managed system service, write a systemd unit:

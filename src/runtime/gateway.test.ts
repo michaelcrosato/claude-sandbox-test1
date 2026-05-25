@@ -9,6 +9,7 @@ import { createGateway, type Gateway } from "./gateway.js";
 import { loadConfig } from "./config.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
 import { createLogger, type LogEntry } from "../logging/logger.js";
+import { POSTHORN_VERSION } from "../version.js";
 
 // Track resources per test so each tears its sockets / temp files down cleanly.
 const gateways: Gateway[] = [];
@@ -119,9 +120,8 @@ describe("createGateway", () => {
   it("routes HTTP requests through the injected logger, tagged component:http", async () => {
     const entries: LogEntry[] = [];
     const logger = createLogger({ level: "info", sink: (e) => entries.push(e) });
-    const gateway = createGateway(memoryConfig(), { logger });
+    const gateway = createGateway(memoryConfig(), { logger, instanceId: "inst-test" });
     gateways.push(gateway);
-    expect(gateway.logger).toBe(logger);
     const address = await gateway.start();
 
     const res = await fetch(`http://127.0.0.1:${address.port}/v1/endpoints`);
@@ -134,7 +134,59 @@ describe("createGateway", () => {
       method: "GET",
       path: "/v1/endpoints",
       status: 401,
+      // The gateway binds its identity onto the injected logger, so every line —
+      // even ones emitted by a sub-component — carries instance + version.
+      instance: "inst-test",
+      version: POSTHORN_VERSION,
     });
+  });
+
+  it("emits structured gateway started / stopped lifecycle lines", async () => {
+    const entries: LogEntry[] = [];
+    const logger = createLogger({ level: "info", sink: (e) => entries.push(e) });
+    const gateway = createGateway(memoryConfig(), { logger, instanceId: "inst-life" });
+    const address = await gateway.start();
+
+    const started = entries.find((e) => e.msg === "gateway started");
+    expect(started).toBeDefined();
+    expect(started!.level).toBe("info");
+    expect(started!.fields).toMatchObject({
+      component: "gateway",
+      host: "127.0.0.1",
+      port: address.port,
+      dataDir: ":memory:",
+      instance: "inst-life",
+      version: POSTHORN_VERSION,
+    });
+    expect(typeof started!.fields.port).toBe("number");
+
+    await gateway.stop();
+    const stopped = entries.filter((e) => e.msg === "gateway stopped");
+    expect(stopped).toHaveLength(1); // fires exactly once despite stop() being idempotent
+    expect(stopped[0]!.fields).toMatchObject({ component: "gateway", instance: "inst-life" });
+
+    await gateway.stop(); // second stop must not emit a second line
+    expect(entries.filter((e) => e.msg === "gateway stopped")).toHaveLength(1);
+  });
+
+  it("stamps a distinct instance id onto each gateway by default", async () => {
+    const collect = (): { logger: ReturnType<typeof createLogger>; entries: LogEntry[] } => {
+      const entries: LogEntry[] = [];
+      return { logger: createLogger({ level: "info", sink: (e) => entries.push(e) }), entries };
+    };
+    const a = collect();
+    const b = collect();
+    const ga = createGateway(memoryConfig(), { logger: a.logger });
+    const gb = createGateway(memoryConfig(), { logger: b.logger });
+    gateways.push(ga, gb);
+    await ga.start();
+    await gb.start();
+
+    const instA = a.entries.find((e) => e.msg === "gateway started")!.fields.instance;
+    const instB = b.entries.find((e) => e.msg === "gateway started")!.fields.instance;
+    expect(typeof instA).toBe("string");
+    expect((instA as string).length).toBeGreaterThan(0);
+    expect(instA).not.toBe(instB); // a fresh random id per gateway, no collision
   });
 
   it(

@@ -18,6 +18,7 @@ import { SqliteAppStore } from "./apps/sqlite-app-store.js";
 import { loadConfig } from "./runtime/config.js";
 import { createGateway, resolveLocations } from "./runtime/gateway.js";
 import { runAdminCommand } from "./runtime/admin.js";
+import { createLogger } from "./logging/logger.js";
 
 /**
  * Run a one-shot `posthorn admin` command against the configured data store, then
@@ -42,11 +43,11 @@ async function runAdmin(args: readonly string[]): Promise<number> {
 async function runServer(): Promise<void> {
   const config = loadConfig(process.env);
   const gateway = createGateway(config);
-  const address = await gateway.start();
-  console.log(
-    `[posthorn] listening on http://${address.host}:${address.port} ` +
-      `(data: ${config.dataDir})`,
-  );
+  // `start()` itself emits the structured `gateway started` line (host/port/dataDir),
+  // so the process shell no longer prints a human-only banner that would pollute the
+  // JSON-Lines stdout stream. Lifecycle/signal logging here rides the same logger.
+  await gateway.start();
+  const log = gateway.logger;
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -54,14 +55,14 @@ async function runServer(): Promise<void> {
       return;
     }
     shuttingDown = true;
-    console.log(`[posthorn] ${signal} received — shutting down gracefully`);
+    log.info("shutdown signal received", { component: "gateway", signal });
     gateway.stop().then(
       () => {
-        console.log("[posthorn] stopped");
+        // `stop()` emits the `gateway stopped` line; just exit cleanly here.
         process.exit(0);
       },
       (err: unknown) => {
-        console.error("[posthorn] error during shutdown:", err);
+        log.error("error during shutdown", { component: "gateway", err });
         process.exit(1);
       },
     );
@@ -82,6 +83,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error("[posthorn] failed to start:", err);
+  // Startup can fail before a gateway (and its logger) exists — a bad config value,
+  // a port already in use. Emit a structured error line through a default logger so
+  // even the fatal-boot case stays on the uniform JSON-Lines stream, then fail.
+  createLogger().error("gateway failed to start", { component: "gateway", err });
   process.exitCode = 1;
 });

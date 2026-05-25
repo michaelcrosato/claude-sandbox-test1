@@ -120,15 +120,25 @@ async function captureStdout(fn) {
 {
   const entries = [];
   const logger = createLogger({ level: "info", sink: (e) => entries.push(e) });
-  const gw = createGateway(cfg("info"), { logger });
-  check("gateway: exposes the injected logger", gw.logger === logger);
+  const gw = createGateway(cfg("info"), { logger, instanceId: "smoke-inst" });
   const { port } = await gw.start();
   const res = await fetch(`http://127.0.0.1:${port}/v1/endpoints`);
   check("gateway(injected): request → 401", res.status === 401);
   await gw.stop();
+
   const access = entries.find((e) => e.msg === "request");
   check("gateway(injected): structured access entry with component:http",
     access && access.fields.component === "http" && access.fields.status === 401);
+  // The gateway binds its identity onto whatever logger it is handed, so the
+  // embedder's sink receives instance + version on every line (not just lifecycle).
+  check("gateway(injected): every line carries bound instance + version",
+    access.fields.instance === "smoke-inst" && typeof access.fields.version === "string");
+  const started = entries.find((e) => e.msg === "gateway started");
+  check("gateway(injected): structured 'gateway started' line with bound address",
+    started && started.fields.component === "gateway" && started.fields.port === port &&
+    started.fields.instance === "smoke-inst");
+  check("gateway(injected): structured 'gateway stopped' line on clean shutdown",
+    entries.filter((e) => e.msg === "gateway stopped").length === 1);
 }
 
 // ── 7. silent level: a request produces no stdout output ─────────────────────
@@ -143,4 +153,26 @@ async function captureStdout(fn) {
   check("gateway(silent): no log lines emitted", lines.length === 0);
 }
 
-console.log(`\nAll ${passed}/17 logging smoke checks PASS ✓`);
+// ── 8. Running gateway, DEFAULT stdout sink: lifecycle is uniform JSON Lines ──
+// The defect this closes: lifecycle output used to be a human `console.log`, so the
+// stdout stream mixed prose with JSON and broke JSON log ingestion. Capture start()
+// AND stop() and prove every emitted line is parseable JSON, including boot/stop.
+{
+  const gw = createGateway(cfg("info"));
+  let port;
+  const lines = await captureStdout(async () => {
+    ({ port } = await gw.start());
+    await gw.stop();
+  });
+  const parsed = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } });
+  check("gateway(default sink): every lifecycle stdout line is valid JSON",
+    parsed.length > 0 && parsed.every((o) => o !== null));
+  const started = parsed.find((o) => o && o.msg === "gateway started");
+  check("gateway(default sink): 'gateway started' on stdout with numeric port + version",
+    started && started.level === "info" && typeof started.port === "number" &&
+    started.port === port && typeof started.version === "string" && typeof started.instance === "string");
+  check("gateway(default sink): 'gateway stopped' on stdout",
+    parsed.some((o) => o && o.msg === "gateway stopped" && o.component === "gateway"));
+}
+
+console.log(`\nAll ${passed}/22 logging smoke checks PASS ✓`);
