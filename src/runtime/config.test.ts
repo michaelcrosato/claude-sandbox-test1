@@ -26,6 +26,7 @@ import {
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
+import { DEFAULT_CONNECT_TIMEOUT_MS } from "../net/guarded-transport.js";
 import { DEFAULT_LOG_LEVEL } from "../logging/logger.js";
 
 describe("loadConfig", () => {
@@ -42,6 +43,7 @@ describe("loadConfig", () => {
         batchSize: DEFAULT_WORKER_BATCH_SIZE,
         concurrency: DEFAULT_WORKER_CONCURRENCY,
         requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        connectTimeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
         idlePollMs: DEFAULT_IDLE_POLL_MS,
         visibilityTimeoutMs: DEFAULT_VISIBILITY_TIMEOUT_MS,
       },
@@ -135,6 +137,7 @@ describe("loadConfig", () => {
       POSTHORN_WORKER_BATCH_SIZE: "32",
       POSTHORN_WORKER_CONCURRENCY: "12",
       POSTHORN_WORKER_REQUEST_TIMEOUT_MS: "5000",
+      POSTHORN_WORKER_CONNECT_TIMEOUT_MS: "2500",
       POSTHORN_WORKER_IDLE_POLL_MS: "250",
       POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS: "60000",
     });
@@ -142,9 +145,19 @@ describe("loadConfig", () => {
       batchSize: 32,
       concurrency: 12,
       requestTimeoutMs: 5000,
+      connectTimeoutMs: 2500,
       idlePollMs: 250,
       visibilityTimeoutMs: 60_000,
     });
+  });
+
+  it("allows a connect timeout of 0 (disabled) but rejects a negative one", () => {
+    expect(loadConfig({ POSTHORN_WORKER_CONNECT_TIMEOUT_MS: "0" }).worker.connectTimeoutMs).toBe(
+      0,
+    );
+    expect(() => loadConfig({ POSTHORN_WORKER_CONNECT_TIMEOUT_MS: "-1" })).toThrow(
+      /POSTHORN_WORKER_CONNECT_TIMEOUT_MS/,
+    );
   });
 
   it("rejects a non-positive worker concurrency", () => {

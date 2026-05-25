@@ -137,7 +137,8 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API and dashboard. Must be ≥ 16 chars (use a long random value in production). Unset = both disabled. |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
 | `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight within one tick. `1` = sequential. |
-| `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout (ms). |
+| `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Total per-delivery HTTP timeout — DNS + connect + response (ms). |
+| `POSTHORN_WORKER_CONNECT_TIMEOUT_MS` | `5000` | Connect-only deadline — DNS + TCP connect (ms). An unreachable endpoint fails fast instead of holding the full timeout. Should be ≤ the total timeout; `0` disables it. |
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when the queue is empty (ms). |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime (ms); a task is reclaimed after this if the worker dies mid-delivery. |
 | `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` | `432000000` | Auto-disable an endpoint after this many ms of continuous failures (default 5 days). `0` = off (health still tracked). |
@@ -525,6 +526,7 @@ Default settings are conservative and safe.  For higher throughput:
 |---------|---------|----------|
 | Slow batch processing | `POSTHORN_WORKER_BATCH_SIZE` | Increase to 32–64 if your receivers are fast. Large batches hold more leases simultaneously. |
 | Slow receivers | `POSTHORN_WORKER_CONCURRENCY` | Increase to match your receiver count; default 8 avoids flooding a single receiver. |
-| Long receiver timeouts | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | Default 10 s is generous. Lower it if your receivers are fast and you want faster failure detection. |
+| Long receiver timeouts | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | Total deadline (DNS + connect + response). Default 10 s is generous. Lower it if your receivers are fast and you want faster failure detection. |
+| Unreachable endpoints | `POSTHORN_WORKER_CONNECT_TIMEOUT_MS` | Connect-only deadline so a dead/black-holed endpoint fails fast rather than burning the full total timeout. Default 5 s; lower for snappier failure detection, `0` to fold it back into the total deadline. |
 | Lease expiry under load | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | Must exceed `batch_size × request_timeout / concurrency` (worst-case tick duration). Default 30 s is comfortable at defaults. |
 | High fan-out latency | `POSTHORN_FANOUT_GRACE_MS` | Lower for faster outbox relay; default 5 s avoids racing the synchronous inline fan-out. |

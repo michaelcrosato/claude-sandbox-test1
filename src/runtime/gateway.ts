@@ -229,10 +229,13 @@ export function createGateway(
   // resolution — the deeper defense that catches a hostname resolving (or rebinding)
   // to a private/internal IP, which the registration-time guard cannot see. Governed
   // by the same POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS opt-out: when set, the guard
-  // is a transparent pass-through.
-  const deliveryTransport = createGuardedTransport({
-    allowPrivateNetworks: config.allowPrivateNetworks,
-  });
+  // is a transparent pass-through. A connect-only deadline
+  // (POSTHORN_WORKER_CONNECT_TIMEOUT_MS) bounds DNS + TCP connect under the worker's
+  // total per-attempt deadline, so an unreachable endpoint fails fast.
+  const deliveryTransport = createGuardedTransport(
+    { allowPrivateNetworks: config.allowPrivateNetworks },
+    { connectTimeoutMs: config.worker.connectTimeoutMs },
+  );
 
   // System webhook delivery rides the **same** guarded transport as every tenant send:
   // the app's system webhook URL is operator-configured but still a stored, mutable

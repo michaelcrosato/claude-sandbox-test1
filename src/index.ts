@@ -496,6 +496,7 @@ export {
 
 export {
   createGuardedTransport,
+  DEFAULT_CONNECT_TIMEOUT_MS,
   type GuardedTransportOptions,
 } from "./net/guarded-transport.js";
 

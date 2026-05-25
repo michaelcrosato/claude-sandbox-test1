@@ -41,6 +41,45 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:51 · iter-0086 · GREEN · connect-vs-total-delivery-timeout
+
+- **Baseline:** clean main @ `21d95b7` (iter-0085 gateway lifecycle logging). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1667/1667** (50 files, 6 PG-skipped, no flaky exit),
+  `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Split the delivery deadline into **connect-vs-total**, the standing iter-82 Next #2 /
+  project-memory hardening candidate. Until now a *single* deadline (the worker's `AbortController`,
+  the transport `signal`) spanned DNS+connect+response, so an unreachable endpoint (dropped SYN,
+  black-holed IP) tied up the whole 10 s budget — indistinguishable from a reachable-but-slow
+  receiver, and burning a full slot per attempt. Svix and other senders expose both; this closes
+  the gap on the core delivery path.
+- **Changed:**
+  - `net/guarded-transport.ts`: new `connectTimeoutMs` option (default `DEFAULT_CONNECT_TIMEOUT_MS`
+    = 5 s; `0` disables; validated finite ≥ 0). A connect timer bounds DNS+TCP-connect only and is
+    **cleared the instant the socket connects** (`connect`/`secureConnect`, or an already-connected
+    reused socket), so a slow-to-respond receiver keeps the full total budget. On expiry it
+    `req.destroy`s with a distinguishable `connect timeout after <ms>ms` error (vs the total
+    deadline's AbortError) — the audit log now separates *unreachable* from *slow*.
+  - `runtime/config.ts`: `POSTHORN_WORKER_CONNECT_TIMEOUT_MS` → `WorkerConfig.connectTimeoutMs`
+    (min 0). `runtime/gateway.ts`: threads it into the shared guarded transport (tenant + system
+    webhook delivery both inherit it). `index.ts`: exports `DEFAULT_CONNECT_TIMEOUT_MS`.
+  - Docs: `.env.example` + `docs/DEPLOY.md` env table + tuning table (satisfies the iter-77 config↔docs
+    drift guard, which now also asserts the new key in both).
+  - Tests: +5 in `guarded-transport.test.ts` (fast-fail w/ distinguishable error via a hanging
+    injected lookup; clear-on-connect proven by a fast-connect+slow-response success; connected-
+    but-silent hits the *total* deadline; `0` disables; construction validation) + a `delayMs`
+    receiver-harness option; config default/override/min tests updated.
+- **Decisions:** Connect deadline lives in the transport (only it sees the socket), not the worker —
+  the worker's single total `AbortController` is unchanged. Transport option defaults to 5 s (not
+  disabled) for consistency with `requestTimeoutMs`'s defaulting; the existing localhost tests
+  connect instantly so the timer clears with no behavior change. Not hard-enforcing connect ≤ total
+  (harmless if inverted: total fires first) — documented instead.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1675/1675** (+8; 50 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-logging.mjs` 22/22; `assert-gate-integrity.ps1` 0
+  (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Record the connect-timeout failure as a distinct metrics label / audit reason code (so
+  "unreachable" is dashboardable separately from total timeouts); or a connect-vs-total split for the
+  one-shot test-send path in `http/api.ts` (still on `fetchTransport`, which can't express it).
+
 ## 2026-05-24T18:47 · iter-0085 · GREEN · structured-gateway-lifecycle-logging
 
 - **Baseline:** clean main @ `85d4bc2` (iter-0084 structured logging). Verified green first:

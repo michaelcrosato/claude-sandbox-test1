@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, LookupFunction } from "node:net";
 import type { LookupAddress } from "node:dns";
 
 import { MAX_CAPTURED_BODY_BYTES } from "../attempts/delivery-attempt.js";
@@ -32,6 +32,8 @@ interface ReceiverOptions {
   readonly responseBody?: string;
   /** If true, the receiver accepts the request but never responds (for abort tests). */
   readonly hang?: boolean;
+  /** Delay (ms) before the response is sent, after the request is fully received. */
+  readonly delayMs?: number;
 }
 
 const servers: Server[] = [];
@@ -50,7 +52,13 @@ afterEach(async () => {
 });
 
 function startReceiver(options: ReceiverOptions = {}): Promise<TestReceiver> {
-  const { status = 200, responseHeaders = {}, responseBody = "ok", hang = false } = options;
+  const {
+    status = 200,
+    responseHeaders = {},
+    responseBody = "ok",
+    hang = false,
+    delayMs = 0,
+  } = options;
   let resolveReceived!: (req: Received) => void;
   const received = new Promise<Received>((resolve) => {
     resolveReceived = resolve;
@@ -66,8 +74,12 @@ function startReceiver(options: ReceiverOptions = {}): Promise<TestReceiver> {
         body: Buffer.concat(chunks).toString("utf8"),
       });
       if (hang) return; // never respond
-      res.writeHead(status, responseHeaders);
-      res.end(responseBody);
+      const respond = (): void => {
+        res.writeHead(status, responseHeaders);
+        res.end(responseBody);
+      };
+      if (delayMs > 0) setTimeout(respond, delayMs);
+      else respond();
     });
   });
   servers.push(server);
@@ -226,5 +238,74 @@ describe("createGuardedTransport — connection-time SSRF guard on a hostname", 
     const got = await receiver.received;
     // The Host header reflects the original hostname, not the pinned IP.
     expect(got.headers.host).toBe(`pinned.example:${receiver.port}`);
+  });
+});
+
+describe("createGuardedTransport — connect deadline (connect vs. total split)", () => {
+  /** A lookup that never invokes its callback, so DNS/connect stalls forever. */
+  const hangingLookup: LookupFunction = () => {
+    /* intentionally never calls back */
+  };
+
+  it("fails fast with a distinguishable connect-timeout error when connect stalls", async () => {
+    const transport = createGuardedTransport(BLOCK, {
+      lookup: hangingLookup,
+      connectTimeoutMs: 80,
+    });
+    const start = Date.now();
+    await expect(
+      transport(request("http://stalls.example/hook"), AbortSignal.timeout(5_000)),
+    ).rejects.toThrow(/connect timeout after 80ms/);
+    // Fired on the 80 ms connect deadline, nowhere near the 5 s total deadline.
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
+  it("clears the connect timer on connect — a fast connect + slow response still succeeds", async () => {
+    // Loopback connect is sub-millisecond, so the 100 ms connect timer is cleared long
+    // before the 400 ms response. Were it NOT cleared at connect, it would fire at
+    // 100 ms (< 400 ms) and the delivery would wrongly fail with a connect timeout.
+    const receiver = await startReceiver({ status: 200, responseBody: "slow", delayMs: 400 });
+    const transport = createGuardedTransport(BLOCK, { connectTimeoutMs: 100 });
+    const res = await transport(
+      request(`http://127.0.0.1:${receiver.port}/`),
+      AbortSignal.timeout(5_000),
+    );
+    expect(res.status).toBe(200);
+    expect(res.responseBody).toBe("slow");
+  });
+
+  it("a connected-but-silent receiver hits the TOTAL deadline, not the connect one", async () => {
+    // The receiver accepts the connection (connect succeeds, timer cleared) then never
+    // responds; the short total signal — not the generous connect timer — ends it.
+    const receiver = await startReceiver({ hang: true });
+    const transport = createGuardedTransport(BLOCK, { connectTimeoutMs: 3_000 });
+    const err = await transport(
+      request(`http://127.0.0.1:${receiver.port}/`),
+      AbortSignal.timeout(150),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/connect timeout/);
+  });
+
+  it("connectTimeoutMs: 0 disables the connect deadline — only the total signal ends a stalled connect", async () => {
+    const transport = createGuardedTransport(BLOCK, {
+      lookup: hangingLookup,
+      connectTimeoutMs: 0,
+    });
+    const err = await transport(
+      request("http://stalls.example/hook"),
+      AbortSignal.timeout(120),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/connect timeout/);
+  });
+
+  it("rejects a negative or non-finite connectTimeoutMs at construction", () => {
+    expect(() => createGuardedTransport(BLOCK, { connectTimeoutMs: -1 })).toThrow(
+      /connectTimeoutMs/,
+    );
+    expect(() => createGuardedTransport(BLOCK, { connectTimeoutMs: Number.NaN })).toThrow(
+      /connectTimeoutMs/,
+    );
   });
 });

@@ -26,6 +26,7 @@ import {
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS, MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
+import { DEFAULT_CONNECT_TIMEOUT_MS } from "../net/guarded-transport.js";
 import {
   DEFAULT_LOG_LEVEL,
   LOG_LEVELS,
@@ -62,8 +63,14 @@ export interface WorkerConfig {
   readonly batchSize: number;
   /** Maximum deliveries in flight at once within a tick (`1` = sequential). */
   readonly concurrency: number;
-  /** Per-attempt HTTP timeout, in ms. */
+  /** Total per-attempt HTTP timeout (DNS + connect + response), in ms. */
   readonly requestTimeoutMs: number;
+  /**
+   * Connect-only deadline (DNS + TCP connect), in ms. Shorter than
+   * {@link requestTimeoutMs} so an unreachable endpoint fails fast instead of
+   * consuming the whole budget. `0` disables it (the total deadline alone governs).
+   */
+  readonly connectTimeoutMs: number;
   /** Pause between idle polls, in ms. */
   readonly idlePollMs: number;
   /** A claimed task's lease lifetime before it may be reclaimed, in ms. */
@@ -316,7 +323,7 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
  * `POSTHORN_WORKER_BATCH_SIZE`, `POSTHORN_WORKER_CONCURRENCY`,
- * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`,
+ * `POSTHORN_WORKER_REQUEST_TIMEOUT_MS`, `POSTHORN_WORKER_CONNECT_TIMEOUT_MS` (`0` = off),
  * `POSTHORN_WORKER_IDLE_POLL_MS`, `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS`,
  * `POSTHORN_FANOUT_GRACE_MS`, `POSTHORN_FANOUT_BATCH_SIZE`,
  * `POSTHORN_FANOUT_IDLE_POLL_MS`,
@@ -358,6 +365,12 @@ export function loadConfig(env: Env): GatewayConfig {
         "POSTHORN_WORKER_REQUEST_TIMEOUT_MS",
         DEFAULT_REQUEST_TIMEOUT_MS,
         { min: 1 },
+      ),
+      connectTimeoutMs: readInt(
+        env,
+        "POSTHORN_WORKER_CONNECT_TIMEOUT_MS",
+        DEFAULT_CONNECT_TIMEOUT_MS,
+        { min: 0 },
       ),
       idlePollMs: readInt(env, "POSTHORN_WORKER_IDLE_POLL_MS", DEFAULT_IDLE_POLL_MS, {
         min: 0,

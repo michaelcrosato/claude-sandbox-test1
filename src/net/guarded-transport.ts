@@ -18,6 +18,20 @@
  *     attempt* rather than chasing the `Location` header — which would be an
  *     unguarded SSRF hop. (`fetch`'s default redirect-following allowed that hop.)
  *
+ * ## Two-stage timeout (connect vs. total)
+ *
+ * The worker carries a single *total* per-attempt deadline as the `signal` (DNS +
+ * connect + the receiver's full response). On top of it this transport enforces a
+ * shorter, independent **connect deadline** ({@link GuardedTransportOptions.connectTimeoutMs},
+ * default {@link DEFAULT_CONNECT_TIMEOUT_MS}) bounding only DNS resolution + TCP
+ * connect. A down or unreachable endpoint (dropped SYN, black-holed IP) then *fails
+ * fast* on connect rather than burning the whole total budget, while a reachable but
+ * slow-to-respond receiver keeps the full total budget once connected — the same
+ * split Svix and other senders expose. The connect timer is cleared the moment the
+ * socket connects; `0` disables it (total deadline alone governs). The connect-timeout
+ * failure carries a distinct `connect timeout after <ms>ms` message, so the audit log
+ * tells "endpoint unreachable" apart from "endpoint slow" (an aborted total deadline).
+ *
  * The {@link HttpDeliveryResponse} contract matches `fetchTransport` exactly: a
  * server response of any status is *returned* (the worker classifies 2xx as
  * success), while a transport-level failure — DNS error, refused connection,
@@ -46,6 +60,13 @@ import type { SsrfPolicy } from "./ssrf-guard.js";
  */
 const MAX_BUFFERED_RESPONSE_BYTES = MAX_CAPTURED_BODY_BYTES * 4;
 
+/**
+ * Default connect deadline (ms): the maximum time for DNS resolution + TCP connect
+ * before a delivery fails fast as unreachable. Shorter than the worker's 10 s total
+ * deadline so a dead endpoint is detected quickly without consuming the whole budget.
+ */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+
 /** Construction options for {@link createGuardedTransport}. */
 export interface GuardedTransportOptions {
   /**
@@ -54,6 +75,16 @@ export interface GuardedTransportOptions {
    * so the connect-time decision is exercised deterministically, without real DNS.
    */
   readonly lookup?: LookupFunction;
+  /**
+   * Connect deadline in ms — bounds DNS resolution + TCP connect only, independently
+   * of the total per-attempt deadline carried by the request `signal`. When it
+   * elapses *before the socket connects*, the attempt fails with a distinguishable
+   * `connect timeout after <ms>ms` error; once connected the timer is cleared and the
+   * total deadline governs the response. Defaults to {@link DEFAULT_CONNECT_TIMEOUT_MS};
+   * `0` disables the connect deadline (total deadline alone governs). To have any
+   * effect it should be ≤ the worker's `requestTimeoutMs`, else the total fires first.
+   */
+  readonly connectTimeoutMs?: number;
 }
 
 /**
@@ -65,24 +96,38 @@ export function createGuardedTransport(
   options: GuardedTransportOptions = {},
 ): Transport {
   const lookup = options.lookup ?? createGuardedLookup(policy);
-  return (request, signal) => sendGuarded(request, signal, lookup);
+  const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  if (!Number.isFinite(connectTimeoutMs) || connectTimeoutMs < 0) {
+    throw new RangeError("connectTimeoutMs must be a non-negative, finite number");
+  }
+  return (request, signal) => sendGuarded(request, signal, lookup, connectTimeoutMs);
 }
 
 function sendGuarded(
   request: HttpDeliveryRequest,
   signal: AbortSignal,
   lookup: LookupFunction,
+  connectTimeoutMs: number,
 ): Promise<HttpDeliveryResponse> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearConnectTimer = (): void => {
+      if (connectTimer !== undefined) {
+        clearTimeout(connectTimer);
+        connectTimer = undefined;
+      }
+    };
     const ok = (response: HttpDeliveryResponse): void => {
       if (settled) return;
       settled = true;
+      clearConnectTimer();
       resolve(response);
     };
     const fail = (error: unknown): void => {
       if (settled) return;
       settled = true;
+      clearConnectTimer();
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
@@ -157,6 +202,31 @@ function sendGuarded(
       },
     );
     req.on("error", fail);
+
+    // Connect deadline: bound DNS + TCP connect on its own, shorter than the total
+    // per-attempt deadline carried by `signal`, so an unreachable endpoint fails fast.
+    // Cleared the instant the socket connects — a reachable but slow-to-respond
+    // receiver then keeps the full total budget. `0` disables it entirely.
+    if (connectTimeoutMs > 0) {
+      connectTimer = setTimeout(() => {
+        // Still not connected when this fires: destroy with a distinguishable error
+        // (req 'error' → fail). Distinct from the total deadline's AbortError, so the
+        // audit log separates "unreachable" from "slow".
+        req.destroy(new Error(`connect timeout after ${connectTimeoutMs}ms`));
+      }, connectTimeoutMs);
+      req.on("socket", (socket) => {
+        // A reused, already-connected socket has nothing left to wait for.
+        if (!socket.connecting) {
+          clearConnectTimer();
+          return;
+        }
+        // `connect` = TCP established (http + https); `secureConnect` = TLS done.
+        // Either means the connect phase is over and the total deadline takes over.
+        socket.once("connect", clearConnectTimer);
+        socket.once("secureConnect", clearConnectTimer);
+      });
+    }
+
     req.end(request.body);
   });
 }
