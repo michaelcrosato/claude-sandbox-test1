@@ -41,6 +41,36 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T03:02 · iter-0115 · RED · reconcile-goal-state-market-blueprint
+- **Baseline:** clean main @ `d8fc008` (iter-0114 graceful shutdown drain), then isolated on
+  `maint/iter-0115`. `docs/GOAL.md` had no `CURRENT_STATE` marker, while `docs/PROJECT.md` was
+  already DECIDED and the repo contained a mature Posthorn implementation.
+- **Move:** Reconcile the stale open discovery prompt with repo truth and a current market check,
+  without touching product code or substrate files.
+- **Changed:**
+  - `docs/GOAL.md`: added `CURRENT_STATE: ACTIVE_SPECIFICATION`, the Posthorn goal, state basis,
+    a 2026-05-25 market refresh, system blueprint, unattended-maintenance boundaries, and five
+    non-blocking product-owner questions.
+- **Decisions:** Treated the missing state marker as stale documentation rather than a fresh
+  BOOTSTRAP because `docs/PROJECT.md` explicitly superseded the old open question and 114 prior
+  iterations had already built the product. The refresh confirms the wedge remains
+  SQLite-first/no-Redis/Standard-Webhooks/embeddable Node, but Hookdeck Outpost's Apache-2.0,
+  USD 10/M managed offer raises the OSS competition bar; future unattended work should stay
+  bounded to maintenance/contract hardening.
+- **Validation:** `python scripts/validate-log-compliance.py` pre-entry -> 0,
+  `[PASS] Log compliance spot check successful. Ledger matches standard.`;
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-gate.ps1` -> 0,
+  `[PASS] Gate Passed: Sandbox verified.`; `npm test` -> 1, Vitest reported 53 test files
+  passed / 6 skipped and 1819 tests passed (1885 total), then failed the run on unhandled
+  `Error: Worker exited unexpectedly` from tinypool; `npm run typecheck` -> 0
+  (`tsc -p tsconfig.json --noEmit`); `npm run build` -> 0 (`tsc -p tsconfig.json`);
+  no `lint` or `format` script exists in `package.json`;
+  `python scripts/validate-log-compliance.py` post-entry -> 0,
+  `[PASS] Log compliance spot check successful. Ledger matches standard.`
+- **Next:** Human/primary-agent review of the `ACTIVE_SPECIFICATION` reconciliation; rerun
+  `npm test` to distinguish the known tinypool worker-exit flake from a real regression; continue
+  only bounded maintenance on this branch until review.
+
 ## 2026-05-25T09:55 · iter-0114 · GREEN · graceful-shutdown-drains-in-flight-http-requests
 
 - **Baseline:** clean main @ `99ee820` (iter-0113 per-endpoint failure-reason stats). Verified
