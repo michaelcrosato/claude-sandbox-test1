@@ -623,6 +623,59 @@ describe("createGateway", () => {
     const { data } = (await listRes.json()) as { data: { id: string }[] };
     expect(data.map((e) => e.id)).toContain(endpointId);
   });
+
+  it(
+    "SSRF-guards the consumer-portal test-send (DNS-rebinding parity with the JSON API)",
+    async () => {
+      // Default SSRF policy (block private networks) — NOT the loopback-permitting
+      // memoryConfig default, since this test asserts the guard *fires*.
+      const gateway = createGateway(
+        memoryConfig({ POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "false" }),
+      );
+      gateways.push(gateway);
+      const address = await gateway.start();
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const app = await gateway.apps.create({ name: "Acme" });
+      const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+
+      // Store an endpoint whose host is a *hostname* resolving to loopback. Inserted
+      // through the store (not the API) to model a destination that passed the
+      // registration-time static guard but resolves to a private address at send time
+      // — the DNS-rebinding case the connection-time guard exists to catch. (A literal
+      // private IP would never reach the lookup hook; Node skips DNS for literal IPs.)
+      const endpoint = await gateway.endpoints.create({
+        appId: app.id,
+        url: "http://localhost/hook",
+        eventTypes: ["test"],
+      });
+
+      // Mint a portal session for this tenant. The session cookie value *is* the token,
+      // so we can present it directly without the GET /portal/login redirect dance.
+      const sessionRes = await fetch(`${base}/v1/portal/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ externalUserId: "customer_1" }),
+      });
+      expect(sessionRes.status).toBe(201);
+      const { token } = (await sessionRes.json()) as { token: string };
+
+      const testRes = await fetch(`${base}/portal/endpoints/${endpoint.id}/test`, {
+        method: "POST",
+        headers: { cookie: `ph_portal_session=${token}` },
+      });
+      // The page renders (200); the test-send itself must have been *blocked* by the
+      // connection-time guard rather than connecting to loopback. Before the gateway
+      // wired `deliveryTransport` into the portal handler this fell back to the
+      // unguarded fetchTransport, which would have connected (or failed with a plain
+      // connection error) — never reporting the SSRF block.
+      expect(testRes.status).toBe(200);
+      const body = await testRes.text();
+      expect(body).toContain("Test failed");
+      expect(body).toContain("private or internal address");
+    },
+    15_000,
+  );
 });
 
 // ---------------------------------------------------------------------------

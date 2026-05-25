@@ -542,6 +542,16 @@ export function createGateway(
     sessions: portalSessions,
     eventTypes,
     allowPrivateNetworks: config.allowPrivateNetworks,
+    // The consumer portal's one-shot test-send (POST /portal/endpoints/:id/test) POSTs
+    // to a tenant-controlled URL exactly like the JSON API's test-send, so it MUST ride
+    // the same connection-time SSRF-guarded transport as the worker and the API path
+    // (`transport: deliveryTransport` above). Without this it falls back to the
+    // unguarded `fetchTransport` — leaving the most externally-exposed surface (the
+    // portal is reachable by the tenant's own customers) open to the DNS-rebinding SSRF
+    // the registration-time static guard cannot catch: a hostname that passes the
+    // create-time check can later resolve to 169.254.169.254 / loopback at test time.
+    // The connect-timeout split rides along for free (it is baked into deliveryTransport).
+    transport: deliveryTransport,
   });
 
   // Precompute the Strict-Transport-Security header once; null when HSTS is off.

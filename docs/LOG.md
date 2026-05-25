@@ -41,6 +41,43 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T03:05 · iter-0111 · GREEN · ssrf-guard-portal-test-send-transport-wiring
+
+- **Baseline:** clean main @ `9a8ac74` (iter-0110 HTTP socket timeouts). Verified green first:
+  `tsc` 0, `vitest run` 1868 (6 PG-skipped), `build` 0.
+- **Move:** Pivot off the saturated PG-pool and the just-touched HTTP-edge axes onto the SSRF thread
+  with a genuine hardening finding: the consumer-portal one-shot test-send
+  (`POST /portal/endpoints/:id/test`) ran on the **unguarded** `fetchTransport`. The JSON-API
+  test-send, the worker, and system-events all ride `deliveryTransport` (the connection-time
+  SSRF-guarded transport), but `createGateway` never passed `transport` to `createPortalHandler`, so
+  it silently fell through to the `deps.transport ?? fetchTransport` default. The portal is the most
+  externally-exposed surface (reachable by a tenant's own customers) and its registration-time static
+  guard cannot catch a hostname that passes create-time validation then resolves to loopback /
+  169.254.169.254 at test time — the exact DNS-rebinding case the connection-time guard exists for.
+- **Changed:**
+  - `runtime/gateway.ts`: pass `transport: deliveryTransport` into `createPortalHandler({...})`
+    (parity with the API handler's line 566), with a comment recording why. The connect-timeout
+    split comes along for free — it is baked into `deliveryTransport`.
+  - `runtime/gateway.test.ts`: a regression test booting the real gateway with
+    `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=false`, storing an endpoint at `http://localhost/hook`
+    (a *hostname* → loopback; a literal IP would skip Node's lookup hook), minting a portal session
+    over HTTP, and asserting the rendered test-send reports the `blocked_resolved_address` SSRF error.
+- **Decisions:** Composition-root injection over a defaulted-to-guarded transport, matching the
+  established worker/API pattern. Test asserts at the gateway level (the only layer that catches the
+  wiring omission) via the real `node:http` server, not a handler-unit fake. Used `localhost` (not a
+  literal private IP) because the connection-time guard fires only on DNS-resolved hosts.
+- **Validation:** `tsc` 0; `vitest run` **1869** (+1; 6 PG-skipped, no flaky exit). Proved the test
+  non-vacuous: with the wiring line commented out it **fails** on the `private or internal address`
+  assertion (unguarded transport never reports the block), passes with it restored. `build` 0;
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** No `dist` smoke this tick — the guard is pure JS wiring with no runtime/ESM-specific
+  behavior, and the integration test already exercises the production composition root through the
+  real HTTP listener (unlike iter-0110's keep-alive *timer*, which needed a live socket to prove).
+- **Next:** Audit the **dashboard** test-send / verify surfaces for the same transport-wiring parity;
+  or add a distinct metrics label / audit reason code for the connect-timeout failure so operators can
+  tell "unreachable" apart from a total-timeout; or the README error-code table matching the OpenAPI
+  `Error.code` enum.
+
 ## 2026-05-25T02:45 · iter-0110 · GREEN · explicit-configurable-http-server-socket-timeouts
 
 - **Baseline:** clean main @ `ac90e16` (iter-0109 pg-pool acquire-timeout counter). Verified
