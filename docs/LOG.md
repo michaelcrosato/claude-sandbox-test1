@@ -41,6 +41,41 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T22:45 · iter-0097 · GREEN · portal-url-leftmost-token-xfp-parse
+
+- **Baseline:** clean main @ `dbdec96` (iter-0096 X-Forwarded-Proto-aware HSTS). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1792**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Land iter-0096's Next #1 — the explicitly-deferred cleanup. The portal-URL builder
+  (`createPortalSession`, `api.ts`) read `x-forwarded-proto` with a naive `?? "http"` whole-value
+  take. Behind a two-proxy chain the header is a comma list (`https, http`), so a real deployment
+  would emit the **broken URL** `https, http://host/portal/login?...` as the caller's ready-to-use
+  redirect target — and the value was never trimmed, case-normalized, or scheme-validated either.
+  iter-0096 fixed exactly this parse for HSTS and flagged the portal builder's looser read for a
+  later tick; this is that tick.
+- **Changed:**
+  - `http/security-headers.ts`: extracted the leftmost-token parse into a new pure, total
+    `forwardedProtoIsHttps(value)` (trim + lowercase the first comma-token; `true` iff `https`).
+    `isRequestSecure` now reads `encrypted || forwardedProtoIsHttps(forwardedProto)` — same verdict,
+    one parse. Realizes the doc-comment that already claimed both callers "trust the same signal".
+  - `http/api.ts`: portal-URL scheme is now `forwardedProtoIsHttps(...) ? "https" : "http"`, so a
+    proxy-chain list yields a clean `https://` and any non-https/garbage scheme normalizes to `http`
+    instead of leaking into the URL. (`ApiRequest.headers` is already flattened to `string`, so no
+    array handling needed at this layer.)
+  - Tests: +3 unit (`forwardedProtoIsHttps`: trim/case, chain leftmost, undefined/empty/non-https);
+    +2 HTTP (portalUrl from `https, http` chain → clean `https://`; absent / `ws` → `http`).
+- **Decisions:** Shared one helper over duplicating the split — single source of truth for how the
+  header is read, so HSTS eligibility and the portal scheme can never drift. Scoped to the proto
+  parse only; the separate `X-Forwarded-Host` idea from iter-0096's Next stays deferred (host-rewrite
+  is a distinct trust decision, not a parse bug).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1797** (+5; 52 files, 6 PG-skipped, no flaky exit);
+  `npm run build` 0; `node scripts/smoke-portal-delivery.mjs` 12/12 and `node scripts/smoke-hsts.mjs`
+  22/22 (no regression in the shared-parse refactor, through compiled ESM on a real socket);
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Honor `X-Forwarded-Host` in the portal-URL builder so links survive a host-rewriting
+  proxy (the remaining iter-0096 Next item); or add a portal-delivery dist smoke that asserts the
+  `https://` scheme off `X-Forwarded-Proto` end-to-end; or the deferred `posthorn_deliveries_by_reason`
+  point-in-time backlog gauge off the denormalized `failure_reason`.
+
 ## 2026-05-24T22:39 · iter-0096 · GREEN · x-forwarded-proto-aware-hsts
 
 - **Baseline:** clean main @ `742fc66` (iter-0095 `?failureReason=` triage filter). Verified green

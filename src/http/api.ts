@@ -172,6 +172,7 @@ import {
   type Route,
 } from "./router.js";
 import { buildOpenApiDocument } from "./openapi.js";
+import { forwardedProtoIsHttps } from "./security-headers.js";
 
 /** Maximum number of messages accepted in a single `POST /v1/messages/batch` call. */
 export const MAX_BATCH_MESSAGES = 100;
@@ -1915,9 +1916,11 @@ export function createApi(deps: ApiDeps): ApiHandler {
 
     // Derive the portal URL from the request's Host header so the caller gets a
     // ready-to-use redirect target regardless of whether the gateway is behind
-    // a proxy. `x-forwarded-proto` (set by common reverse proxies) is preferred
-    // over a hard-coded `http` so TLS-terminated deployments return `https://`.
-    const proto = ctx.req.headers["x-forwarded-proto"] ?? "http";
+    // a proxy. `x-forwarded-proto` (set by common reverse proxies) upgrades the
+    // scheme to `https` for TLS-terminated deployments. Read it through the shared
+    // leftmost-token parse — a proxy chain sends a comma list (`https, http`), so a
+    // naive whole-value read would render the broken URL `https, http://host`.
+    const proto = forwardedProtoIsHttps(ctx.req.headers["x-forwarded-proto"]) ? "https" : "http";
     const host = ctx.req.headers["host"] ?? "localhost";
     const portalUrl = `${proto}://${host}/portal/login?token=${token}`;
 

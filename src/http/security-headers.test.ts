@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  forwardedProtoIsHttps,
   hstsHeaderValue,
   isRequestSecure,
   securityHeadersForPath,
@@ -159,6 +160,28 @@ describe("hstsHeaderValue", () => {
     expect(
       hstsHeaderValue({ maxAgeSeconds: 100.9, includeSubDomains: false, preload: false }),
     ).toBe("max-age=100");
+  });
+});
+
+describe("forwardedProtoIsHttps", () => {
+  it("is true for https, trimmed and case-insensitive", () => {
+    expect(forwardedProtoIsHttps("https")).toBe(true);
+    expect(forwardedProtoIsHttps("HTTPS")).toBe(true);
+    expect(forwardedProtoIsHttps("  https  ")).toBe(true);
+  });
+
+  it("reads only the leftmost token of a proxy-chain list", () => {
+    // The original client's scheme is the first entry; trailing internal hops
+    // must not flip the verdict.
+    expect(forwardedProtoIsHttps("https, http")).toBe(true);
+    expect(forwardedProtoIsHttps("http, https")).toBe(false);
+  });
+
+  it("is false for undefined, empty, or any non-https scheme", () => {
+    expect(forwardedProtoIsHttps(undefined)).toBe(false);
+    expect(forwardedProtoIsHttps("")).toBe(false);
+    expect(forwardedProtoIsHttps("http")).toBe(false);
+    expect(forwardedProtoIsHttps("ws")).toBe(false);
   });
 });
 

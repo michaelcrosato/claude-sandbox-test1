@@ -150,28 +150,36 @@ export interface RequestTransport {
 }
 
 /**
+ * Whether an `X-Forwarded-Proto` header value reports that the *original* client
+ * reached the outermost proxy over HTTPS. Pure and total.
+ *
+ * A proxy chain appends one hop per proxy as a comma-separated list, so the leftmost
+ * token is the client-facing scheme; we read it trimmed and case-insensitively.
+ * Returns `false` for `undefined`, an empty value, or any non-`https` scheme — every
+ * caller reduces to this single bit (HSTS eligibility; portal-URL scheme choice), so
+ * keeping the leftmost-token parse here means both read the header identically.
+ */
+export function forwardedProtoIsHttps(forwardedProto: string | undefined): boolean {
+  if (forwardedProto === undefined) {
+    return false;
+  }
+  return forwardedProto.split(",", 1)[0]?.trim().toLowerCase() === "https";
+}
+
+/**
  * Decide whether a request is believed to have arrived over HTTPS — the gate on
  * whether HSTS may be emitted ({@link securityHeadersForPath}'s `hsts` argument).
  * Pure and total.
  *
  * Secure iff the socket is itself TLS, or the (leftmost) `X-Forwarded-Proto` token
- * is `https` (trimmed, case-insensitive). The forwarded-proto signal is the same
- * one the portal-URL builder already trusts to choose `https://`; trusting it is
- * safe even on a directly-exposed instance, because the worst a spoofed
+ * is `https` (see {@link forwardedProtoIsHttps}). That forwarded-proto signal is the
+ * same one the portal-URL builder trusts to choose `https://`; trusting it is safe
+ * even on a directly-exposed instance, because the worst a spoofed
  * `X-Forwarded-Proto: https` can do over a genuine plain-HTTP connection is make us
  * emit an HSTS header the browser then ignores — it honors HSTS only over HTTPS.
  */
 export function isRequestSecure(transport: RequestTransport): boolean {
-  if (transport.encrypted) {
-    return true;
-  }
-  const { forwardedProto } = transport;
-  if (forwardedProto === undefined) {
-    return false;
-  }
-  // A proxy chain appends hops; the leftmost token is the original client's scheme.
-  const clientFacing = forwardedProto.split(",", 1)[0]?.trim().toLowerCase();
-  return clientFacing === "https";
+  return transport.encrypted || forwardedProtoIsHttps(transport.forwardedProto);
 }
 
 /** Headers applied to *every* response regardless of surface. */

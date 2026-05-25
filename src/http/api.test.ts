@@ -3570,6 +3570,65 @@ describe("createApi — POST /v1/portal/sessions (portal session minting)", () =
     expect(res.status).toBe(201);
     expect(body(res).portalUrl).toMatch(/^https:\/\/hooks\.example\.com\/portal\/login\?token=/);
   });
+
+  it("reads the leftmost token of a proxy-chain x-forwarded-proto for the portalUrl scheme", async () => {
+    const { api, secret } = await portalSetup();
+    // A two-proxy chain reports `https, http`. A naive whole-value read would
+    // render the broken URL `https, http://hooks.example.com/...`; the leftmost
+    // token (the original client's scheme) must yield a clean `https://`.
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/portal/sessions",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          "x-forwarded-proto": "https, http",
+          host: "hooks.example.com",
+        },
+        rawBody: JSON.stringify({ externalUserId: "u" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).portalUrl).toBe(
+      `https://hooks.example.com/portal/login?token=${body(res).token}`,
+    );
+  });
+
+  it("falls back to http when x-forwarded-proto is absent or non-https", async () => {
+    const { api, secret } = await portalSetup();
+    const noHeader = await api(
+      request({
+        method: "POST",
+        path: "/v1/portal/sessions",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          host: "hooks.example.com",
+        },
+        rawBody: JSON.stringify({ externalUserId: "u" }),
+      }),
+    );
+    expect(noHeader.status).toBe(201);
+    expect(body(noHeader).portalUrl).toMatch(/^http:\/\/hooks\.example\.com\/portal\/login\?token=/);
+
+    // A bare non-https scheme normalizes to http rather than leaking into the URL.
+    const weirdScheme = await api(
+      request({
+        method: "POST",
+        path: "/v1/portal/sessions",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "content-type": "application/json",
+          "x-forwarded-proto": "ws",
+          host: "hooks.example.com",
+        },
+        rawBody: JSON.stringify({ externalUserId: "u" }),
+      }),
+    );
+    expect(weirdScheme.status).toBe(201);
+    expect(body(weirdScheme).portalUrl).toMatch(/^http:\/\/hooks\.example\.com\/portal\/login\?token=/);
+  });
 });
 
 describe("createApi — event types", () => {
