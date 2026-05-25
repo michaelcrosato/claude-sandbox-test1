@@ -228,6 +228,18 @@ interface StoreBackend {
    * Postgres connection pool. Awaited by {@link Gateway.stop}.
    */
   dispose(): Promise<void>;
+  /**
+   * Cheap reachability probe backing `GET /readyz`. Resolves when the backend can
+   * serve a trivial round-trip and rejects when it cannot. For Postgres this runs
+   * `SELECT 1` against the shared pool — a remote database can be down (or the pool
+   * saturated) independently of the process, which is exactly the condition a
+   * readiness probe must catch, and it inherits the pool's bounded acquisition
+   * timeout so a dead database fails the probe fast rather than hanging it. For the
+   * embedded SQLite backend there is no out-of-process dependency to lose, so the
+   * probe resolves immediately: readiness equals liveness, and the realistic failure
+   * mode (a full disk on write) surfaces through real request handling, not a read.
+   */
+  ping(): Promise<void>;
 }
 
 /**
@@ -239,12 +251,17 @@ interface StoreBackend {
  * without knowing which backend backs them, the same store-contract abstraction the
  * conformance suites guarantee both backends honor identically.
  */
-function openStoreBackend(config: GatewayConfig): StoreBackend {
+function openStoreBackend(config: GatewayConfig, logger: Logger): StoreBackend {
   if (config.databaseUrl) {
     // One pool shared by every Postgres store — Postgres connection slots are
     // precious, so the composition root owns the single pool (sized via
-    // POSTHORN_PG_POOL_MAX) and drains it on stop.
-    const pool = createPostgresPool(config.databaseUrl, { max: config.databasePoolMax });
+    // POSTHORN_PG_POOL_MAX) and drains it on stop. The pool's error sink logs a
+    // severed *idle* connection (a DB restart/failover) instead of letting Node's
+    // unhandled-'error' rule crash the whole gateway over a recoverable blip.
+    const pool = createPostgresPool(config.databaseUrl, {
+      max: config.databasePoolMax,
+      onError: (err) => logger.error("postgres pool error", { component: "db", err }),
+    });
     const apps = new PostgresAppStore(pool);
     const endpoints = new PostgresEndpointStore(pool);
     const messages = new PostgresMessageStore(pool);
@@ -274,6 +291,14 @@ function openStoreBackend(config: GatewayConfig): StoreBackend {
       },
       dispose: async () => {
         await pool.end();
+      },
+      // Reachability probe: a `SELECT 1` round-trip through the shared pool. Fails
+      // (rejects) when the database is unreachable or the pool is saturated — the
+      // readiness signal that lets an orchestrator pull this replica from rotation.
+      // Bounded by the pool's connection-acquisition timeout, so a dead database
+      // fails the probe fast instead of hanging it.
+      ping: async () => {
+        await pool.query("SELECT 1");
       },
     };
   }
@@ -310,6 +335,11 @@ function openStoreBackend(config: GatewayConfig): StoreBackend {
       attempts.close();
       eventTypes.close();
     },
+    // Embedded SQLite has no out-of-process dependency that can be unreachable while
+    // the process runs — the files were opened at boot or boot failed — so readiness
+    // equals liveness and the probe resolves immediately. (A full disk fails on a
+    // write, not on this read, so a query here would not catch it either.)
+    ping: async () => {},
   };
 }
 
@@ -324,22 +354,23 @@ export function createGateway(
   config: GatewayConfig,
   options: CreateGatewayOptions = {},
 ): Gateway {
-  const backend = openStoreBackend(config);
-  const { apps, endpoints, messages, queue, attempts, eventTypes } = backend;
-
-  const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
-
   // Structured operational logging (JSON Lines → stdout at the configured level,
   // unless an embedder/test injects its own). Bind this gateway's identity —
   // `instance` (unique per process/replica) and `version` (the running build) —
   // onto the root so it rides every line, making logs from multiple replicas in one
   // aggregated stream correlatable. Each runtime component additionally tags its
-  // entries with a `component` so the unified stream stays filterable.
+  // entries with a `component` so the unified stream stays filterable. Created before
+  // the store backend so the Postgres pool's error listener can log through it.
   const instanceId = options.instanceId ?? randomUUID();
   const logger = (options.logger ?? createLogger({ level: config.logLevel })).child({
     instance: instanceId,
     version: POSTHORN_VERSION,
   });
+
+  const backend = openStoreBackend(config, logger);
+  const { apps, endpoints, messages, queue, attempts, eventTypes } = backend;
+
+  const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
 
   // The webhook delivery transport for every tenant-URL send (the worker's
   // continuous delivery loop and the `POST /v1/endpoints/:id/test` one-shot). It
@@ -511,6 +542,17 @@ export function createGateway(
       // The one-shot test-send (POST /v1/endpoints/:id/test) hits a tenant URL too,
       // so it uses the same connection-time SSRF-guarded transport as the worker.
       transport: deliveryTransport,
+      // Readiness probe for GET /readyz: a cheap backend round-trip (SELECT 1 on the
+      // Postgres pool; immediate for embedded SQLite). A failure logs and surfaces as
+      // 503 so an orchestrator pulls this replica from rotation while the DB is down.
+      checkReadiness: async () => {
+        try {
+          await backend.ping();
+        } catch (err) {
+          logger.warn("readiness probe failed", { component: "gateway", err });
+          throw err;
+        }
+      },
       // Enable the admin/control-plane routes only when a token is configured; when
       // null they stay disabled (every /v1/admin/* route is 404).
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),

@@ -218,18 +218,20 @@ describe("createHttpServer — structured request logging", () => {
     expect(lines[0]!.fields.durationMs as number).toBeGreaterThanOrEqual(0);
   });
 
-  it("logs probe traffic (/healthz, /metrics) at debug — silent at the info default", async () => {
+  it("logs probe traffic (/healthz, /readyz, /metrics) at debug — silent at the info default", async () => {
     const info = await startWithLogger("info");
     await fetch(`${info.base}/healthz`);
+    await fetch(`${info.base}/readyz`);
     await fetch(`${info.base}/metrics`);
     expect(access(info.entries)).toHaveLength(0); // debug suppressed at info
 
     const debug = await startWithLogger("debug");
     await fetch(`${debug.base}/healthz`);
+    await fetch(`${debug.base}/readyz`);
     const lines = access(debug.entries);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]!.level).toBe("debug");
-    expect(lines[0]!.fields).toMatchObject({ path: "/healthz", status: 200 });
+    expect(lines).toHaveLength(2);
+    expect(lines.every((l) => l.level === "debug")).toBe(true);
+    expect(lines.map((l) => l.fields.path).sort()).toEqual(["/healthz", "/readyz"]);
   });
 
   it("does not leak the query string, headers, or body into the access line", async () => {

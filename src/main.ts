@@ -37,7 +37,12 @@ async function runAdmin(args: readonly string[]): Promise<number> {
 
   if (config.databaseUrl) {
     // Postgres backend: provision against the same shared database the gateway reads.
-    const pool = createPostgresPool(config.databaseUrl, { max: config.databasePoolMax });
+    // The error sink keeps a severed idle connection from crashing the CLI via Node's
+    // unhandled-'error' rule (the same guard the gateway pool installs).
+    const pool = createPostgresPool(config.databaseUrl, {
+      max: config.databasePoolMax,
+      onError: (e) => err(`postgres pool error: ${e.message}`),
+    });
     const store = new PostgresAppStore(pool);
     try {
       await store.initialize();

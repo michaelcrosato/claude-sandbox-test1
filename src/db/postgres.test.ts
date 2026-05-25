@@ -43,6 +43,24 @@ describe("createPostgresPool — pool configuration (no database needed)", () =>
     expect(() => createPostgresPool(URL, { max: -1 })).toThrow(RangeError);
     expect(() => createPostgresPool(URL, { max: 2.5 })).toThrow(RangeError);
   });
+
+  it("attaches an 'error' listener so a severed idle connection cannot crash the process", async () => {
+    const seen: Error[] = [];
+    const pool = createPostgresPool(URL, { onError: (e) => seen.push(e) });
+    try {
+      // Exactly one handler is registered — the guard against Node re-throwing an
+      // 'error' event that has no listener (which would take the process down).
+      expect(pool.listenerCount("error")).toBe(1);
+      // Reproduce what a Postgres restart/failover does to an idle pooled client:
+      // the pool emits 'error'. With the listener attached this must NOT throw (an
+      // unlistened 'error' emit does), and the sink must receive the error.
+      const dropped = new Error("terminating connection due to administrator command");
+      expect(() => pool.emit("error", dropped, undefined as never)).not.toThrow();
+      expect(seen).toEqual([dropped]);
+    } finally {
+      await pool.end(); // never dialed (bogus host) — resolves immediately
+    }
+  });
 });
 
 // Gated like every other Postgres suite: skipped unless a live database is

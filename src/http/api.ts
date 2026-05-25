@@ -14,7 +14,8 @@
  *
  * | Method | Path                 | Auth   | Purpose                                  |
  * | ------ | -------------------- | ------ | ---------------------------------------- |
- * | GET    | /healthz             | none   | Liveness probe.                          |
+ * | GET    | /healthz             | none   | Liveness probe (static — process is up). |
+ * | GET    | /readyz              | none   | Readiness probe (200 ready / 503 not_ready, backend-gated). |
  * | GET    | /metrics             | none   | Prometheus exposition (operator metrics).|
  * | GET    | /openapi.json        | none   | The OpenAPI 3.1 description of this API.  |
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
@@ -249,6 +250,19 @@ export interface ApiDeps {
    * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS`.
    */
   readonly allowPrivateNetworks?: boolean;
+  /**
+   * Backend readiness probe for `GET /readyz`. Resolves when the storage backend is
+   * reachable and rejects when it is not — distinct from the static `/healthz`
+   * liveness signal. The gateway wires this to a cheap backend round-trip (a
+   * `SELECT 1` against the shared Postgres pool, where a remote database can be down
+   * independently of the process; an immediate success for the embedded SQLite
+   * backend, which has no out-of-process dependency to fail). `/readyz` returns `200`
+   * on resolve and `503` on reject, so an orchestrator pulls a replica whose database
+   * is unreachable out of rotation rather than routing ingest it cannot durably store.
+   * When omitted (a minimal embedding), `/readyz` always returns `200` — there is no
+   * wired backend dependency to gate on.
+   */
+  readonly checkReadiness?: () => Promise<void>;
 }
 
 /**
@@ -900,6 +914,7 @@ type AuthedHandler = (ctx: AuthedContext) => Promise<ApiResponse>;
  */
 export const API_ROUTE_KEYS = [
   "GET /healthz",
+  "GET /readyz",
   "GET /metrics",
   "GET /openapi.json",
   "POST /v1/messages",
@@ -1028,6 +1043,27 @@ export function createApi(deps: ApiDeps): ApiHandler {
   };
 
   const health: RouteHandler = async () => json(200, { status: "ok" });
+
+  // Readiness, distinct from liveness: `/healthz` is a static "the process is up"
+  // signal (never restart a pod for a transient backend blip), while `/readyz` asks
+  // "should this replica receive traffic *right now*?" by probing the storage backend.
+  // A replica whose database is unreachable answers `503` so an orchestrator/LB stops
+  // routing ingest it could not durably store, while keeping the process alive to
+  // recover. Unwired (a minimal embedding with no backend round-trip to gate on)
+  // degrades to always-ready. The probe error is deliberately not echoed — `/readyz`
+  // is unauthenticated, so the body stays a fixed status with no backend detail.
+  const ready: RouteHandler = async () => {
+    const check = deps.checkReadiness;
+    if (check === undefined) {
+      return json(200, { status: "ready" });
+    }
+    try {
+      await check();
+    } catch {
+      return json(503, { status: "not_ready" });
+    }
+    return json(200, { status: "ready" });
+  };
 
   const metricsExposition: RouteHandler = async () => {
     const registry = deps.metrics;
@@ -1956,6 +1992,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
   const handlers: Record<ApiRouteKey, RouteHandler> = {
     "GET /healthz": health,
+    "GET /readyz": ready,
     "GET /metrics": metricsExposition,
     "GET /openapi.json": openapi,
     "POST /v1/messages": authed(createMessage),

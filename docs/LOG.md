@@ -41,6 +41,45 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T01:10 · iter-0107 · GREEN · readyz-probe-and-crash-safe-pg-pool-error-handler
+
+- **Baseline:** clean main @ `f814eca` (iter-0106 active/active deploy guide). Verified
+  green: `tsc` 0, `vitest run` 1840 (6 PG-skipped), `build` 0.
+- **Move:** Close the readiness gap iter-0106 explicitly flagged (`/healthz` is liveness,
+  *not* a DB probe) by adding a backend-gated `/readyz` — and, while validating it against
+  a live Postgres being killed, fix the **P0 crash** that drop exposed: the gateway dies on
+  any idle-connection loss.
+- **Changed:**
+  - **Crash-safe PG pool (the headline).** `pg.Pool` emits `'error'` when an *idle* pooled
+    connection is severed server-side (DB restart/failover, `pg_terminate_backend`, idle
+    timeout, network blip); Node re-throws an unlistened `'error'`, so a routine managed-PG
+    maintenance event **crashed the whole process**. `createPostgresPool` now always attaches
+    a listener (new `PostgresPoolOptions.onError`); the error is recoverable (pg discards the
+    broken client, reopens on next checkout), so it is logged + swallowed. Wired to the
+    structured logger in `gateway.ts` (logger now built before the backend; `openStoreBackend`
+    takes it) and to the console sink in `main.ts`'s admin path.
+  - **`GET /readyz`** (unauthenticated): `200 {"status":"ready"}` / `503 {"status":"not_ready"}`,
+    gated on a new `StoreBackend.ping()` — `SELECT 1` through the shared pool for Postgres
+    (bounded by the iter-0105 acquisition timeout), immediate-success for embedded SQLite (no
+    out-of-process dependency; readiness ≡ liveness). Added to `API_ROUTE_KEYS` + handler +
+    OpenAPI doc (`Readiness` schema, `security: []`); probe access logged at `debug` like
+    `/healthz`/`/metrics`, but a `503` rides the `≥500 → error` branch so a not-ready replica
+    stays visible. Docs: README route table, DEPLOY (liveness-vs-readiness split, k8s
+    `readinessProbe` on `/readyz`, quick-start curl), `.env.example` log-level note.
+- **Decisions:** No new config var (readiness is always-on; no config↔docs drift). Probe
+  error never echoed on the unauthenticated body (no backend detail leak). Landed both in one
+  tick — the crash fix is the prerequisite that makes `/readyz` observable (a dead process
+  serves nothing), so they are one coherent "survive a DB outage" change.
+- **Validation:** `tsc` 0; `vitest run` **1845** (+5; 6 PG-skipped, no flaky exit). Against
+  live Docker `postgres:16`: gateway+postgres PG-gated suites **23/23** incl. `/readyz` 200 via
+  real `SELECT 1`. **Live crash smoke on compiled `dist`:** PG up → `/readyz` 200; PG killed →
+  process **survives** (logs `postgres pool error`, previously fatal), `/readyz` 503, `/healthz`
+  stays 200; PG restored → `/readyz` auto-recovers to 200 in ~2 s; SIGTERM → clean exit. `build`
+  0; `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Consider a pool `'error'` counter/gauge (`posthorn_pg_pool_errors_total`) so a
+  flapping database is alertable, not just logged; or a brief readiness-cache (e.g. 1 s) if a
+  high-frequency LB probe cadence makes the per-request `SELECT 1` load undesirable.
+
 ## 2026-05-25T00:50 · iter-0106 · GREEN · multi-replica-active-active-deploy-guide
 
 - **Baseline:** clean main @ `541cd5b` (iter-0105 bounded the PG pool max + acquisition

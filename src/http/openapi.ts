@@ -217,6 +217,29 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/readyz": {
+        get: {
+          operationId: "getReadiness",
+          tags: ["Operational"],
+          summary: "Readiness probe",
+          description:
+            "Returns `200` when the storage backend is reachable and this replica can serve " +
+            "traffic, or `503` when the backend is unreachable. Distinct from `/healthz`: " +
+            "liveness says the process is up (do not restart it for a transient backend blip), " +
+            "readiness says whether to route traffic to this replica *now*. Use it as the " +
+            "readiness probe behind a load balancer / Kubernetes so a replica whose database " +
+            "is down is pulled from rotation instead of accepting ingest it cannot store. " +
+            "Unauthenticated.",
+          security: [],
+          responses: {
+            "200": jsonResponse("The backend is reachable; this replica is ready.", ref("Readiness")),
+            "503": jsonResponse(
+              "The backend is unreachable; this replica is not ready to serve.",
+              ref("Readiness"),
+            ),
+          },
+        },
+      },
       "/metrics": {
         get: {
           operationId: "getMetrics",
@@ -1263,6 +1286,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           required: ["status"],
           properties: { status: { type: "string", examples: ["ok"] } },
+        },
+        Readiness: {
+          type: "object",
+          required: ["status"],
+          properties: { status: { type: "string", examples: ["ready", "not_ready"] } },
         },
         Error: {
           type: "object",

@@ -122,6 +122,18 @@ describe("createGateway", () => {
     await gateway.stop(); // second stop is a no-op, not an error
   });
 
+  it("serves /readyz as 200 ready while the backend is reachable", async () => {
+    const gateway = createGateway(memoryConfig());
+    gateways.push(gateway);
+    const address = await gateway.start();
+
+    const res = await fetch(`http://127.0.0.1:${address.port}/readyz`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ready" });
+
+    await gateway.stop();
+  });
+
   it("rejects an unauthenticated request with 401", async () => {
     const gateway = createGateway(memoryConfig());
     gateways.push(gateway);
@@ -643,6 +655,13 @@ if (!pgUrl) {
         gateways.push(gateway);
         const address = await gateway.start();
         const base = `http://127.0.0.1:${address.port}`;
+
+        // Readiness against a live Postgres: /readyz runs the backend's SELECT 1
+        // round-trip through the real pool, so a 200 ready proves the probe actually
+        // reaches the database (not just the static /healthz liveness signal).
+        const readyRes = await fetch(`${base}/readyz`);
+        expect(readyRes.status).toBe(200);
+        expect(await readyRes.json()).toEqual({ status: "ready" });
 
         const app = await gateway.apps.create({ name: "Acme PG" });
         const { secret: apiKey } = await gateway.apps.createApiKey(app.id);

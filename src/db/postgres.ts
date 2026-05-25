@@ -130,6 +130,23 @@ export interface PostgresPoolOptions {
    * can prove the saturated-pool checkout fails fast without the full 10 s wait.
    */
   readonly connectionTimeoutMillis?: number;
+  /**
+   * Sink for the pool's `'error'` event — emitted when an **idle** pooled connection
+   * is dropped by the *server*, not in response to any query: a database
+   * restart/failover, a `pg_terminate_backend`, a server-side idle timeout, or a
+   * network blip. Wired by the gateway to the structured logger.
+   *
+   * This is a **reliability-critical** hook, not mere observability. `pg.Pool` is an
+   * `EventEmitter`, and Node re-throws an `'error'` event that has **no** listener —
+   * so without one, a single dropped idle connection (an everyday event on managed
+   * Postgres, which restarts for maintenance and recycles idle backends) takes down
+   * the whole gateway process. `createPostgresPool` therefore *always* attaches a
+   * listener; the error is recoverable (pg discards the broken client and opens a
+   * fresh one on the next checkout), so the handler logs and swallows it. This sink
+   * only chooses where that line goes; defaults to swallowing silently, which still
+   * prevents the crash.
+   */
+  readonly onError?: (err: Error) => void;
 }
 
 /**
@@ -164,10 +181,20 @@ export function createPostgresPool(
         `got ${connectionTimeoutMillis}`,
     );
   }
-  return new Pool({
+  const pool = new Pool({
     connectionString,
     options: CONNECTION_OPTIONS,
     max,
     connectionTimeoutMillis,
   });
+  // Always attach an 'error' listener. The pool emits 'error' when an *idle* client's
+  // connection is severed by the server (a DB restart/failover, a terminated backend,
+  // a network drop) — and Node throws an unhandled 'error' event, which would crash
+  // the whole gateway on an everyday Postgres maintenance event. The pool recovers on
+  // its own (the broken client is discarded; the next checkout opens a fresh one), so
+  // the correct handling is to record and continue, never to die.
+  pool.on("error", (err) => {
+    options.onError?.(err);
+  });
+  return pool;
 }

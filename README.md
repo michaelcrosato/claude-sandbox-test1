@@ -69,7 +69,8 @@ Key capabilities:
 
 | Method | Path | Auth | Purpose |
 | ------ | ---- | ---- | ------- |
-| GET | `/healthz` | none | Liveness probe. |
+| GET | `/healthz` | none | Liveness probe (static — the process is up). |
+| GET | `/readyz` | none | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
 | GET | `/metrics` | none | Prometheus text exposition (operator metrics). |
 | GET | `/openapi.json` | none | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | Accept an event and fan it out (`202`). |

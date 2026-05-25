@@ -73,6 +73,45 @@ describe("createApi — health & routing", () => {
     expect(body(res)).toEqual({ status: "ok" });
   });
 
+  it("readyz is 200 ready when no readiness check is wired (minimal embedding)", async () => {
+    const { api } = await setup();
+    const res = await api(request({ method: "GET", path: "/readyz" }));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ status: "ready" });
+  });
+
+  it("readyz is 200 ready when the backend probe resolves", async () => {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const checkReadiness = vi.fn(async () => {});
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, checkReadiness });
+    const res = await api(request({ method: "GET", path: "/readyz" }));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ status: "ready" });
+    expect(checkReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("readyz is 503 not_ready when the backend probe rejects (DB unreachable)", async () => {
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const checkReadiness = vi.fn(async () => {
+      throw new Error("connection refused");
+    });
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes, checkReadiness });
+    const res = await api(request({ method: "GET", path: "/readyz" }));
+    expect(res.status).toBe(503);
+    // The probe's error detail is deliberately not echoed on this unauthenticated route.
+    expect(body(res)).toEqual({ status: "not_ready" });
+  });
+
   it("returns 404 for an unknown route", async () => {
     const { api } = await setup();
     const res = await api(request({ method: "GET", path: "/nope" }));

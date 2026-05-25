@@ -173,11 +173,13 @@ function writeResponse(
 }
 
 /**
- * Emit one structured access line for a finished request. Health/metrics probes
- * are logged at `debug` (kept out of the default `info` stream — no scrape/
- * health-check spam); a `5xx` is logged at `error`; everything else at `info`.
- * Carries only method, pathname, status, and latency — never headers, body, or
- * query string — so the access log can never leak a secret.
+ * Emit one structured access line for a finished request. Health/readiness/metrics
+ * probes are logged at `debug` (kept out of the default `info` stream — no scrape/
+ * health-check spam, even at a k8s readiness probe's ~10s cadence); a `5xx` is logged
+ * at `error` — which includes a `/readyz` `503`, so a not-ready replica is visible at
+ * the default level even though a ready `200` stays quiet. Carries only method,
+ * pathname, status, and latency — never headers, body, or query string — so the
+ * access log can never leak a secret.
  */
 function logAccess(
   logger: Logger,
@@ -189,7 +191,7 @@ function logAccess(
   const fields = { method, path, status, durationMs: Date.now() - startedAt };
   if (status >= 500) {
     logger.error("request", fields);
-  } else if (path === "/healthz" || path === "/metrics") {
+  } else if (path === "/healthz" || path === "/readyz" || path === "/metrics") {
     logger.debug("request", fields);
   } else {
     logger.info("request", fields);

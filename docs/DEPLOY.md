@@ -56,9 +56,11 @@ cp .env.example .env
 # 2. Build and start:
 docker compose up -d
 
-# 3. Verify liveness:
+# 3. Verify liveness (process up) and readiness (storage backend reachable):
 curl http://localhost:3000/healthz
 # {"status":"ok"}
+curl http://localhost:3000/readyz
+# {"status":"ready"}    # 503 {"status":"not_ready"} if the database is unreachable
 
 # 4. Check Prometheus:
 open http://localhost:9090
@@ -158,7 +160,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_HSTS_MAX_AGE` | `0` | `Strict-Transport-Security` `max-age` in seconds. `0` (default) emits no HSTS header. Only safe once the origin is served over HTTPS — see [HSTS](#hsts-strict-transport-security). |
 | `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` | `false` | Append `; includeSubDomains` to the HSTS header (applies the policy to every subdomain). Requires `POSTHORN_HSTS_MAX_AGE > 0`. |
 | `POSTHORN_HSTS_PRELOAD` | `false` | Append `; preload` to the HSTS header (opt into browser preload lists). Requires `includeSubDomains=true` and `max-age ≥ 31536000` (1 year); otherwise startup fails fast. |
-| `POSTHORN_LOG_LEVEL` | `info` | Minimum severity of structured (JSON Lines) logs written to stdout: `debug`, `info`, `warn`, `error`, or `silent`. `info` (default) shows request access lines and errors while keeping `/healthz` + `/metrics` probe traffic (logged at `debug`) quiet; `silent` disables logging. See [Logging](#logging). |
+| `POSTHORN_LOG_LEVEL` | `info` | Minimum severity of structured (JSON Lines) logs written to stdout: `debug`, `info`, `warn`, `error`, or `silent`. `info` (default) shows request access lines and errors while keeping `/healthz` + `/readyz` + `/metrics` probe traffic (logged at `debug`) quiet; `silent` disables logging. See [Logging](#logging). |
 
 ---
 
@@ -430,8 +432,10 @@ Set the minimum severity with **`POSTHORN_LOG_LEVEL`** (`debug` | `info` | `warn
 `error` | `silent`; default `info`):
 
 - **`info`** (default) — request access lines for API traffic plus all warnings and
-  errors. The `/healthz` and `/metrics` probe requests are logged at `debug`, so
-  they stay out of the default stream (no health-check / scrape spam).
+  errors. The `/healthz`, `/readyz`, and `/metrics` probe requests are logged at
+  `debug`, so they stay out of the default stream (no health-check / scrape spam). A
+  `/readyz` `503` is the exception — a not-ready replica is logged at `error`, visible
+  at the default level.
 - **`debug`** — also includes the probe access lines; useful when diagnosing a
   load balancer or Prometheus scrape.
 - **`warn`** / **`error`** — reduce volume to warnings/errors only.
@@ -662,20 +666,31 @@ server {
 ```
 
 On Kubernetes the same shape is a `Deployment` with `replicas: 3`, the database URL
-from a `Secret`, a `readinessProbe`/`livenessProbe` on `GET /healthz`, and an ordinary
-`Service` in front — no `StatefulSet` and no per-pod volume, because the replicas hold
-no local state.
+from a `Secret`, a `livenessProbe` on `GET /healthz` and a `readinessProbe` on
+`GET /readyz` (see below), and an ordinary `Service` in front — no `StatefulSet` and no
+per-pod volume, because the replicas hold no local state.
 
 ### Load balancing and health checks
 
 - Replicas are **stateless** — no sticky sessions or session affinity. Any algorithm
   (round-robin, least-connections) works.
-- Health-check each replica on **`GET /healthz`**, a static `200 {"status":"ok"}`
-  served as soon as the HTTP listener is up. It is a **liveness** signal
-  (process-is-serving), **not** a database probe: a replica whose Postgres connection
-  is failing still answers it, so pair it with the delivery-failure and
-  connection-timeout signals in [Monitoring a fleet](#monitoring-a-fleet) to catch a
-  degraded-but-listening replica.
+- **Two distinct probes — use both, for different jobs:**
+  - **`GET /healthz` — liveness.** A static `200 {"status":"ok"}` served as soon as
+    the HTTP listener is up. It says only *the process is serving*; it does **not**
+    touch the database. Use it as the Kubernetes `livenessProbe` (and the Docker
+    `HEALTHCHECK`) — a transient database blip must **not** restart an otherwise-healthy
+    replica, so the liveness check is deliberately backend-independent.
+  - **`GET /readyz` — readiness.** Probes the storage backend: `200 {"status":"ready"}`
+    when it is reachable, `503 {"status":"not_ready"}` when it is not (for Postgres a
+    `SELECT 1` round-trip bounded by the pool's connection-acquisition timeout, so a
+    dead database fails the probe fast; for embedded SQLite it is always ready — there
+    is no out-of-process dependency to lose). Use it as the **load-balancer health
+    check** and the Kubernetes `readinessProbe`: a replica whose Postgres is
+    unreachable is pulled from rotation — stops receiving ingest it could not durably
+    store — while staying alive to recover, rather than 500-ing clients. Pair it with
+    the delivery-failure and connection-timeout signals in
+    [Monitoring a fleet](#monitoring-a-fleet) to catch a replica that is *reachable but
+    degraded* (`/readyz` only reports binary reachability, not slowness).
 - **Rolling deploys and replica loss are safe.** Drain or kill a replica at any time:
   any delivery it held mid-flight loses its lease and is reclaimed by a peer after the
   visibility timeout, so the only observable effect is at-least-once redelivery (which

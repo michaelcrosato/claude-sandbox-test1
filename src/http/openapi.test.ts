@@ -114,7 +114,7 @@ describe("buildOpenApiDocument — structure", () => {
     }
   });
 
-  it("marks exactly the three unauthenticated routes with `security: []`", () => {
+  it("marks exactly the four unauthenticated routes with `security: []`", () => {
     const doc = buildOpenApiDocument();
     const open = new Set<string>();
     for (const { key, op } of eachOperation(doc)) {
@@ -122,7 +122,9 @@ describe("buildOpenApiDocument — structure", () => {
         open.add(key);
       }
     }
-    expect(open).toEqual(new Set(["GET /healthz", "GET /metrics", "GET /openapi.json"]));
+    expect(open).toEqual(
+      new Set(["GET /healthz", "GET /readyz", "GET /metrics", "GET /openapi.json"]),
+    );
   });
 });
 
