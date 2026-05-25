@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi, type ApiHandler, type ApiRequest, type ApiResponse } from "./api.js";
+import { API_ERROR_CODES, isApiErrorCode } from "./error-codes.js";
 import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
@@ -4411,5 +4412,72 @@ describe("createApi — GET /v1/deliveries/:id/attempts (delivery attempt histor
     expect(data[0]!["outcome"]).toBe("failed");
     expect(data[0]!["responseStatus"]).toBe(503);
     expect(body(res).nextCursor).toBeNull();
+  });
+});
+
+describe("createApi — error-code contract (non-vacuous emission proof)", () => {
+  // Drive a spread of real error paths through the handler/router and prove that
+  // every emitted `error.code` is a member of the closed API_ERROR_CODES set — the
+  // runtime counterpart to the compile-time closure (HttpError/errorEnvelope only
+  // accept an ApiErrorCode) and the OpenAPI enum drift guard. This is what makes the
+  // documented contract trustworthy rather than aspirational.
+  it("only ever emits codes from the closed set, and covers a representative subset", async () => {
+    const { api, secret } = await setup();
+    const observed = new Set<string>();
+    const recordError = (res: ApiResponse): void => {
+      const code = body(res).error?.code;
+      expect(isApiErrorCode(code), `emitted code "${String(code)}" is not in API_ERROR_CODES`).toBe(
+        true,
+      );
+      observed.add(code);
+    };
+
+    // unauthorized — no credential on a protected route.
+    recordError(await api(request({ method: "POST", path: "/v1/messages" })));
+    // not_found — no route for the path.
+    recordError(await api(request({ method: "GET", path: "/v1/nope" })));
+    // method_not_allowed — the path exists, the method does not.
+    recordError(await api(request({ method: "POST", path: "/healthz" })));
+    // invalid_json — body present but not valid JSON.
+    recordError(
+      await api(
+        request({
+          method: "POST",
+          path: "/v1/messages",
+          headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+          rawBody: "{ not json",
+        }),
+      ),
+    );
+    // invalid_request — a JSON body that is not an object.
+    recordError(await api(jsonRequest("POST", "/v1/messages", [1, 2, 3], secret)));
+    // not_found (cross-tenant/absent) — another shape of the same code, scoped read.
+    recordError(
+      await api(
+        request({
+          method: "GET",
+          path: "/v1/endpoints/ep_does_not_exist",
+          headers: { authorization: `Bearer ${secret}` },
+        }),
+      ),
+    );
+    // idempotency_conflict — same key, different payload.
+    const send = (payload: unknown): ApiRequest =>
+      jsonRequest("POST", "/v1/messages", { eventType: "x", payload, idempotencyKey: "k1" }, secret);
+    expect((await api(send({ a: 1 }))).status).toBe(202);
+    recordError(await api(send({ a: 2 })));
+
+    // Non-vacuous: several distinct real codes were exercised…
+    expect(observed.has("unauthorized")).toBe(true);
+    expect(observed.has("not_found")).toBe(true);
+    expect(observed.has("method_not_allowed")).toBe(true);
+    expect(observed.has("invalid_json")).toBe(true);
+    expect(observed.has("invalid_request")).toBe(true);
+    expect(observed.has("idempotency_conflict")).toBe(true);
+    expect(observed.size).toBeGreaterThanOrEqual(6);
+    // …and (trivially, but it guards the helper) every one is in the closed set.
+    for (const code of observed) {
+      expect(API_ERROR_CODES).toContain(code);
+    }
   });
 });

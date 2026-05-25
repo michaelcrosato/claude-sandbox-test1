@@ -41,6 +41,48 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T03:30 · iter-0112 · GREEN · pin-api-error-code-contract-enum-drift-guard
+
+- **Baseline:** clean main @ `2aef6ef` (iter-0111 SSRF portal test-send). Verified green first:
+  `tsc` 0, `vitest run` 1869 (6 PG-skipped), `build` 0.
+- **Move:** Closed iter-0111's "Next" #1–2 by inspection (no dashboard test-send surface exists —
+  both dashboard handlers only take a clock; the connect/request-timeout failure-reason split
+  already shipped in `failure-reason.ts` and is surfaced on the attempt view, delivery views, SDK,
+  OpenAPI, dashboard, and the `?failureReason=` filter), then took #3 properly. The machine-readable
+  error `code` was the **one** contract field not pinned to a single source of truth: OpenAPI
+  `Error.code` advertised only 6 codes as loose `examples` while the API emits **12** — `conflict`,
+  `internal_error`, `method_not_allowed`, `endpoint_disabled`, `invalid_json` undocumented, and
+  `payload_too_large` (from the `server.ts` body-cap path) missing entirely — with no `enum` and no
+  drift guard, so the SDK's whole `err.code`-branching contract could silently rot.
+- **Changed:**
+  - New `src/http/error-codes.ts`: `API_ERROR_CODES` (`as const`) → derived `ApiErrorCode` union,
+    `isApiErrorCode` guard, and `errorEnvelope(code, message)` — the single typed constructor of an
+    error body, doc'd with the HTTP-status table.
+  - `api.ts` + `server.ts`: every emission site now routes through `errorEnvelope` / a typed
+    `HttpError.code`, so the closed set is **compile-enforced** (the `API_ROUTE_KEYS` discipline).
+  - `openapi.ts`: `Error.code` is now `enum: [...API_ERROR_CODES]` (was `examples`).
+  - SDK `PosthornApiError.code` typed `ApiErrorCode | (string & {})` — autocomplete on known codes,
+    `http_<status>` fallback kept, structurally still `string` so no consumer breaks. Barrel exports
+    the new surface.
+  - Tests: bidirectional OpenAPI drift guard (`enum` == array) + a non-vacuous emission proof driving
+    six real error paths and asserting each `code` is in the closed set. README error-code table.
+- **Decisions:** Derived the union from the `as const` array (union+array cannot disagree) over a
+  hand-written union; widened the SDK type with `(string & {})` rather than a breaking literal-only
+  type. Logged the per-iteration record to LOG.md only (PROJECT.md is the frozen feature roadmap;
+  this is contract hardening).
+- **Validation:** `tsc` 0; `vitest run` **1872** (+3; 6 PG-skipped, no flaky exit); `build` 0.
+  **Dist smoke** through production ESM: OpenAPI `enum` deep-equals `API_ERROR_CODES`, 12 codes incl.
+  `payload_too_large`, `isApiErrorCode`/`errorEnvelope` correct. `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** No full booted-gateway smoke — the change is pure wiring plus a JSON-Schema `enum`
+  identical in shape to the already-Redocly-validated `failureReason` enum (no new runtime/ESM path);
+  the import-from-`dist` smoke and the real-socket server/gateway/SDK suites already exercise the
+  production composition.
+- **Next:** Per-endpoint failure-reason breakdown on `GET /v1/endpoints/:id/stats` (the taxonomy's
+  missing third leg — instance metrics + per-attempt exist, the per-endpoint aggregate does not);
+  or export a typed `narrowApiError` helper for SDK consumers; or audit the dashboard/portal HTML
+  error rendering against this same code vocabulary.
+
 ## 2026-05-25T03:05 · iter-0111 · GREEN · ssrf-guard-portal-test-send-transport-wiring
 
 - **Baseline:** clean main @ `9a8ac74` (iter-0110 HTTP socket timeouts). Verified green first:

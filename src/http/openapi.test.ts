@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildOpenApiDocument, type OpenApiDocument } from "./openapi.js";
 import { API_ROUTE_KEYS, patternToOpenApiPath } from "./api.js";
+import { API_ERROR_CODES } from "./error-codes.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** HTTP method keys an OpenAPI path item may carry (others, e.g. `parameters`, are not operations). */
@@ -138,6 +139,30 @@ describe("buildOpenApiDocument — drift guard against the real router", () => {
   });
 });
 
+describe("buildOpenApiDocument — error-code contract drift guard", () => {
+  /** The `Error.code` schema node, the documented machine-readable error contract. */
+  function documentedCodeEnum(): unknown {
+    const error = buildOpenApiDocument().components.schemas["Error"] as {
+      properties: { error: { properties: { code: { enum?: unknown } } } };
+    };
+    return error.properties.error.properties.code.enum;
+  }
+
+  it("pins Error.code to an enum equal to API_ERROR_CODES (both directions)", () => {
+    // The published contract must be exactly the closed set the API emits from — no
+    // documented-but-unreachable code, no emitted-but-undocumented one. Sourcing the
+    // OpenAPI enum from API_ERROR_CODES makes this hold by construction; this test is
+    // the tripwire that fails loudly if anyone ever hand-edits the schema apart.
+    expect(documentedCodeEnum()).toEqual([...API_ERROR_CODES]);
+  });
+
+  it("enumerates a non-trivial set with no duplicates", () => {
+    // Guards against a vacuous pass (e.g. an empty enum) and a copy-paste dupe.
+    expect(API_ERROR_CODES.length).toBeGreaterThanOrEqual(10);
+    expect(new Set(API_ERROR_CODES).size).toBe(API_ERROR_CODES.length);
+  });
+});
+
 describe("buildOpenApiDocument — reference integrity", () => {
   it("resolves every $ref to a defined component schema", () => {
     const doc = buildOpenApiDocument();
@@ -176,9 +201,9 @@ describe("buildOpenApiDocument — url_not_allowed (SSRF) surfacing", () => {
   it("lists url_not_allowed among the documented Error codes", () => {
     const doc = buildOpenApiDocument();
     const error = doc.components.schemas["Error"] as {
-      properties: { error: { properties: { code: { examples: string[] } } } };
+      properties: { error: { properties: { code: { enum: string[] } } } };
     };
-    expect(error.properties.error.properties.code.examples).toContain("url_not_allowed");
+    expect(error.properties.error.properties.code.enum).toContain("url_not_allowed");
   });
 
   it("surfaces url_not_allowed in the 400 of every URL-guarded route (description + example)", () => {

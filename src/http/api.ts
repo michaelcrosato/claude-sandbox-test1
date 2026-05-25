@@ -116,6 +116,7 @@ import {
   isDeliveryFailureReason,
   type DeliveryFailureReason,
 } from "../delivery/failure-reason.js";
+import { errorEnvelope, type ApiErrorCode } from "./error-codes.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import { cancelMessageDeliveries } from "../queue/cancel-message.js";
 import {
@@ -313,8 +314,8 @@ export type ApiHandler = (req: ApiRequest) => Promise<ApiResponse>;
  */
 class HttpError extends Error {
   readonly status: number;
-  readonly code: string;
-  constructor(status: number, code: string, message: string) {
+  readonly code: ApiErrorCode;
+  constructor(status: number, code: ApiErrorCode, message: string) {
     super(message);
     this.name = "HttpError";
     this.status = status;
@@ -337,35 +338,35 @@ function toErrorResponse(err: unknown): ApiResponse {
     // A 401 advertises the scheme the client should use, per RFC 7235.
     return json(
       err.status,
-      { error: { code: err.code, message: err.message } },
+      errorEnvelope(err.code, err.message),
       err.status === 401 ? { "www-authenticate": "Bearer" } : undefined,
     );
   }
   if (err instanceof IdempotencyConflictError) {
-    return json(409, { error: { code: "idempotency_conflict", message: err.message } });
+    return json(409, errorEnvelope("idempotency_conflict", err.message));
   }
   if (
     err instanceof UnknownEndpointError ||
     err instanceof UnknownAppError ||
     err instanceof UnknownEventTypeError
   ) {
-    return json(404, { error: { code: "not_found", message: err.message } });
+    return json(404, errorEnvelope("not_found", err.message));
   }
   if (err instanceof DuplicateEventTypeError) {
-    return json(409, { error: { code: "conflict", message: err.message } });
+    return json(409, errorEnvelope("conflict", err.message));
   }
   if (err instanceof BlockedUrlError) {
     // A tenant tried to point an endpoint at a private/internal address; the SSRF
     // guard rejected it. A distinct code lets clients tell this apart from a
     // generic validation error.
-    return json(400, { error: { code: "url_not_allowed", message: err.message } });
+    return json(400, errorEnvelope("url_not_allowed", err.message));
   }
   // Validators throw TypeError for type mismatches and RangeError for out-of-range
   // values (e.g. a `limit` outside `[1, MAX]`). Both are client errors on request paths.
   if (err instanceof TypeError || err instanceof RangeError) {
-    return json(400, { error: { code: "invalid_request", message: err.message } });
+    return json(400, errorEnvelope("invalid_request", err.message));
   }
-  return json(500, { error: { code: "internal_error", message: "internal server error" } });
+  return json(500, errorEnvelope("internal_error", "internal server error"));
 }
 
 /**
@@ -1211,7 +1212,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       if (rawMsg === null || typeof rawMsg !== "object" || Array.isArray(rawMsg)) {
         results.push({
           ok: false,
-          error: { code: "invalid_request", message: "each message must be a JSON object" },
+          ...errorEnvelope("invalid_request", "each message must be a JSON object"),
         });
         continue;
       }
@@ -1219,7 +1220,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       if (!("payload" in msg)) {
         results.push({
           ok: false,
-          error: { code: "invalid_request", message: "payload is required" },
+          ...errorEnvelope("invalid_request", "payload is required"),
         });
         continue;
       }
@@ -1234,10 +1235,10 @@ export function createApi(deps: ApiDeps): ApiHandler {
         if (!isReplay && consumed >= quotaBudget) {
           results.push({
             ok: false,
-            error: {
-              code: "quota_exceeded",
-              message: `monthly message quota of ${ctx.app.monthlyMessageQuota} reached`,
-            },
+            ...errorEnvelope(
+              "quota_exceeded",
+              `monthly message quota of ${ctx.app.monthlyMessageQuota} reached`,
+            ),
           });
           continue;
         }
@@ -1297,12 +1298,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
         if (err instanceof IdempotencyConflictError) {
           results.push({
             ok: false,
-            error: { code: "idempotency_conflict", message: (err as Error).message },
+            ...errorEnvelope("idempotency_conflict", (err as Error).message),
           });
         } else if (err instanceof TypeError) {
           results.push({
             ok: false,
-            error: { code: "invalid_request", message: (err as TypeError).message },
+            ...errorEnvelope("invalid_request", (err as TypeError).message),
           });
         } else {
           throw err; // unexpected — let the outer error handler render a 500
@@ -1887,7 +1888,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       return json(201, eventTypeView(et));
     } catch (err) {
       if (err instanceof DuplicateEventTypeError) {
-        return json(409, { error: { code: "conflict", message: err.message } });
+        return json(409, errorEnvelope("conflict", err.message));
       }
       throw err;
     }
@@ -1915,7 +1916,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       return json(200, eventTypeView(et));
     } catch (err) {
       if (err instanceof UnknownEventTypeError) {
-        return json(404, { error: { code: "not_found", message: err.message } });
+        return json(404, errorEnvelope("not_found", err.message));
       }
       throw err;
     }
@@ -1935,7 +1936,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
   const createPortalSession: AuthedHandler = async (ctx) => {
     if (deps.portalSessions === undefined) {
       // Portal feature disabled on this instance (no session store wired).
-      return json(404, { error: { code: "not_found", message: "portal is not enabled on this instance" } });
+      return json(404, errorEnvelope("not_found", "portal is not enabled on this instance"));
     }
     const body = parseJsonObject(ctx.req);
     const rawUserId = body["externalUserId"];
@@ -2046,19 +2047,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
   return async (req) => {
     const lookup = matchRoute(routes, req.method, req.path);
     if (lookup.kind === "notFound") {
-      return json(404, {
-        error: { code: "not_found", message: `no route for ${req.method} ${req.path}` },
-      });
+      return json(404, errorEnvelope("not_found", `no route for ${req.method} ${req.path}`));
     }
     if (lookup.kind === "methodNotAllowed") {
       return json(
         405,
-        {
-          error: {
-            code: "method_not_allowed",
-            message: `${req.method} not allowed on ${req.path}`,
-          },
-        },
+        errorEnvelope("method_not_allowed", `${req.method} not allowed on ${req.path}`),
         { allow: lookup.allow.join(", ") },
       );
     }

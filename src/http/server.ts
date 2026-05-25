@@ -20,6 +20,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApi, type ApiDeps, type ApiHandler, type ApiResponse } from "./api.js";
+import { errorEnvelope } from "./error-codes.js";
 import { isRequestSecure, securityHeadersForPath } from "./security-headers.js";
 import { SILENT_LOGGER, type Logger } from "../logging/logger.js";
 
@@ -297,12 +298,10 @@ async function serve(
         res,
         {
           status: 413,
-          body: {
-            error: {
-              code: "payload_too_large",
-              message: `request body exceeds ${maxBodyBytes} bytes`,
-            },
-          },
+          body: errorEnvelope(
+            "payload_too_large",
+            `request body exceeds ${maxBodyBytes} bytes`,
+          ),
         },
         { ...securityHeaders, connection: "close" },
       );
@@ -312,7 +311,7 @@ async function serve(
         res,
         {
           status: 400,
-          body: { error: { code: "invalid_request", message: "could not read request body" } },
+          body: errorEnvelope("invalid_request", "could not read request body"),
         },
         securityHeaders,
       );
@@ -356,7 +355,7 @@ async function serve(
     logger.error("unhandled request error", { method, path, err });
     response = {
       status: 500,
-      body: { error: { code: "internal_error", message: "internal server error" } },
+      body: errorEnvelope("internal_error", "internal server error"),
     };
   }
   writeResponse(res, response, securityHeaders);

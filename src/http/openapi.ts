@@ -31,6 +31,7 @@ import {
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import { MAX_REPLAY_LIMIT } from "../queue/replay-endpoint.js";
 import { DELIVERY_FAILURE_REASONS } from "../delivery/failure-reason.js";
+import { API_ERROR_CODES } from "./error-codes.js";
 import {
   MAX_FILTER_DEPTH,
   MAX_FILTER_NODES,
@@ -1303,15 +1304,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
               properties: {
                 code: {
                   type: "string",
-                  description: "A stable, machine-readable error code.",
-                  examples: [
-                    "not_found",
-                    "unauthorized",
-                    "invalid_request",
-                    "idempotency_conflict",
-                    "quota_exceeded",
-                    "url_not_allowed",
-                  ],
+                  // The closed set of machine-readable codes is sourced verbatim from
+                  // API_ERROR_CODES (src/http/error-codes.ts), the same single source
+                  // of truth the API emits from. A bidirectional test in openapi.test.ts
+                  // asserts this enum equals that array, so the documented contract can
+                  // never drift from what the API returns.
+                  enum: [...API_ERROR_CODES],
+                  description:
+                    "A stable, machine-readable error code. The full closed set is " +
+                    "enumerated here; an SDK or generated client branches on it.",
                 },
                 message: { type: "string", description: "A human-readable explanation." },
               },

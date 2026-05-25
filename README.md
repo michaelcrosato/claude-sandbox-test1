@@ -103,6 +103,29 @@ The admin routes are **disabled by default** — they 404 unless `POSTHORN_ADMIN
 `GET /openapi.json` serves a machine-readable OpenAPI 3.1 document; use it with
 `openapi-generator`, `oapi-codegen`, or Redoc to generate a typed client for any language.
 
+### Error responses
+
+Every non-2xx response uses one envelope — `{ "error": { "code": "...", "message": "..." } }` —
+where `code` is one stable, machine-readable string you can branch on (the human-readable
+`message` is for logs, not control flow). The set is **closed and enumerated** in the OpenAPI
+`Error.code` schema (a build-time test pins the spec to the values the API actually emits, so
+they cannot drift). In the SDK, `PosthornApiError.code` is typed as the union `ApiErrorCode`.
+
+| `code` | HTTP | Meaning |
+| ------ | ---- | ------- |
+| `invalid_request` | 400 | Malformed request: a validation failure, a bad query parameter, or a missing/non-object body. |
+| `invalid_json` | 400 | The request body is not valid JSON. |
+| `url_not_allowed` | 400 | The endpoint URL targets a private/internal address (SSRF guard). |
+| `endpoint_disabled` | 400 | The target endpoint is disabled (e.g. a test-send to it). |
+| `unauthorized` | 401 | Missing, invalid, or revoked credential (API key, or admin token on a control-plane route). |
+| `not_found` | 404 | No such resource for your tenant, no route, or a disabled (hidden) feature surface. |
+| `method_not_allowed` | 405 | The path exists, but not for this HTTP method. |
+| `conflict` | 409 | A uniqueness/state conflict (e.g. an event type that already exists). |
+| `idempotency_conflict` | 409 | An idempotency key reused with a different payload. |
+| `payload_too_large` | 413 | The request body exceeded the configured maximum size. |
+| `quota_exceeded` | 429 | Your monthly message quota is reached. |
+| `internal_error` | 500 | An unexpected server-side fault. |
+
 ## TypeScript SDK
 
 ```ts

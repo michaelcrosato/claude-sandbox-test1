@@ -16,6 +16,8 @@
  * import paths (`from "posthorn"` / the package barrel) stay stable.
  */
 
+import type { ApiErrorCode } from "../http/error-codes.js";
+
 /** Default per-request timeout (ms). Override per client via its `timeoutMs` option. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -55,11 +57,16 @@ export class PosthornError extends Error {
  * Thrown when the gateway returns a non-2xx response. Carries the HTTP `status`
  * and the machine-readable `code` from the API's `{ error: { code, message } }`
  * envelope (falling back to `http_<status>` when the body is not that envelope).
+ *
+ * `code` is typed as {@link ApiErrorCode} (the server's closed set) widened with
+ * `(string & {})`: a consumer's `switch (err.code)` gets autocomplete and exhaustiveness
+ * hints on the known codes, while the type still accepts the `http_<status>` fallback —
+ * and a non-conforming gateway response — so it never lies about the value being closed.
  */
 export class PosthornApiError extends PosthornError {
   readonly status: number;
-  readonly code: string;
-  constructor(status: number, code: string, message: string) {
+  readonly code: ApiErrorCode | (string & {});
+  constructor(status: number, code: ApiErrorCode | (string & {}), message: string) {
     super(message);
     this.name = "PosthornApiError";
     this.status = status;

@@ -363,6 +363,14 @@ export {
 } from "./http/api.js";
 
 export {
+  API_ERROR_CODES,
+  errorEnvelope,
+  isApiErrorCode,
+  type ApiErrorCode,
+  type ApiErrorEnvelope,
+} from "./http/error-codes.js";
+
+export {
   buildOpenApiDocument,
   type OpenApiDocument,
 } from "./http/openapi.js";
