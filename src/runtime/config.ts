@@ -26,6 +26,12 @@ import {
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS, MAX_RATE_LIMIT } from "../endpoints/endpoint.js";
+import {
+  DEFAULT_LOG_LEVEL,
+  LOG_LEVELS,
+  isLogThreshold,
+  type LogThreshold,
+} from "../logging/logger.js";
 
 /**
  * Default bind host. `0.0.0.0` is the right default for the headline deployment
@@ -128,6 +134,14 @@ export interface GatewayConfig {
    * See `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` and `net/ssrf-guard.ts`.
    */
   readonly allowPrivateNetworks: boolean;
+  /**
+   * Minimum severity of operational log lines emitted to stdout (JSON Lines):
+   * `debug` | `info` | `warn` | `error` | `silent`. `info` (the default) shows
+   * request access lines and errors while keeping the `/healthz` and `/metrics`
+   * probe traffic (logged at `debug`) quiet; `silent` disables logging entirely.
+   * See `POSTHORN_LOG_LEVEL` and {@link import("../logging/logger.js").Logger}.
+   */
+  readonly logLevel: LogThreshold;
   /** Delivery-worker tunables. */
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
@@ -246,6 +260,29 @@ function readDefaultRateLimit(env: Env): number | null {
 }
 
 /**
+ * Read the minimum log level. Unset or blank yields {@link DEFAULT_LOG_LEVEL}
+ * (`"info"`). Accepts `debug`/`info`/`warn`/`error`/`silent` (case-insensitive,
+ * trimmed); any other value is a {@link ConfigError} (fail fast rather than
+ * silently defaulting a typo like `"verbose"`).
+ */
+function readLogLevel(env: Env): LogThreshold {
+  const raw = env["POSTHORN_LOG_LEVEL"];
+  if (raw === undefined) {
+    return DEFAULT_LOG_LEVEL;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "") {
+    return DEFAULT_LOG_LEVEL;
+  }
+  if (!isLogThreshold(trimmed)) {
+    throw new ConfigError(
+      `POSTHORN_LOG_LEVEL must be one of ${LOG_LEVELS.join(", ")}, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return trimmed;
+}
+
+/**
  * Read the optional admin-API bootstrap token. Unset or blank yields `null` (the
  * admin API stays disabled — every `/v1/admin/*` route is `404`). A present token
  * is trimmed and must be at least {@link MIN_ADMIN_TOKEN_LENGTH} characters, else
@@ -285,7 +322,8 @@ function readAdminToken(env: Env): string | null {
  * `POSTHORN_FANOUT_IDLE_POLL_MS`,
  * `POSTHORN_RETENTION_DAYS` (`0` = disabled, the default),
  * `POSTHORN_DEFAULT_RATE_LIMIT` (gateway-wide deliveries/min cap for endpoints without an explicit limit; unset = no default),
- * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (`false` = block delivery to private/internal addresses, the SSRF default).
+ * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (`false` = block delivery to private/internal addresses, the SSRF default),
+ * `POSTHORN_LOG_LEVEL` (`debug`/`info`/`warn`/`error`/`silent`; default `info`).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const config: GatewayConfig = {
@@ -334,6 +372,7 @@ export function loadConfig(env: Env): GatewayConfig {
     retentionDays: readInt(env, "POSTHORN_RETENTION_DAYS", 0, { min: 0 }),
     defaultRateLimit: readDefaultRateLimit(env),
     allowPrivateNetworks: readBool(env, "POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS", false),
+    logLevel: readLogLevel(env),
     fanout: Object.freeze<FanoutConfig>({
       graceMs: readInt(env, "POSTHORN_FANOUT_GRACE_MS", DEFAULT_FANOUT_GRACE_MS, {
         min: 0,

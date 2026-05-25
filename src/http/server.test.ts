@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AddressInfo, Server } from "node:net";
 import { createHttpServer, type HttpServerOptions } from "./server.js";
+import type { ApiHandler } from "./api.js";
 import { InMemoryAppStore } from "../apps/in-memory-app-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { InMemoryMessageStore } from "../storage/in-memory-store.js";
@@ -8,6 +9,7 @@ import { InMemoryDeliveryQueue } from "../queue/in-memory-queue.js";
 import { InMemoryDeliveryAttemptStore } from "../attempts/in-memory-attempt-store.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
 import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
+import { createLogger, type LogEntry } from "../logging/logger.js";
 
 // Track started servers so each test tears its listener down (no leaked ports).
 let started: Server[] = [];
@@ -163,5 +165,119 @@ describe("createHttpServer (node:http adapter)", () => {
     // A bad ?limit= surfaces as a 400 through the adapter.
     const bad = await fetch(`${base}/v1/messages?limit=999`, { headers });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe("createHttpServer — structured request logging", () => {
+  /**
+   * Start a server with a collecting logger at `level`, plus any extra options
+   * (e.g. a throwing dashboard handler). Returns the captured entries array.
+   */
+  async function startWithLogger(
+    level: "debug" | "info",
+    extra: Partial<HttpServerOptions> = {},
+  ): Promise<{ base: string; entries: LogEntry[] }> {
+    const entries: LogEntry[] = [];
+    const logger = createLogger({ level, sink: (e) => entries.push(e) });
+    const server = createHttpServer(
+      {
+        apps: new InMemoryAppStore(),
+        endpoints: new InMemoryEndpointStore(),
+        messages: new InMemoryMessageStore(),
+        queue: new InMemoryDeliveryQueue(),
+        attempts: new InMemoryDeliveryAttemptStore(),
+        metrics: new MetricsRegistry({ version: "test" }),
+        eventTypes: new InMemoryEventTypeStore(),
+      },
+      { logger, ...extra },
+    );
+    started.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
+    });
+    return { base: `http://127.0.0.1:${port}`, entries };
+  }
+
+  const access = (entries: LogEntry[]): LogEntry[] => entries.filter((e) => e.msg === "request");
+
+  it("logs an info access line for an API request (method, path, status, duration)", async () => {
+    const { base, entries } = await startWithLogger("info");
+    // Unauthenticated → 401; non-probe, <500 ⇒ info access line.
+    const res = await fetch(`${base}/v1/messages`);
+    expect(res.status).toBe(401);
+
+    const lines = access(entries);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.level).toBe("info");
+    expect(lines[0]!.fields).toMatchObject({
+      method: "GET",
+      path: "/v1/messages",
+      status: 401,
+    });
+    expect(typeof lines[0]!.fields.durationMs).toBe("number");
+    expect(lines[0]!.fields.durationMs as number).toBeGreaterThanOrEqual(0);
+  });
+
+  it("logs probe traffic (/healthz, /metrics) at debug — silent at the info default", async () => {
+    const info = await startWithLogger("info");
+    await fetch(`${info.base}/healthz`);
+    await fetch(`${info.base}/metrics`);
+    expect(access(info.entries)).toHaveLength(0); // debug suppressed at info
+
+    const debug = await startWithLogger("debug");
+    await fetch(`${debug.base}/healthz`);
+    const lines = access(debug.entries);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.level).toBe("debug");
+    expect(lines[0]!.fields).toMatchObject({ path: "/healthz", status: 200 });
+  });
+
+  it("does not leak the query string, headers, or body into the access line", async () => {
+    const { base, entries } = await startWithLogger("info");
+    await fetch(`${base}/v1/messages?cursor=secret-cursor`, {
+      headers: { authorization: "Bearer super-secret-key" },
+    });
+    const line = access(entries)[0]!;
+    expect(line.fields.path).toBe("/v1/messages"); // pathname only, no ?cursor=
+    const serialized = JSON.stringify(line.fields);
+    expect(serialized).not.toContain("super-secret-key");
+    expect(serialized).not.toContain("secret-cursor");
+  });
+
+  it("logs the cause of an unhandled handler error AND answers 500 (no silent swallow)", async () => {
+    const boom: ApiHandler = () => {
+      throw new TypeError("handler defect");
+    };
+    const { base, entries } = await startWithLogger("info", { dashboardHandler: boom });
+    const res = await fetch(`${base}/dashboard/anything`);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: { code: "internal_error", message: "internal server error" },
+    });
+
+    const errorLine = entries.find((e) => e.msg === "unhandled request error");
+    expect(errorLine).toBeDefined();
+    expect(errorLine!.level).toBe("error");
+    expect(errorLine!.fields).toMatchObject({ method: "GET", path: "/dashboard/anything" });
+    const err = errorLine!.fields.err as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("handler defect");
+
+    // The access line for the 500 is emitted at error level too.
+    const accessLine = access(entries)[0]!;
+    expect(accessLine.level).toBe("error");
+    expect(accessLine.fields.status).toBe(500);
+  });
+
+  it("logs an access line for a 413 body-overflow rejection", async () => {
+    const { base, entries } = await startWithLogger("info", { maxBodyBytes: 8 });
+    const res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { authorization: "Bearer k", "content-type": "application/json" },
+      body: "x".repeat(64),
+    });
+    expect(res.status).toBe(413);
+    const line = access(entries)[0]!;
+    expect(line.fields).toMatchObject({ method: "POST", path: "/v1/messages", status: 413 });
   });
 });

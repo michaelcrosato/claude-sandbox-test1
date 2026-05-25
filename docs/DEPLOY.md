@@ -14,12 +14,13 @@ procedures.
 4. [Configuration reference](#configuration-reference)
 5. [Security hardening](#security-hardening)
 6. [Monitoring with Prometheus](#monitoring-with-prometheus)
-7. [Alerting](#alerting)
-8. [Grafana (optional)](#grafana-optional)
-9. [Upgrading](#upgrading)
-10. [Standalone binary (without Docker)](#standalone-binary-without-docker)
-11. [Embedding as a library](#embedding-as-a-library)
-12. [Tuning for throughput](#tuning-for-throughput)
+7. [Logging](#logging)
+8. [Alerting](#alerting)
+9. [Grafana (optional)](#grafana-optional)
+10. [Upgrading](#upgrading)
+11. [Standalone binary (without Docker)](#standalone-binary-without-docker)
+12. [Embedding as a library](#embedding-as-a-library)
+13. [Tuning for throughput](#tuning-for-throughput)
 
 ---
 
@@ -146,6 +147,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_FANOUT_IDLE_POLL_MS` | `5000` | FanoutDispatcher: poll interval when the outbox is empty (ms). |
 | `POSTHORN_RETENTION_DAYS` | `0` | Delete delivered/expired data older than this many days on an hourly sweep. `0` (default) disables pruning; minimum 1 when set. |
 | `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` | `false` | Allow endpoint URLs that target private/internal addresses. `false` (default, secure) blocks loopback / RFC 1918 / link-local / CGNAT / cloud-metadata / internal-hostname destinations with `400 url_not_allowed` (SSRF defense). Set `true` only for a trusted single-tenant self-host delivering to internal services. See [SSRF protection](#ssrf-protection-private-network-webhooks). |
+| `POSTHORN_LOG_LEVEL` | `info` | Minimum severity of structured (JSON Lines) logs written to stdout: `debug`, `info`, `warn`, `error`, or `silent`. `info` (default) shows request access lines and errors while keeping `/healthz` + `/metrics` probe traffic (logged at `debug`) quiet; `silent` disables logging. See [Logging](#logging). |
 
 ---
 
@@ -306,6 +308,43 @@ posthorn_delivery_tasks{status="dead_letter"}
 # Pending queue depth:
 posthorn_delivery_tasks{status="pending"}
 ```
+
+---
+
+## Logging
+
+Alongside `/metrics`, Posthorn writes **structured logs as JSON Lines to stdout** —
+one JSON object per line, the format every log collector (Loki, CloudWatch,
+Datadog, Vector, …) ingests without configuration. In a container, capture them
+with `docker logs` or your platform's stdout pipeline; there is no log file to
+rotate.
+
+Each line carries `time` (ISO-8601), `level`, `msg`, and event-specific fields,
+for example:
+
+```json
+{"time":"2026-05-24T18:45:01.002Z","level":"info","msg":"request","component":"http","method":"POST","path":"/v1/messages","status":202,"durationMs":4}
+{"time":"2026-05-24T18:45:09.117Z","level":"error","msg":"unhandled request error","component":"http","method":"GET","path":"/v1/messages/abc","err":{"name":"TypeError","message":"...","stack":"..."}}
+{"time":"2026-05-24T18:45:30.500Z","level":"error","msg":"delivery worker error","component":"worker","err":{"name":"Error","message":"..."}}
+```
+
+Set the minimum severity with **`POSTHORN_LOG_LEVEL`** (`debug` | `info` | `warn` |
+`error` | `silent`; default `info`):
+
+- **`info`** (default) — request access lines for API traffic plus all warnings and
+  errors. The `/healthz` and `/metrics` probe requests are logged at `debug`, so
+  they stay out of the default stream (no health-check / scrape spam).
+- **`debug`** — also includes the probe access lines; useful when diagnosing a
+  load balancer or Prometheus scrape.
+- **`warn`** / **`error`** — reduce volume to warnings/errors only.
+- **`silent`** — disable logging entirely.
+
+Errors that previously vanished are now surfaced here: an unhandled exception in a
+request handler is logged at `error` with the captured stack (and still answered
+with `500 internal_error`), and a delivery-worker / fan-out-dispatcher / pruner
+backend failure — including a best-effort audit-log or system-event write that
+failed — is logged at `error` with its `component`. Ship stdout to your log
+platform and alert on `level="error"`.
 
 ---
 

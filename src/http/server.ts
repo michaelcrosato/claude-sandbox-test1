@@ -20,6 +20,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApi, type ApiDeps, type ApiHandler, type ApiResponse } from "./api.js";
+import { SILENT_LOGGER, type Logger } from "../logging/logger.js";
 
 /** Default request-body cap: 1 MiB. Generous for webhook payloads, bounded against abuse. */
 export const DEFAULT_MAX_BODY_BYTES = 1_000_000;
@@ -47,6 +48,13 @@ export interface HttpServerOptions {
    * `404`). The portal is always enabled when the gateway creates it.
    */
   readonly portalHandler?: ApiHandler;
+  /**
+   * Structured logger for request access lines and unhandled-error reporting.
+   * Defaults to {@link SILENT_LOGGER} (no output), so a caller that does not opt
+   * into logging — or an existing test — sees no behavior change. The gateway
+   * passes a level-configured logger bound to `component: "http"`.
+   */
+  readonly logger?: Logger;
 }
 
 /** Signals that a request body exceeded the configured cap. */
@@ -144,6 +152,30 @@ function writeResponse(
   res.end(payload);
 }
 
+/**
+ * Emit one structured access line for a finished request. Health/metrics probes
+ * are logged at `debug` (kept out of the default `info` stream — no scrape/
+ * health-check spam); a `5xx` is logged at `error`; everything else at `info`.
+ * Carries only method, pathname, status, and latency — never headers, body, or
+ * query string — so the access log can never leak a secret.
+ */
+function logAccess(
+  logger: Logger,
+  method: string,
+  path: string,
+  status: number,
+  startedAt: number,
+): void {
+  const fields = { method, path, status, durationMs: Date.now() - startedAt };
+  if (status >= 500) {
+    logger.error("request", fields);
+  } else if (path === "/healthz" || path === "/metrics") {
+    logger.debug("request", fields);
+  } else {
+    logger.info("request", fields);
+  }
+}
+
 /** Serve one request: read body, dispatch, respond. Never throws to the caller. */
 async function serve(
   req: IncomingMessage,
@@ -153,7 +185,13 @@ async function serve(
   dashboardHandler: ApiHandler | undefined,
   tenantDashboardHandler: ApiHandler | undefined,
   portalHandler: ApiHandler | undefined,
+  logger: Logger,
 ): Promise<void> {
+  const startedAt = Date.now();
+  const method = req.method ?? "GET";
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const path = url.pathname;
+
   let rawBody: string;
   try {
     rawBody = await readBody(req, maxBodyBytes);
@@ -174,29 +212,29 @@ async function serve(
         },
         { connection: "close" },
       );
+      logAccess(logger, method, path, 413, startedAt);
     } else {
       writeResponse(res, {
         status: 400,
         body: { error: { code: "invalid_request", message: "could not read request body" } },
       });
+      logAccess(logger, method, path, 400, startedAt);
     }
     req.destroy();
     return;
   }
 
-  const url = new URL(req.url ?? "/", "http://localhost");
   // Route: tenant dashboard takes priority over admin dashboard (its prefix is longer).
   const isTenantDashboard =
     tenantDashboardHandler !== undefined &&
-    (url.pathname === "/dashboard/tenant" ||
-      url.pathname.startsWith("/dashboard/tenant/"));
+    (path === "/dashboard/tenant" || path.startsWith("/dashboard/tenant/"));
   const isAdminDashboard =
     !isTenantDashboard &&
     dashboardHandler !== undefined &&
-    (url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"));
+    (path === "/dashboard" || path.startsWith("/dashboard/"));
   const isPortal =
     portalHandler !== undefined &&
-    (url.pathname === "/portal" || url.pathname.startsWith("/portal/"));
+    (path === "/portal" || path.startsWith("/portal/"));
   const activeHandle = isTenantDashboard
     ? tenantDashboardHandler
     : isAdminDashboard
@@ -207,21 +245,24 @@ async function serve(
   let response: ApiResponse;
   try {
     response = await activeHandle({
-      method: req.method ?? "GET",
-      path: url.pathname,
+      method,
+      path,
       headers: normalizeHeaders(req.headers),
       query: normalizeQuery(url.searchParams),
       rawBody,
     });
-  } catch {
+  } catch (err) {
     // createApi already maps known errors; this guards against a defect in the
-    // handler itself so a single bad request never crashes the server.
+    // handler itself so a single bad request never crashes the server. Logging the
+    // cause here is the difference between a debuggable 500 and a silent black hole.
+    logger.error("unhandled request error", { method, path, err });
     response = {
       status: 500,
       body: { error: { code: "internal_error", message: "internal server error" } },
     };
   }
   writeResponse(res, response);
+  logAccess(logger, method, path, response.status, startedAt);
 }
 
 /**
@@ -234,7 +275,17 @@ export function createHttpServer(deps: ApiDeps, options: HttpServerOptions = {})
   const handle = createApi(deps);
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const { dashboardHandler, tenantDashboardHandler, portalHandler } = options;
+  const logger = options.logger ?? SILENT_LOGGER;
   return createServer((req, res) => {
-    void serve(req, res, handle, maxBodyBytes, dashboardHandler, tenantDashboardHandler, portalHandler);
+    void serve(
+      req,
+      res,
+      handle,
+      maxBodyBytes,
+      dashboardHandler,
+      tenantDashboardHandler,
+      portalHandler,
+      logger,
+    );
   });
 }

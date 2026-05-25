@@ -392,6 +392,7 @@ export {
   type Gateway,
   type GatewayAddress,
   type StoreLocations,
+  type CreateGatewayOptions,
 } from "./runtime/gateway.js";
 
 export {
@@ -497,5 +498,22 @@ export {
   createGuardedTransport,
   type GuardedTransportOptions,
 } from "./net/guarded-transport.js";
+
+export {
+  createLogger,
+  formatJsonLine,
+  jsonStdoutSink,
+  isLogThreshold,
+  SILENT_LOGGER,
+  DEFAULT_LOG_LEVEL,
+  LOG_LEVELS,
+  type Logger,
+  type LogLevel,
+  type LogThreshold,
+  type LogFields,
+  type LogEntry,
+  type LogSink,
+  type LoggerOptions,
+} from "./logging/logger.js";
 
 export { POSTHORN_VERSION } from "./version.js";

@@ -39,6 +39,7 @@ import { InMemoryTenantSessionStore } from "../dashboard/tenant-sessions.js";
 import { createPortalHandler } from "../portal/portal-handler.js";
 import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
 import { MetricsRegistry } from "../metrics/metrics.js";
+import { createLogger, type Logger } from "../logging/logger.js";
 import { POSTHORN_VERSION } from "../version.js";
 import type { AppStore } from "../apps/app.js";
 import type { EndpointStore } from "../endpoints/endpoint.js";
@@ -100,6 +101,13 @@ export interface Gateway {
    * exposition at the unauthenticated `GET /metrics`.
    */
   readonly metrics: MetricsRegistry;
+  /**
+   * Structured logger (JSON Lines to stdout at `config.logLevel`). Exposed so an
+   * embedder can emit lines into the same stream as the gateway. Wired into the
+   * HTTP request lifecycle and the worker / dispatcher / pruner `onError` seams,
+   * so a runtime failure that previously vanished is now surfaced.
+   */
+  readonly logger: Logger;
   /** The `node:http` server (already constructed; {@link Gateway.start} makes it listen). */
   readonly httpServer: Server;
   /**
@@ -113,6 +121,17 @@ export interface Gateway {
    * Idempotent and safe to call after a failed/partial `start`.
    */
   stop(): Promise<void>;
+}
+
+/** Optional overrides for {@link createGateway} beyond the validated config. */
+export interface CreateGatewayOptions {
+  /**
+   * Replace the structured logger. Defaults to a JSON-Lines-to-stdout logger at
+   * `config.logLevel`. A library embedder injects their own {@link Logger} (or a
+   * custom sink) to route Posthorn's runtime logs into their logging stack; a test
+   * injects a collecting logger to assert on emitted entries.
+   */
+  readonly logger?: Logger;
 }
 
 /** Per-store SQLite locations resolved from a `dataDir`. */
@@ -164,7 +183,10 @@ export function resolveLocations(dataDir: string): StoreLocations {
  * {@link Gateway.start}. All SQLite backends share the lifetime of the
  * gateway and are closed together by {@link Gateway.stop}.
  */
-export function createGateway(config: GatewayConfig): Gateway {
+export function createGateway(
+  config: GatewayConfig,
+  options: CreateGatewayOptions = {},
+): Gateway {
   const locations = resolveLocations(config.dataDir);
 
   const apps = new SqliteAppStore({ location: locations.apps });
@@ -178,6 +200,11 @@ export function createGateway(config: GatewayConfig): Gateway {
   const eventTypes = new SqliteEventTypeStore({ location: locations.eventTypes });
 
   const metrics = new MetricsRegistry({ version: POSTHORN_VERSION });
+
+  // Structured operational logging (JSON Lines → stdout at the configured level,
+  // unless an embedder/test injects its own). Each runtime component gets a child
+  // logger bound to its `component` so the unified stream stays filterable.
+  const logger = options.logger ?? createLogger({ level: config.logLevel });
 
   // The webhook delivery transport for every tenant-URL send (the worker's
   // continuous delivery loop and the `POST /v1/endpoints/:id/test` one-shot). It
@@ -214,6 +241,11 @@ export function createGateway(config: GatewayConfig): Gateway {
     concurrency: config.worker.concurrency,
     requestTimeoutMs: config.worker.requestTimeoutMs,
     idlePollMs: config.worker.idlePollMs,
+    // Surface unexpected delivery-loop failures — a backend hiccup while settling,
+    // or a best-effort audit/health/system-event write that threw — instead of
+    // swallowing them. The worker's resilience still keeps the loop running; this
+    // only makes the failure visible.
+    onError: (err) => logger.error("delivery worker error", { component: "worker", err }),
     // Fold each tick's tally into the metrics counters.
     onTick: metrics.recordTick,
     // Append every attempt to the durable audit log (best-effort: a failed write
@@ -267,11 +299,19 @@ export function createGateway(config: GatewayConfig): Gateway {
     graceMs: config.fanout.graceMs,
     batchSize: config.fanout.batchSize,
     idlePollMs: config.fanout.idlePollMs,
+    onError: (err) =>
+      logger.error("fanout dispatcher error", { component: "dispatcher", err }),
   });
 
   const pruner =
     config.retentionDays > 0
-      ? new DataPruner({ attempts, queue, messages, retentionDays: config.retentionDays })
+      ? new DataPruner({
+          attempts,
+          queue,
+          messages,
+          retentionDays: config.retentionDays,
+          onError: (err) => logger.error("data pruner error", { component: "pruner", err }),
+        })
       : null;
 
   // The admin dashboard reuses POSTHORN_ADMIN_TOKEN as its login password, so it is
@@ -339,6 +379,8 @@ export function createGateway(config: GatewayConfig): Gateway {
       ...(dashboardHandler !== undefined ? { dashboardHandler } : {}),
       tenantDashboardHandler,
       portalHandler,
+      // Access lines + unhandled-error reporting, tagged with the HTTP component.
+      logger: logger.child({ component: "http" }),
     },
   );
 
@@ -418,6 +460,7 @@ export function createGateway(config: GatewayConfig): Gateway {
     dispatcher,
     pruner,
     metrics,
+    logger,
     httpServer,
     start,
     stop,

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { createGateway, type Gateway } from "./gateway.js";
 import { loadConfig } from "./config.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
+import { createLogger, type LogEntry } from "../logging/logger.js";
 
 // Track resources per test so each tears its sockets / temp files down cleanly.
 const gateways: Gateway[] = [];
@@ -78,6 +79,9 @@ function memoryConfig(overrides: Record<string, string> = {}) {
     // Tests deliver to a loopback receiver, a trusted destination in-test; opt out
     // of the SSRF guard so endpoint creation to 127.0.0.1 is permitted.
     POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS: "true",
+    // Keep the default JSON-to-stdout logger quiet during tests; the logging-wiring
+    // test injects its own collecting logger and is unaffected by this.
+    POSTHORN_LOG_LEVEL: "silent",
     ...overrides,
   });
 }
@@ -110,6 +114,27 @@ describe("createGateway", () => {
     gateways.push(gateway);
     await gateway.start();
     await expect(gateway.start()).rejects.toThrow(/already started/);
+  });
+
+  it("routes HTTP requests through the injected logger, tagged component:http", async () => {
+    const entries: LogEntry[] = [];
+    const logger = createLogger({ level: "info", sink: (e) => entries.push(e) });
+    const gateway = createGateway(memoryConfig(), { logger });
+    gateways.push(gateway);
+    expect(gateway.logger).toBe(logger);
+    const address = await gateway.start();
+
+    const res = await fetch(`http://127.0.0.1:${address.port}/v1/endpoints`);
+    expect(res.status).toBe(401);
+
+    const accessLine = entries.find((e) => e.msg === "request");
+    expect(accessLine).toBeDefined();
+    expect(accessLine!.fields).toMatchObject({
+      component: "http", // the gateway passes a child logger bound to the HTTP component
+      method: "GET",
+      path: "/v1/endpoints",
+      status: 401,
+    });
   });
 
   it(

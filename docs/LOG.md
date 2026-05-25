@@ -41,6 +41,47 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:46 · iter-0084 · GREEN · structured-operational-logging
+
+- **Baseline:** clean main @ `a79d56d` (iter-0083 OpenAPI `url_not_allowed`). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1633/1633** (49 files, 6 PG-skipped, no flaky exit),
+  `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Close the biggest remaining production-grade *observability* gap. The gateway had
+  Prometheus counters but **no logs**: the HTTP 500 fallback (`server.ts`) silently swallowed the
+  underlying error, the delivery-worker / fan-out-dispatcher / pruner `onError` seams were left
+  **unwired** in the gateway (a backend hiccup, a failed best-effort audit/health/system-event
+  write — all vanished), and there was no request access log. An operator had nothing to grep.
+- **Changed:**
+  - New `src/logging/logger.ts` — pure, **zero-dependency** structured logger: `LogLevel`/
+    `LogThreshold` (incl. `silent`), level filtering, `child()` field-binding, `formatJsonLine`
+    (Error→name/message/stack, bigint→string, circular→`fields_error` fallback), `SILENT_LOGGER`,
+    default JSON-Lines→stdout sink. Sink + clock injected → fully deterministic.
+  - `runtime/config.ts`: `POSTHORN_LOG_LEVEL` (default `info`; validated enum) → `GatewayConfig.logLevel`.
+    Documented in **`.env.example`** and **`docs/DEPLOY.md`** (new Logging section + ToC) to satisfy
+    the iter-77 config↔docs drift guard.
+  - `http/server.ts`: optional `logger` (default `SILENT_LOGGER` → no behavior change for existing
+    callers). Per-request access line (probes `/healthz`,`/metrics`→`debug`; 5xx→`error`; else `info`;
+    method/path/status/durationMs only — never headers/body/query). The 500 catch now logs the cause
+    (+stack) — the silent-swallow gap, closed.
+  - `runtime/gateway.ts`: builds the logger from `logLevel` (or an injected one via new
+    `CreateGatewayOptions.logger`), exposes it on `Gateway`, wires worker/dispatcher/pruner `onError`
+    → `logger.error` (component-tagged children), passes the `component:"http"` child to the server.
+  - `index.ts` re-exports the logging surface. +32 tests (logger unit, config, server access/500, gateway).
+- **Decisions:** Sink takes the structured `LogEntry` (not a pre-formatted string) so tests assert
+  fields directly and embedders can route to pino/OTel — same injected-seam discipline as
+  `recordAttempt`/`onTick`. `SILENT_LOGGER` default keeps `createHttpServer` callers unchanged.
+  Probe demotion to `debug` keeps health/scrape spam out of the `info` stream. Reused
+  `config.logLevel` (one knob, no new sink/format vars → no further drift surface).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1665/1665** (+32, 50 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`; compiled-`dist` ESM smoke (`scripts/smoke-logging.mjs`)
+  **17/17** — pure logger + a running gateway emitting a parseable JSON access line through the real
+  stdout sink, `component:"http"` tagging, no probe spam, and `silent` truly silent.
+- **Next:** Emit a structured `info` boot/stop line + bound `instance`/`version` from the gateway
+  (today `main.ts` logs lifecycle as prose); or a request-id field threaded from `node:http` so
+  access + error lines for one request correlate; or connect-vs-total split on the delivery timeout
+  (iter-82 Next, still open).
+
 ## 2026-05-24T18:45 · iter-0083 · GREEN · openapi-surface-url-not-allowed-400
 
 - **Baseline:** clean main @ `5369313` (iter-0082 system-event per-attempt timeout). Verified green

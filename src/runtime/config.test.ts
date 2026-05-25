@@ -26,6 +26,7 @@ import {
 } from "../fanout/fanout-dispatcher.js";
 import { DEFAULT_VISIBILITY_TIMEOUT_MS } from "../queue/delivery-queue.js";
 import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
+import { DEFAULT_LOG_LEVEL } from "../logging/logger.js";
 
 describe("loadConfig", () => {
   it("applies defaults for an empty environment", () => {
@@ -47,6 +48,7 @@ describe("loadConfig", () => {
       retentionDays: 0,
       defaultRateLimit: null,
       allowPrivateNetworks: false,
+      logLevel: DEFAULT_LOG_LEVEL,
       fanout: {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
@@ -300,6 +302,30 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "1.5" })).toThrow(ConfigError);
       expect(() => loadConfig({ POSTHORN_DEFAULT_RATE_LIMIT: "abc" })).toThrow(
         /POSTHORN_DEFAULT_RATE_LIMIT must be an integer/,
+      );
+    });
+  });
+
+  describe("POSTHORN_LOG_LEVEL", () => {
+    it("defaults to info when unset or blank", () => {
+      expect(loadConfig({}).logLevel).toBe(DEFAULT_LOG_LEVEL);
+      expect(loadConfig({}).logLevel).toBe("info");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "   " }).logLevel).toBe("info");
+    });
+
+    it("accepts each valid level (case-insensitive, trimmed)", () => {
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "debug" }).logLevel).toBe("debug");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "info" }).logLevel).toBe("info");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "warn" }).logLevel).toBe("warn");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "error" }).logLevel).toBe("error");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "silent" }).logLevel).toBe("silent");
+      expect(loadConfig({ POSTHORN_LOG_LEVEL: "  WARN  " }).logLevel).toBe("warn");
+    });
+
+    it("rejects an unrecognized level", () => {
+      expect(() => loadConfig({ POSTHORN_LOG_LEVEL: "verbose" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_LOG_LEVEL: "trace" })).toThrow(
+        /POSTHORN_LOG_LEVEL must be one of/,
       );
     });
   });
