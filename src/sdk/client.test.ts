@@ -705,6 +705,7 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
       successRate: 0.9,
       avgDurationMs: 123,
       daily: [{ date: "2026-05-17", attempts: 10, succeeded: 9, failed: 1 }],
+      failureReasons: { http_5xx: 1, connection_refused: 0 },
     };
     const client = fakeClient((url, init) => {
       seenUrl = url;
@@ -719,6 +720,7 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(res.successRate).toBe(0.9);
     expect(res.avgDurationMs).toBe(123);
     expect(res.daily).toHaveLength(1);
+    expect(res.failureReasons.http_5xx).toBe(1);
   });
 
   it("includes days in getEndpointStats query string when provided", async () => {

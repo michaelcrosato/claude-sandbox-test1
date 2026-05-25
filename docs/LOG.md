@@ -41,6 +41,46 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T04:15 · iter-0113 · GREEN · per-endpoint-failure-reason-breakdown-on-stats
+
+- **Baseline:** clean main @ `9d88937` (iter-0112 error-code enum). Verified green first:
+  `tsc` 0, `vitest run` 1872 (6 PG-skipped), `build` 0.
+- **Move:** Take iter-0112's "Next" #1 — the failure-reason taxonomy's missing third leg.
+  The instance metric (`posthorn_delivery_failures_total{reason}`) and the per-attempt
+  `failureReason` existed, but `GET /v1/endpoints/:id/stats` reported only
+  totals/successRate/avgDuration/daily — no per-reason aggregate, the exact data an operator
+  triages a flapping endpoint from ("mostly `connection_refused`" vs "mostly `http_5xx`").
+- **Changed:**
+  - `EndpointStats` gains `failureReasons: DeliveryFailureReasonCounts` — closed taxonomy,
+    **every** reason key present (zeros included), the same convention as the metric.
+    Documented invariant: classified failures sum to `failed`; legacy null-reason rows are
+    counted in `failed` but excluded here (so a window spanning that upgrade sums to less).
+  - All three `statsByEndpoint` backends compute it: in-memory folds per attempt; sqlite +
+    postgres add a second indexed range scan `GROUP BY failure_reason` (rides the existing
+    `(endpoint_id, attempted_at)` index), folded through `emptyDeliveryFailureCounts()` with an
+    `isDeliveryFailureReason` guard against hand-edited junk.
+  - Surface: OpenAPI gains a `DeliveryFailureReasonCounts` schema built from
+    `DELIVERY_FAILURE_REASONS` + `EndpointStats.required` now lists `failureReasons`; SDK
+    `EndpointStatsView` typed; README route table gains the previously-undocumented `/stats` row.
+  - Tests: conformance breakdown (sums + key-completeness + legacy-null exclusion), api.test
+    end-to-end assertion, two OpenAPI drift guards; `smoke-failure-reason.mjs` extended to assert
+    the breakdown through the booted `dist` gateway on both endpoints.
+- **Decisions:** A whole-window per-reason tally (not per-day) keeps the response bounded and
+  matches the metric's shape. Two queries over one combined `GROUPING SET` — clearer, matches the
+  one-statement-per-read-shape house style, and `/stats` is a low-QPS operator route. Logged to
+  LOG.md only (PROJECT.md is the frozen roadmap; this is observability completion).
+- **Validation:** `tsc` 0; `vitest run` **1876** no-PG (+4; 6 PG-skipped); with a live Docker
+  `postgres:16` the **full** suite is **2153/2153** (incl. PG attempt-store conformance + the two
+  PG gateway e2e). `build` 0. `smoke-failure-reason.mjs` **29/29** through `dist` (ep1 http_5xx:2,
+  refused:0; ep2 refused:1, http_5xx:0). `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Notes:** Smoke assertions use `≥ 1` / cross-reason-zero rather than a strict sum-equals-failed,
+  since the still-retrying worker writes concurrently with the read; the exact sum invariant is
+  proven deterministically in the conformance suite.
+- **Next:** Export a typed `narrowApiError` helper for SDK consumers; or audit dashboard/portal
+  HTML error rendering against the error-code vocabulary; or surface a per-endpoint failure-reason
+  panel on the tenant dashboard now the aggregate exists.
+
 ## 2026-05-25T03:30 · iter-0112 · GREEN · pin-api-error-code-contract-enum-drift-guard
 
 - **Baseline:** clean main @ `2aef6ef` (iter-0111 SSRF portal test-send). Verified green first:

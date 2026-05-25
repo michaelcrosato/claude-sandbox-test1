@@ -24,7 +24,11 @@ import {
   type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
-import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
+import {
+  emptyDeliveryFailureCounts,
+  isDeliveryFailureReason,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 import {
   resolveUsageRange,
   type UsageRange,
@@ -247,6 +251,23 @@ export class PostgresDeliveryAttemptStore implements DeliveryAttemptStore {
       totalDurationMs += Number(row.total_dur);
       return { date: row.day, attempts, succeeded: ok, failed: bad };
     });
+    // Companion per-endpoint failure-reason tally over the same window. `failure_reason
+    // IS NOT NULL` drops succeeded attempts (reason always NULL) and legacy unclassified
+    // failed rows; the result folds into a fresh all-zero counts map. Same indexed range.
+    const { rows: reasonRows } = await this.#pool.query<{ reason: string; n: string }>(
+      "SELECT failure_reason AS reason, COUNT(*) AS n" +
+        " FROM delivery_attempts" +
+        " WHERE endpoint_id = $1 AND attempted_at >= $2 AND attempted_at < $3" +
+        " AND failure_reason IS NOT NULL" +
+        " GROUP BY failure_reason",
+      [endpointId, fromMs, toMs],
+    );
+    const failureReasons = emptyDeliveryFailureCounts();
+    for (const row of reasonRows) {
+      // Intake validates failure_reason against the closed set, but a hand-edited row
+      // could carry junk: ignore anything outside the taxonomy rather than crash.
+      if (isDeliveryFailureReason(row.reason)) failureReasons[row.reason] += Number(row.n);
+    }
     return {
       endpointId,
       fromMs,
@@ -257,6 +278,7 @@ export class PostgresDeliveryAttemptStore implements DeliveryAttemptStore {
       successRate: total > 0 ? Math.round((succeeded / total) * 10_000) / 10_000 : null,
       avgDurationMs: total > 0 ? Math.round(totalDurationMs / total) : null,
       daily,
+      failureReasons,
     };
   }
 }

@@ -2914,6 +2914,7 @@ describe("createApi — GET /v1/endpoints/:id/stats (endpoint delivery statistic
       outcome: "failed",
       responseStatus: 500,
       error: "internal error",
+      failureReason: "http_5xx",
       durationMs: 200,
       attemptedAt: nowMs - 5000,
     });
@@ -2933,6 +2934,9 @@ describe("createApi — GET /v1/endpoints/:id/stats (endpoint delivery statistic
     // (100 * 3 + 200) / 4 = 125
     expect(stats.avgDurationMs).toBe(125);
     expect(stats.daily.length).toBeGreaterThanOrEqual(1);
+    // The single failure is classified and surfaced in the per-reason breakdown.
+    expect(stats.failureReasons.http_5xx).toBe(1);
+    expect(stats.failureReasons.connection_refused).toBe(0);
   });
 
   it("rejects an out-of-range ?days= with 400", async () => {

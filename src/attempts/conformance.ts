@@ -19,6 +19,10 @@ import {
   type DeliveryAttemptStore,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
+import {
+  DELIVERY_FAILURE_REASONS,
+  emptyDeliveryFailureCounts,
+} from "../delivery/failure-reason.js";
 
 /** Deterministic id generator for the suite: sequential `datt_test_N`. */
 export interface AttemptConformanceIds {
@@ -499,6 +503,7 @@ export function describeDeliveryAttemptStoreContract(
           successRate: null,
           avgDurationMs: null,
           daily: [],
+          failureReasons: emptyDeliveryFailureCounts(),
         });
       });
 
@@ -538,6 +543,31 @@ export function describeDeliveryAttemptStoreContract(
         expect(statsB.total).toBe(1);
         expect(statsB.succeeded).toBe(0);
         expect(statsB.successRate).toBe(0);
+      });
+
+      it("breaks the failures down by reason — every reason key present, classified reasons sum to the classified failures", async () => {
+        // 2× http_5xx, 1× connection_refused (a transport failure, no response), a
+        // succeeded attempt (no reason), and a legacy failed attempt with a null reason.
+        await store.record(attemptInput({ endpointId: "ep_r", outcome: "failed", responseStatus: 500, error: "e", failureReason: "http_5xx", attemptedAt: DAY_A + 1 }));
+        await store.record(attemptInput({ endpointId: "ep_r", outcome: "failed", responseStatus: 503, error: "e", failureReason: "http_5xx", attemptedAt: DAY_A + 2 }));
+        await store.record(attemptInput({ endpointId: "ep_r", outcome: "failed", responseStatus: null, error: "e", failureReason: "connection_refused", attemptedAt: DAY_A + 3 }));
+        await store.record(attemptInput({ endpointId: "ep_r", outcome: "succeeded", responseStatus: 200, attemptedAt: DAY_A + 4 }));
+        await store.record(attemptInput({ endpointId: "ep_r", outcome: "failed", responseStatus: 500, error: "legacy", failureReason: null, attemptedAt: DAY_A + 5 }));
+
+        const stats = await store.statsByEndpoint("ep_r", { fromMs: DAY_A, toMs: DAY_C });
+        // All four failures (the legacy null-reason one included) are in `failed`.
+        expect(stats.failed).toBe(4);
+        expect(stats.failureReasons.http_5xx).toBe(2);
+        expect(stats.failureReasons.connection_refused).toBe(1);
+        // Closed domain: every reason key is present, zeros included (metric convention).
+        expect(Object.keys(stats.failureReasons).sort()).toEqual([...DELIVERY_FAILURE_REASONS].sort());
+        expect(stats.failureReasons.dns_failure).toBe(0);
+        // The succeeded attempt never folds into any reason bucket; the legacy
+        // null-reason failure has no cause to attribute, so the classified reasons
+        // sum to `failed` minus that one unclassified attempt.
+        const reasonSum = Object.values(stats.failureReasons).reduce((a, b) => a + b, 0);
+        expect(reasonSum).toBe(3);
+        expect(reasonSum).toBe(stats.failed - 1);
       });
     });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildOpenApiDocument, type OpenApiDocument } from "./openapi.js";
 import { API_ROUTE_KEYS, patternToOpenApiPath } from "./api.js";
 import { API_ERROR_CODES } from "./error-codes.js";
+import { DELIVERY_FAILURE_REASONS } from "../delivery/failure-reason.js";
 import { POSTHORN_VERSION } from "../version.js";
 
 /** HTTP method keys an OpenAPI path item may carry (others, e.g. `parameters`, are not operations). */
@@ -160,6 +161,32 @@ describe("buildOpenApiDocument — error-code contract drift guard", () => {
     // Guards against a vacuous pass (e.g. an empty enum) and a copy-paste dupe.
     expect(API_ERROR_CODES.length).toBeGreaterThanOrEqual(10);
     expect(new Set(API_ERROR_CODES).size).toBe(API_ERROR_CODES.length);
+  });
+});
+
+describe("buildOpenApiDocument — failure-reason breakdown drift guard", () => {
+  it("pins DeliveryFailureReasonCounts properties+required to the closed taxonomy (both directions)", () => {
+    // The per-endpoint EndpointStats.failureReasons breakdown advertises one integer
+    // key per DeliveryFailureReason; the schema is built from DELIVERY_FAILURE_REASONS,
+    // so this tripwire fails loudly if the taxonomy and the published shape ever drift.
+    const counts = buildOpenApiDocument().components.schemas["DeliveryFailureReasonCounts"] as {
+      required: string[];
+      properties: Record<string, { type: string; minimum: number }>;
+    };
+    expect([...counts.required].sort()).toEqual([...DELIVERY_FAILURE_REASONS].sort());
+    expect(Object.keys(counts.properties).sort()).toEqual([...DELIVERY_FAILURE_REASONS].sort());
+    for (const reason of DELIVERY_FAILURE_REASONS) {
+      expect(counts.properties[reason]).toMatchObject({ type: "integer", minimum: 0 });
+    }
+  });
+
+  it("includes failureReasons in EndpointStats and requires it", () => {
+    const stats = buildOpenApiDocument().components.schemas["EndpointStats"] as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(stats.required).toContain("failureReasons");
+    expect(stats.properties["failureReasons"]).toBeDefined();
   });
 });
 

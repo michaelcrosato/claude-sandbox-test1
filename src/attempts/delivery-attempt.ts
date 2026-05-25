@@ -30,6 +30,7 @@ import type { UsageRange } from "../storage/message-store.js";
 import {
   DELIVERY_FAILURE_REASONS,
   type DeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
 } from "../delivery/failure-reason.js";
 
 /** O(1) membership set for validating a {@link DeliveryFailureReason} on intake. */
@@ -226,10 +227,12 @@ export interface DeliveryAttemptStore {
    * Aggregate delivery-attempt statistics for a single endpoint over the
    * half-open epoch-ms range `[range.fromMs, range.toMs)` — the data behind
    * `GET /v1/endpoints/:id/stats`. Returns totals (total, succeeded, failed),
-   * the overall success rate and average attempt duration, and a per-UTC-day
-   * breakdown for trend analysis. All counts are zero and rates/averages are
-   * `null` when no attempts were recorded. Rides a `(endpoint_id, attempted_at)`
-   * index so it stays a bounded range scan as the log grows.
+   * the overall success rate and average attempt duration, a per-UTC-day
+   * breakdown for trend analysis, and a per-{@link DeliveryFailureReason}
+   * breakdown of the failures ({@link EndpointStats.failureReasons}). All counts
+   * are zero and rates/averages are `null` when no attempts were recorded. Rides
+   * a `(endpoint_id, attempted_at)` index so it stays a bounded range scan as the
+   * log grows.
    */
   statsByEndpoint(endpointId: string, range: UsageRange): Promise<EndpointStats>;
 }
@@ -314,6 +317,26 @@ export interface EndpointStats {
   readonly avgDurationMs: number | null;
   /** Per-UTC-day breakdown, oldest day first; only days with at least one attempt. */
   readonly daily: readonly EndpointStatsDay[];
+  /**
+   * Why the failures failed — a per-{@link DeliveryFailureReason} tally of the
+   * `failed` attempts in the window, **every** reason key present (zeros included),
+   * the same closed-domain, all-keys-present convention as the instance-wide
+   * `posthorn_delivery_failures_total{reason}` metric. This is the per-endpoint
+   * third leg of the failure-reason taxonomy: the metric answers "why are
+   * deliveries failing across the whole node", the per-attempt
+   * {@link DeliveryAttempt.failureReason} answers "why did *this* attempt fail",
+   * and this answers "why is *this endpoint* failing" — the data an operator
+   * triages a flapping endpoint from without paging through individual attempts.
+   *
+   * The values sum to `failed` for any window whose failed attempts were all
+   * classified — which is every failure recorded since the `failureReason` column
+   * shipped (the worker always classifies a failed attempt). Legacy failed attempts
+   * recorded before classification read back a `null` reason: they are still counted
+   * in `failed` but, having no cause to attribute, are excluded here — so on a window
+   * spanning that upgrade the breakdown can sum to *less* than `failed`. A succeeded
+   * attempt never carries a reason and is never counted.
+   */
+  readonly failureReasons: DeliveryFailureReasonCounts;
 }
 
 /**

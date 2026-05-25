@@ -1997,12 +1997,27 @@ export function buildOpenApiDocument(): OpenApiDocument {
             failed: { type: "integer", minimum: 0, description: "Attempts that failed (non-2xx, transport, or pre-flight)." },
           },
         },
+        DeliveryFailureReasonCounts: {
+          type: "object",
+          description:
+            "A per-reason tally of failed delivery attempts — one integer per stable " +
+            "`DeliveryFailureReason` code, every key always present (zeros included). The " +
+            "same closed taxonomy the `posthorn_delivery_failures_total{reason}` metric uses.",
+          required: [...DELIVERY_FAILURE_REASONS],
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            DELIVERY_FAILURE_REASONS.map((reason) => [
+              reason,
+              { type: "integer", minimum: 0, description: `Failed attempts classified as \`${reason}\`.` },
+            ]),
+          ),
+        },
         EndpointStats: {
           type: "object",
           description:
             "Aggregate delivery-attempt statistics for a single endpoint over a trailing " +
             "calendar-day window. Use `GET /v1/endpoints/{id}/stats` to retrieve.",
-          required: ["endpointId", "fromMs", "toMs", "total", "succeeded", "failed", "successRate", "avgDurationMs", "daily"],
+          required: ["endpointId", "fromMs", "toMs", "total", "succeeded", "failed", "successRate", "avgDurationMs", "daily", "failureReasons"],
           properties: {
             endpointId: { type: "string", description: "The endpoint these statistics are for." },
             fromMs: epochMs("Inclusive start of the window (epoch ms)."),
@@ -2025,6 +2040,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
               type: "array",
               items: ref("EndpointStatsDay"),
               description: "Per-UTC-day breakdown, oldest day first; only days with at least one attempt.",
+            },
+            failureReasons: {
+              allOf: [ref("DeliveryFailureReasonCounts")],
+              description:
+                "Why the `failed` attempts failed — a per-reason tally to triage a flapping " +
+                "endpoint. Classified failures sum to `failed` (legacy attempts recorded before " +
+                "failure-reason classification have a null reason and are excluded).",
             },
           },
         },

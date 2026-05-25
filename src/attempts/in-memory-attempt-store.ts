@@ -33,6 +33,7 @@ import {
   utcDayKey,
   type UsageRange,
 } from "../storage/message-store.js";
+import { emptyDeliveryFailureCounts } from "../delivery/failure-reason.js";
 
 /** Construction options for {@link InMemoryDeliveryAttemptStore}. */
 export interface InMemoryDeliveryAttemptStoreOptions {
@@ -151,6 +152,7 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
   async statsByEndpoint(endpointId: string, range: UsageRange): Promise<EndpointStats> {
     const { fromMs, toMs } = resolveUsageRange(range);
     const byDay = new Map<string, { attempts: number; succeeded: number; failed: number }>();
+    const failureReasons = emptyDeliveryFailureCounts();
     let total = 0;
     let succeeded = 0;
     let failed = 0;
@@ -169,6 +171,9 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
       } else {
         bucket.failed += 1;
         failed += 1;
+        // A classified failure folds into its reason bucket; a legacy null-reason
+        // failed attempt has no cause to attribute and is left out (still in `failed`).
+        if (attempt.failureReason !== null) failureReasons[attempt.failureReason] += 1;
       }
       byDay.set(day, bucket);
     }
@@ -185,6 +190,7 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
       successRate: total > 0 ? Math.round((succeeded / total) * 10_000) / 10_000 : null,
       avgDurationMs: total > 0 ? Math.round(totalDurationMs / total) : null,
       daily,
+      failureReasons,
     };
   }
 }

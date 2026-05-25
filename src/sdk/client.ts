@@ -20,7 +20,10 @@
  */
 
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
-import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
+import type {
+  DeliveryFailureReason,
+  DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
 import { DEFAULT_TIMEOUT_MS, HttpTransport, type PosthornFetch } from "./http.js";
 
 // The transport mechanics (the `fetch` contract, the error model, the request/timeout
@@ -328,6 +331,15 @@ export interface EndpointStatsView {
   readonly avgDurationMs: number | null;
   /** Per-UTC-day breakdown, oldest day first. */
   readonly daily: readonly EndpointStatsDayView[];
+  /**
+   * Why the `failed` attempts failed — a per-{@link DeliveryFailureReason} tally,
+   * every reason key present (zeros included). Group or sort by this to triage a
+   * flapping endpoint ("mostly `connection_refused`" vs "mostly `http_5xx`")
+   * without paging through individual attempts. Classified failures sum to `failed`
+   * (legacy attempts recorded before failure-reason classification read back a null
+   * reason and are excluded, so a window spanning that upgrade can sum to less).
+   */
+  readonly failureReasons: DeliveryFailureReasonCounts;
 }
 
 /** Options for {@link PosthornClient.listDeliveries}. */

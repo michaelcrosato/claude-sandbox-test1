@@ -110,7 +110,7 @@ const apiKey = (await api("POST", `/v1/admin/apps/${appId}/keys`, {}, ADMIN)).bo
 check("provisioned app + key", Boolean(appId) && Boolean(apiKey));
 
 // ── Case 1: HTTP 5xx → failureReason "http_5xx" ─────────────────────────────
-await api("POST", "/v1/endpoints", { url: receiverUrl }, apiKey);
+const ep1 = await api("POST", "/v1/endpoints", { url: receiverUrl }, apiKey);
 const m1 = await api("POST", "/v1/messages", { eventType: "e", payload: { n: 1 } }, apiKey);
 const id1 = m1.body.message.id;
 const a1 = await waitForAttempt(id1, apiKey);
@@ -216,6 +216,36 @@ check(
     metricsText.includes('posthorn_dead_letter_tasks{reason="http_5xx"} 0') &&
     metricsText.includes('posthorn_dead_letter_tasks{reason="other"} 0'),
 );
+
+// ── Case 5: the per-endpoint failure-reason breakdown (GET /v1/endpoints/:id/stats) ──
+// The taxonomy's third leg: the receiver endpoint (ep1) accrued real http_5xx failures,
+// the dead endpoint (ep2) real connection_refused ones. The aggregate must attribute each
+// to the right endpoint with the full reason vocabulary present (zeros included), and must
+// not leak one endpoint's reasons onto the other.
+async function waitForStatsReason(endpointId, reason, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await api("GET", `/v1/endpoints/${endpointId}/stats`, undefined, apiKey);
+    const fr = res.body?.failureReasons;
+    if (fr && fr[reason] >= 1) return res.body;
+    if (Date.now() > deadline) return res.body;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+const REASON_KEYS = [
+  "connect_timeout", "request_timeout", "dns_failure", "connection_refused",
+  "connection_reset", "tls_error", "ssrf_blocked", "http_4xx", "http_5xx",
+  "http_other", "no_endpoint", "expired", "other",
+];
+const stats1 = await waitForStatsReason(ep1.body.id, "http_5xx");
+check("stats(ep1): total/failed ≥ 1", stats1?.total >= 1 && stats1?.failed >= 1, `(total ${stats1?.total}, failed ${stats1?.failed})`);
+check("stats(ep1): failureReasons.http_5xx ≥ 1", stats1?.failureReasons?.http_5xx >= 1, `(got ${stats1?.failureReasons?.http_5xx})`);
+check("stats(ep1): no connection_refused leakage", stats1?.failureReasons?.connection_refused === 0, `(got ${stats1?.failureReasons?.connection_refused})`);
+check("stats(ep1): every reason key present (zeros included)", REASON_KEYS.every((k) => typeof stats1?.failureReasons?.[k] === "number"));
+
+const stats2 = await waitForStatsReason(ep2.body.id, "connection_refused");
+check("stats(ep2): failureReasons.connection_refused ≥ 1", stats2?.failureReasons?.connection_refused >= 1, `(got ${stats2?.failureReasons?.connection_refused})`);
+check("stats(ep2): no http_5xx leakage", stats2?.failureReasons?.http_5xx === 0, `(got ${stats2?.failureReasons?.http_5xx})`);
 
 // ── Teardown ────────────────────────────────────────────────────────────────
 await gw.stop();
