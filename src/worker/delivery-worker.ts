@@ -901,6 +901,7 @@ export class DeliveryWorker {
           task,
           leaseToken,
           error ?? "unknown delivery error",
+          failureReason,
           nowMs,
           retryAfterMs ?? undefined,
           nonRetryable ? { delaysMs: [] } : effectivePolicy,
@@ -1041,6 +1042,7 @@ export class DeliveryWorker {
     task: DeliveryTask,
     leaseToken: string,
     error: string,
+    failureReason: DeliveryFailureReason | null,
     nowMs: number,
     minDelayMs?: number,
     retryPolicy?: RetryPolicy,
@@ -1049,6 +1051,7 @@ export class DeliveryWorker {
       const input: FailInput = {
         error,
         nowMs,
+        failureReason,
         ...(minDelayMs !== undefined ? { minDelayMs } : {}),
         ...(retryPolicy !== undefined ? { retryPolicy } : {}),
       };

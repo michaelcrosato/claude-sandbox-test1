@@ -130,6 +130,7 @@ export function describeDeliveryQueueContract(
         expect(task.leaseExpiresAt).toBeNull();
         expect(task.leaseToken).toBeNull();
         expect(task.lastError).toBeNull();
+        expect(task.failureReason).toBeNull();
         expect(task.createdAt).toBe(clock.now());
         expect(task.updatedAt).toBe(clock.now());
         expect(await queue.get(task.id)).toEqual(task);
@@ -361,6 +362,70 @@ export function describeDeliveryQueueContract(
         ).rejects.toBeInstanceOf(StaleLeaseError);
       });
 
+      describe("failureReason denormalization", () => {
+        it("stamps the structured reason on the task and round-trips through get", async () => {
+          await queue.enqueue({ messageId: "m" });
+          const [task] = await queue.claimDue({ nowMs: clock.now() });
+          const failed = await queue.fail(task!.id, task!.leaseToken!, {
+            error: "boom",
+            failureReason: "http_5xx",
+            nowMs: clock.now(),
+          });
+          expect(failed.failureReason).toBe("http_5xx");
+          expect((await queue.get(task!.id))?.failureReason).toBe("http_5xx");
+        });
+
+        it("preserves the reason across a reclaim, then the latest failure wins", async () => {
+          await queue.enqueue({ messageId: "m" });
+          let [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, {
+            error: "e1",
+            failureReason: "connect_timeout",
+            nowMs: clock.now(),
+          });
+          // Preserved while pending and across the next claim — mirrors lastError.
+          clock.advance(1_000);
+          [t] = await queue.claimDue({ nowMs: clock.now() });
+          expect(t!.failureReason).toBe("connect_timeout");
+          const again = await queue.fail(t!.id, t!.leaseToken!, {
+            error: "e2",
+            failureReason: "http_4xx",
+            nowMs: clock.now(),
+          });
+          expect(again.failureReason).toBe("http_4xx");
+        });
+
+        it("resets the reason to null when a later failure carries none", async () => {
+          await queue.enqueue({ messageId: "m" });
+          let [t] = await queue.claimDue({ nowMs: clock.now() });
+          await queue.fail(t!.id, t!.leaseToken!, {
+            error: "classified",
+            failureReason: "tls_error",
+            nowMs: clock.now(),
+          });
+          clock.advance(1_000);
+          [t] = await queue.claimDue({ nowMs: clock.now() });
+          const failed = await queue.fail(t!.id, t!.leaseToken!, {
+            error: "unclassified",
+            nowMs: clock.now(),
+          });
+          expect(failed.failureReason).toBeNull();
+        });
+
+        it("rejects an unknown failureReason", async () => {
+          await queue.enqueue({ messageId: "m" });
+          const [task] = await queue.claimDue({ nowMs: clock.now() });
+          await expect(
+            queue.fail(task!.id, task!.leaseToken!, {
+              // @ts-expect-error — failureReason must be a known DeliveryFailureReason
+              failureReason: "not_a_reason",
+              error: "e",
+              nowMs: clock.now(),
+            }),
+          ).rejects.toThrow(TypeError);
+        });
+      });
+
       describe("minDelayMs floor (Retry-After support)", () => {
         it("clamps nextAttemptAt when minDelayMs exceeds the policy delay", async () => {
           await queue.enqueue({ messageId: "m" });
@@ -479,10 +544,13 @@ export function describeDeliveryQueueContract(
           const [t] = await queue.claimDue({ nowMs: clock.now() });
           await queue.fail(t!.id, t!.leaseToken!, {
             error: "down",
+            failureReason: "connection_refused",
             nowMs: clock.now(),
           });
         }
-        expect((await queue.get(enq.id))?.status).toBe("dead_letter");
+        const dead = await queue.get(enq.id);
+        expect(dead?.status).toBe("dead_letter");
+        expect(dead?.failureReason).toBe("connection_refused"); // recorded on the terminal task
         return enq.id;
       }
 
@@ -495,6 +563,7 @@ export function describeDeliveryQueueContract(
         expect(revived.attempts).toBe(0); // budget reset
         expect(revived.nextAttemptAt).toBeNull(); // deliverable now
         expect(revived.lastError).toBeNull(); // clean slate
+        expect(revived.failureReason).toBeNull(); // clean slate (mirrors lastError)
         expect(revived.leaseToken).toBeNull();
         expect(revived.endpointId).toBe("ep_1"); // opaque reference preserved
         expect(revived.updatedAt).toBe(clock.now());

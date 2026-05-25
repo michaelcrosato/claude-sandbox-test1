@@ -122,6 +122,7 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      failureReason: null,
       priority,
       createdAt: nowMs,
       updatedAt: nowMs,
@@ -170,9 +171,9 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     leaseToken: string,
     input: FailInput,
   ): Promise<DeliveryTask> {
-    const { error, nowMs, minDelayMs, retryPolicy } = normalizeFailInput(input);
+    const { error, nowMs, minDelayMs, retryPolicy, failureReason } = normalizeFailInput(input);
     const task = this.#requireLeaseHolder(taskId, leaseToken);
-    let next = applyFailure(retryPolicy ?? this.#policy, task, error, nowMs, this.#jitter);
+    let next = applyFailure(retryPolicy ?? this.#policy, task, error, failureReason, nowMs, this.#jitter);
     if (
       next.status === "pending" &&
       next.nextAttemptAt !== null &&

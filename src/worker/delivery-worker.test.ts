@@ -550,6 +550,7 @@ describe("DeliveryWorker.processOnce", () => {
       leaseExpiresAt: 30_000,
       leaseToken: "tok",
       lastError: null,
+      failureReason: null,
       priority: 0,
       createdAt: 0,
       updatedAt: 0,

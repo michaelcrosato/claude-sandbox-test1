@@ -41,6 +41,45 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T22:11 · iter-0094 · GREEN · denormalize-failure-reason-onto-delivery-task
+
+- **Baseline:** clean main @ `bea57cf` (iter-0093 CSP confirmations). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1771/1771**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Land the foundation of the long-deferred "core-FSM denormalization" carried across the
+  iter-0089→0093 Next lists: the structured `failureReason` enum lived only on the per-attempt audit
+  record (iter-0088), so `GET /v1/deliveries` exposed *why* a delivery failed only via the free-text
+  `lastError` or by drilling into the attempt log. Denormalize the latest classified reason onto the
+  `DeliveryTask` itself and surface it on the delivery API — one-query failure triage for operators,
+  and the column the future `?failureReason=` filter will index. Filter deferred to keep this green.
+- **Changed:**
+  - `delivery/failure-reason.ts`: new `isDeliveryFailureReason` guard (one source of truth for the
+    closed domain — the filter will reuse it).
+  - `queue/delivery-queue.ts`: `DeliveryTask.failureReason` + optional `FailInput.failureReason`;
+    `normalizeFailInput` validates it (unknown code → `TypeError`); `applyFailure` sets it,
+    `applyManualRetry` clears it to `null`. Other transitions preserve it via `...task` — exactly
+    mirroring `lastError`'s reducer lifecycle (set on fail, wiped on revive, kept on claim/success).
+  - `worker/delivery-worker.ts`: `#settleFailure` threads the already-classified reason into `fail()`.
+  - All three backends: `failure_reason` column + idempotent additive migration (sqlite STRICT
+    `ALTER`, postgres `ADD COLUMN IF NOT EXISTS`, in-memory snapshot) + insert/persist/hydrate.
+  - `http/api.ts` `deliveryView`+`endpointDeliveryView`, `http/openapi.ts` `Delivery` schema (enum +
+    required), `sdk/client.ts` 3 delivery view types — `failureReason` now in the public contract.
+  - Tests: +conformance (round-trip, latest-wins, reset-to-null, reject-unknown, cleared-on-retry,
+    recorded-on-dead-letter) ×2 live backends = +8; `smoke-failure-reason.mjs` +3 (denormalized
+    reason on `GET /v1/deliveries` for http_5xx + connection_refused, and persisted across restart).
+- **Decisions:** Denormalize as a task field (worker-supplied classification) rather than extend the
+  `DeliveryState` reducer — the reason isn't derivable from FSM inputs, and the overlay-spread already
+  gives correct preserve/clear semantics for free. Split off the query filter (additive, lower-risk
+  once the indexed column exists) so the migration-bearing change lands green on its own.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1779/1779** (+8; 52 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-failure-reason.mjs` **13/13** (+3, real failures
+  through compiled ESM on file-backed node:sqlite incl. restart); `smoke-portal-delivery` 12/12 +
+  `smoke-dashboard` 32/32 (no regression); `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Next:** Add the `?failureReason=` filter on `GET /v1/deliveries` (`ListByAppOptions.failureReason`
+  + `idx_delivery_tasks_app_reason` partial index + parse/validate via `isDeliveryFailureReason`) —
+  the payoff this foundation enables; or surface the structured reason in the portal/dashboard
+  delivery rows; or a `posthorn_deliveries_by_reason` gauge off the denormalized column.
+
 ## 2026-05-24T22:05 · iter-0093 · GREEN · csp-safe-destructive-action-confirmations
 
 - **Baseline:** clean main @ `7799e55` (iter-0092 HSTS). Verified green first: `tsc --noEmit` 0,

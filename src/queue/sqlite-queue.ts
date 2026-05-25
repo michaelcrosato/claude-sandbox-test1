@@ -101,6 +101,7 @@ interface TaskRow {
   readonly lease_expires_at: number | null;
   readonly lease_token: string | null;
   readonly last_error: string | null;
+  readonly failure_reason: string | null;
   readonly priority: number;
   readonly created_at: number;
   readonly updated_at: number;
@@ -119,6 +120,9 @@ function rowToTask(row: TaskRow): DeliveryTask {
       row.lease_expires_at === null ? null : Number(row.lease_expires_at),
     leaseToken: row.lease_token,
     lastError: row.last_error,
+    // Cast the stored TEXT to the closed reason domain — the same trust model as
+    // `status` above (a row written by this code is always a valid code or null).
+    failureReason: row.failure_reason as DeliveryTask["failureReason"],
     priority: row.priority ?? 0,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
@@ -179,6 +183,8 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#migrateAppIdColumn();
     // Ensure priority column exists (idempotent; handles pre-migration DBs).
     this.#migratePriorityColumn();
+    // Ensure failure_reason column exists (idempotent; handles pre-migration DBs).
+    this.#migrateFailureReasonColumn();
 
     this.#selectTask = this.#db.prepare(
       "SELECT * FROM delivery_tasks WHERE id = ?",
@@ -262,13 +268,15 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     this.#insertTask = this.#db.prepare(
       `INSERT INTO delivery_tasks
          (id, message_id, endpoint_id, app_id, status, attempts, next_attempt_at,
-          lease_expires_at, lease_token, last_error, priority, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lease_expires_at, lease_token, last_error, failure_reason, priority,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateTask = this.#db.prepare(
       `UPDATE delivery_tasks
          SET status = ?, attempts = ?, next_attempt_at = ?,
-             lease_expires_at = ?, lease_token = ?, last_error = ?, updated_at = ?
+             lease_expires_at = ?, lease_token = ?, last_error = ?,
+             failure_reason = ?, updated_at = ?
        WHERE id = ?`,
     );
     this.#countTasks = this.#db.prepare(
@@ -292,6 +300,21 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     }[];
     if (columns.some((c) => c.name === "priority")) return;
     this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+  }
+
+  /**
+   * Ensure the `failure_reason` column exists. A database created before structured
+   * failure reasons were denormalized onto the task lacks it; add it nullable so
+   * existing rows read back `failureReason = null` (honest — the structured code was
+   * never recorded for those failures; their free-text `last_error` is unaffected).
+   * For a fresh database the column is already in {@link SCHEMA} and the ALTER is skipped.
+   */
+  #migrateFailureReasonColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_tasks)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "failure_reason")) return;
+    this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN failure_reason TEXT");
   }
 
   /**
@@ -348,6 +371,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      failureReason: null,
       priority,
       createdAt: nowMs,
       updatedAt: nowMs,
@@ -364,6 +388,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       task.leaseExpiresAt,
       task.leaseToken,
       task.lastError,
+      task.failureReason,
       task.priority,
       task.createdAt,
       task.updatedAt,
@@ -410,10 +435,10 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     leaseToken: string,
     input: FailInput,
   ): Promise<DeliveryTask> {
-    const { error, nowMs, minDelayMs, retryPolicy } = normalizeFailInput(input);
+    const { error, nowMs, minDelayMs, retryPolicy, failureReason } = normalizeFailInput(input);
     return this.#transaction(() => {
       const task = this.#requireLeaseHolder(taskId, leaseToken);
-      let next = applyFailure(retryPolicy ?? this.#policy, task, error, nowMs, this.#jitter);
+      let next = applyFailure(retryPolicy ?? this.#policy, task, error, failureReason, nowMs, this.#jitter);
       if (
         next.status === "pending" &&
         next.nextAttemptAt !== null &&
@@ -597,6 +622,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       task.leaseExpiresAt,
       task.leaseToken,
       task.lastError,
+      task.failureReason,
       task.updatedAt,
       task.id,
     );
@@ -651,6 +677,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
   lease_expires_at INTEGER,
   lease_token      TEXT,
   last_error       TEXT,
+  failure_reason   TEXT,
   priority         INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL,
   updated_at       INTEGER NOT NULL

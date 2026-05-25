@@ -37,6 +37,10 @@ import {
   type JitterOptions,
   type RetryPolicy,
 } from "../delivery/retry-policy.js";
+import {
+  isDeliveryFailureReason,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 
 /**
  * A unit of delivery work: "attempt to deliver message `messageId`." Immutable;
@@ -85,6 +89,15 @@ export interface DeliveryTask {
   readonly leaseToken: string | null;
   /** Detail of the most recent failure, if any. */
   readonly lastError: string | null;
+  /**
+   * The structured, machine-readable cause of the most recent failure — one stable
+   * {@link DeliveryFailureReason} code (the queryable companion to the free-text
+   * `lastError`). Denormalized from the failing attempt onto the task at `fail` time
+   * so a per-tenant delivery listing can group/filter by *why* without joining the
+   * attempt log. `null` on a task that has never failed, and cleared on a manual
+   * retry (a fresh slate), exactly mirroring `lastError`'s lifecycle.
+   */
+  readonly failureReason: DeliveryFailureReason | null;
   /**
    * Delivery priority: `1` = high, `0` = normal, `-1` = low. Higher values are
    * claimed first by `claimDue` when multiple tasks are due simultaneously. Set
@@ -139,6 +152,13 @@ export interface ClaimOptions {
 export interface FailInput {
   /** Human-readable failure reason, recorded as `lastError`. */
   readonly error: string;
+  /**
+   * The structured classification of this failure, denormalized onto the task as
+   * its {@link DeliveryTask.failureReason}. Omit (or `null`) when no classification
+   * applies (e.g. an internal caller without a worker's signals); the prior reason
+   * is then overwritten with `null`, keeping it in lock-step with `error`.
+   */
+  readonly failureReason?: DeliveryFailureReason | null;
   /** Time the failure occurred, epoch ms — the basis for the next retry. */
   readonly nowMs: number;
   /**
@@ -562,6 +582,7 @@ export function normalizeFailInput(input: FailInput): {
   nowMs: number;
   minDelayMs: number | undefined;
   retryPolicy: RetryPolicy | undefined;
+  failureReason: DeliveryFailureReason | null;
 } {
   if (typeof input.error !== "string") {
     throw new TypeError("fail error must be a string");
@@ -578,7 +599,23 @@ export function normalizeFailInput(input: FailInput): {
       "fail minDelayMs must be a non-negative finite number when provided",
     );
   }
-  return { error: input.error, nowMs: input.nowMs, minDelayMs, retryPolicy: input.retryPolicy };
+  const { failureReason } = input;
+  if (
+    failureReason !== undefined &&
+    failureReason !== null &&
+    !isDeliveryFailureReason(failureReason)
+  ) {
+    throw new TypeError(
+      "fail failureReason must be a known DeliveryFailureReason or null when provided",
+    );
+  }
+  return {
+    error: input.error,
+    nowMs: input.nowMs,
+    minDelayMs,
+    retryPolicy: input.retryPolicy,
+    failureReason: failureReason ?? null,
+  };
 }
 
 /** Project the FSM-relevant fields of a task into a {@link DeliveryState}. */
@@ -714,6 +751,9 @@ export function applyManualRetry(
     leaseExpiresAt: null,
     leaseToken: null,
     lastError: next.lastError,
+    // Clear the structured reason on revival too — the reducer wipes `lastError`
+    // for a fresh slate, and this field tracks it in lock-step.
+    failureReason: null,
     updatedAt: nowMs,
   };
 }
@@ -782,6 +822,7 @@ export function applyFailure(
   policy: RetryPolicy,
   task: DeliveryTask,
   error: string,
+  failureReason: DeliveryFailureReason | null,
   nowMs: number,
   jitter: JitterOptions = {},
 ): DeliveryTask {
@@ -799,6 +840,9 @@ export function applyFailure(
     leaseExpiresAt: null,
     leaseToken: null,
     lastError: next.lastError,
+    // Denormalize the structured reason alongside `lastError`. The reducer carries
+    // `lastError`; this field is the worker's classification, set in the same step.
+    failureReason,
     updatedAt: nowMs,
   };
 }

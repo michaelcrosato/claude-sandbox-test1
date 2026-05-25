@@ -756,9 +756,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
           description:
             "Retrieve the current state of one `(message, endpoint)` delivery task by its " +
             "ID. Returns the same shape as a row in `GET /v1/deliveries` — status, attempts, " +
-            "nextAttemptAt, lastError, messageId, and endpointId — letting you navigate to " +
-            "the full message or endpoint detail. Another tenant's (or unknown) delivery is " +
-            "`404`.",
+            "nextAttemptAt, lastError, failureReason, messageId, and endpointId — letting you " +
+            "navigate to the full message or endpoint detail. Another tenant's (or unknown) " +
+            "delivery is `404`.",
           security: [{ BearerAuth: [] }],
           parameters: [
             {
@@ -1365,6 +1365,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "attempts",
             "nextAttemptAt",
             "lastError",
+            "failureReason",
             "createdAt",
             "updatedAt",
           ],
@@ -1383,6 +1384,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
               description: "When the next attempt is due (epoch ms) while `pending`; otherwise null.",
             },
             lastError: { type: ["string", "null"], description: "Detail of the most recent failure." },
+            failureReason: {
+              type: ["string", "null"],
+              enum: [...DELIVERY_FAILURE_REASONS, null],
+              description:
+                "The structured, machine-readable cause of the most recent failure — one stable " +
+                "code (the queryable companion to the free-text `lastError`), denormalized from the " +
+                "failing attempt. Null on a delivery that has never failed, cleared by an operator " +
+                "retry, and null for failures recorded before this field shipped.",
+            },
             createdAt: epochMs("Enqueue time, epoch ms."),
             updatedAt: epochMs("Last state change, epoch ms."),
           },

@@ -637,6 +637,7 @@ function deliveryView(task: DeliveryTask): Record<string, unknown> {
     attempts: task.attempts,
     nextAttemptAt: task.nextAttemptAt,
     lastError: task.lastError,
+    failureReason: task.failureReason,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -656,6 +657,7 @@ function endpointDeliveryView(task: DeliveryTask): Record<string, unknown> {
     attempts: task.attempts,
     nextAttemptAt: task.nextAttemptAt,
     lastError: task.lastError,
+    failureReason: task.failureReason,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };

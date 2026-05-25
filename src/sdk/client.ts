@@ -182,6 +182,13 @@ export interface DeliveryView {
   readonly nextAttemptAt: number | null;
   /** Detail of the most recent failure, if any. */
   readonly lastError: string | null;
+  /**
+   * The structured, machine-readable cause of the most recent failure — one stable
+   * code (the queryable companion to the free-text `lastError`), denormalized from the
+   * failing attempt. `null` on a delivery that has never failed, cleared by an operator
+   * retry, and `null` for failures recorded before this field shipped.
+   */
+  readonly failureReason: DeliveryFailureReason | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -265,6 +272,8 @@ export interface EndpointDeliveryView {
   readonly attempts: number;
   readonly nextAttemptAt: number | null;
   readonly lastError: string | null;
+  /** Structured cause of the most recent failure; see {@link DeliveryView.failureReason}. */
+  readonly failureReason: DeliveryFailureReason | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -350,6 +359,8 @@ export interface AppDeliveryView {
   readonly attempts: number;
   readonly nextAttemptAt: number | null;
   readonly lastError: string | null;
+  /** Structured cause of the most recent failure; see {@link DeliveryView.failureReason}. */
+  readonly failureReason: DeliveryFailureReason | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }

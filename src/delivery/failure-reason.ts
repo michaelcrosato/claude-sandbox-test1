@@ -91,6 +91,19 @@ export const DELIVERY_FAILURE_REASONS: readonly DeliveryFailureReason[] = [
   "other",
 ];
 
+/** O(1) membership set backing {@link isDeliveryFailureReason}. */
+const DELIVERY_FAILURE_REASON_SET: ReadonlySet<string> = new Set(DELIVERY_FAILURE_REASONS);
+
+/**
+ * Whether `value` is one of the closed {@link DeliveryFailureReason} codes. The
+ * single guard used wherever an untrusted string crosses into the reason domain —
+ * a `?failureReason=` query value or a hand-edited database row — so the taxonomy
+ * has exactly one source of truth and no caller hand-maintains a parallel list.
+ */
+export function isDeliveryFailureReason(value: unknown): value is DeliveryFailureReason {
+  return typeof value === "string" && DELIVERY_FAILURE_REASON_SET.has(value);
+}
+
 /** A per-reason count, one entry per {@link DeliveryFailureReason}. */
 export type DeliveryFailureReasonCounts = Readonly<Record<DeliveryFailureReason, number>>;
 

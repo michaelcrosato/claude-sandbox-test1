@@ -67,6 +67,7 @@ interface TaskRow {
   readonly lease_expires_at: string | null;
   readonly lease_token: string | null;
   readonly last_error: string | null;
+  readonly failure_reason: string | null;
   readonly priority: number; // INTEGER — pg returns small ints as number
   readonly created_at: string;
   readonly updated_at: string;
@@ -84,6 +85,8 @@ function rowToTask(row: TaskRow): DeliveryTask {
     leaseExpiresAt: row.lease_expires_at === null ? null : Number(row.lease_expires_at),
     leaseToken: row.lease_token,
     lastError: row.last_error,
+    // Cast the stored TEXT to the closed reason domain — same trust model as `status`.
+    failureReason: row.failure_reason as DeliveryTask["failureReason"],
     priority: row.priority ?? 0,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
@@ -125,6 +128,11 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
     await this.#pool.query(
       "ALTER TABLE delivery_tasks ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0",
     );
+    // Additive migration: denormalized structured failure reason. Existing rows read
+    // back null (the code was never recorded for failures that predate this column).
+    await this.#pool.query(
+      "ALTER TABLE delivery_tasks ADD COLUMN IF NOT EXISTS failure_reason TEXT",
+    );
   }
 
   async truncate(): Promise<void> {
@@ -150,19 +158,21 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
       leaseExpiresAt: null,
       leaseToken: null,
       lastError: null,
+      failureReason: null,
       priority,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
     await this.#pool.query(
       "INSERT INTO delivery_tasks (id, message_id, endpoint_id, app_id, status, attempts," +
-        " next_attempt_at, lease_expires_at, lease_token, last_error, priority, created_at, updated_at)" +
-        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+        " next_attempt_at, lease_expires_at, lease_token, last_error, failure_reason," +
+        " priority, created_at, updated_at)" +
+        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
       [
         task.id, task.messageId, task.endpointId, task.appId,
         task.status, task.attempts, task.nextAttemptAt,
         task.leaseExpiresAt, task.leaseToken, task.lastError,
-        task.priority, task.createdAt, task.updatedAt,
+        task.failureReason, task.priority, task.createdAt, task.updatedAt,
       ],
     );
     return task;
@@ -225,12 +235,12 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
   }
 
   async fail(taskId: string, leaseToken: string, input: FailInput): Promise<DeliveryTask> {
-    const { error, nowMs, minDelayMs, retryPolicy } = normalizeFailInput(input);
+    const { error, nowMs, minDelayMs, retryPolicy, failureReason } = normalizeFailInput(input);
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
       const task = await this.#requireLeaseHolder(client, taskId, leaseToken);
-      let next = applyFailure(retryPolicy ?? this.#policy, task, error, nowMs, this.#jitter);
+      let next = applyFailure(retryPolicy ?? this.#policy, task, error, failureReason, nowMs, this.#jitter);
       if (
         next.status === "pending" &&
         next.nextAttemptAt !== null &&
@@ -452,11 +462,12 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
   async #persist(client: PoolClient, task: DeliveryTask): Promise<void> {
     await client.query(
       "UPDATE delivery_tasks SET status=$1, attempts=$2, next_attempt_at=$3," +
-        " lease_expires_at=$4, lease_token=$5, last_error=$6, updated_at=$7 WHERE id=$8",
+        " lease_expires_at=$4, lease_token=$5, last_error=$6, failure_reason=$7," +
+        " updated_at=$8 WHERE id=$9",
       [
         task.status, task.attempts, task.nextAttemptAt,
         task.leaseExpiresAt, task.leaseToken, task.lastError,
-        task.updatedAt, task.id,
+        task.failureReason, task.updatedAt, task.id,
       ],
     );
   }
@@ -490,6 +501,7 @@ CREATE TABLE IF NOT EXISTS delivery_tasks (
   lease_expires_at BIGINT,
   lease_token      TEXT,
   last_error       TEXT,
+  failure_reason   TEXT,
   priority         INTEGER NOT NULL DEFAULT 0,
   created_at       BIGINT  NOT NULL,
   updated_at       BIGINT  NOT NULL

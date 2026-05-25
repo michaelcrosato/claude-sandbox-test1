@@ -27,6 +27,7 @@ function taskWithEndpoint(endpointId: string | null): DeliveryTask {
     leaseExpiresAt: 1,
     leaseToken: "tok",
     lastError: null,
+    failureReason: null,
     priority: 0,
     createdAt: 0,
     updatedAt: 0,

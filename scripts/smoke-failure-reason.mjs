@@ -79,6 +79,30 @@ async function waitForAttempt(messageId, apiKey, timeoutMs = 8000) {
   }
 }
 
+/** Find the delivery for (messageId[, endpointId]) in the tenant's GET /v1/deliveries list. */
+async function findDelivery(messageId, apiKey, endpointId = null) {
+  const res = await api("GET", "/v1/deliveries", undefined, apiKey);
+  return (
+    (res.body?.data ?? []).find(
+      (d) => d.messageId === messageId && (endpointId === null || d.endpointId === endpointId),
+    ) ?? null
+  );
+}
+
+/**
+ * Poll GET /v1/deliveries until the delivery for (messageId[, endpointId]) carries a
+ * denormalized failureReason — the task is settled a hair after its attempt is recorded.
+ */
+async function waitForDeliveryReason(messageId, apiKey, endpointId = null, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const d = await findDelivery(messageId, apiKey, endpointId);
+    if (d && d.failureReason !== null) return d;
+    if (Date.now() > deadline) return d;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 // ── Provision a tenant + key ────────────────────────────────────────────────
 const appRes = await api("POST", "/v1/admin/apps", { name: "smoke" }, ADMIN);
 const appId = appRes.body.id;
@@ -94,6 +118,9 @@ check("5xx: an attempt was recorded", Boolean(a1));
 check("5xx: outcome failed", a1?.outcome === "failed");
 check("5xx: responseStatus 500", a1?.responseStatus === 500);
 check("5xx: failureReason classified http_5xx", a1?.failureReason === "http_5xx", `(got ${a1?.failureReason})`);
+// The same structured code is denormalized onto the delivery task itself (GET /v1/deliveries).
+const d1 = await waitForDeliveryReason(id1, apiKey);
+check("5xx: delivery.failureReason denormalized http_5xx", d1?.failureReason === "http_5xx", `(got ${d1?.failureReason})`);
 
 // ── Case 2: refused connection → failureReason "connection_refused" ─────────
 const ep2 = await api("POST", "/v1/endpoints", { url: deadUrl }, apiKey);
@@ -119,6 +146,13 @@ check(
   a2?.failureReason === "connection_refused",
   `(got ${a2?.failureReason})`,
 );
+// And denormalized onto the dead-endpoint delivery task.
+const d2 = await waitForDeliveryReason(id2, apiKey, ep2.body.id);
+check(
+  "refused: delivery.failureReason denormalized connection_refused",
+  d2?.failureReason === "connection_refused",
+  `(got ${d2?.failureReason})`,
+);
 
 // ── Case 3: the reason survives a restart on the same node:sqlite files ─────
 await gw.stop();
@@ -129,6 +163,14 @@ const after = await api("GET", `/v1/messages/${id1}/attempts`, undefined, apiKey
 const survived = after.body?.data?.[0];
 check("restart: the recorded attempt survives", Boolean(survived));
 check("restart: failureReason still http_5xx", survived?.failureReason === "http_5xx", `(got ${survived?.failureReason})`);
+// The denormalized task-level reason survives too — proves the new failure_reason column
+// is persisted and re-hydrated from node:sqlite, not just held in memory.
+const d1after = await findDelivery(id1, apiKey);
+check(
+  "restart: delivery.failureReason persisted http_5xx",
+  d1after?.failureReason === "http_5xx",
+  `(got ${d1after?.failureReason})`,
+);
 
 // ── Teardown ────────────────────────────────────────────────────────────────
 await gw.stop();
