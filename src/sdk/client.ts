@@ -344,6 +344,13 @@ export interface ListDeliveriesParams {
    * statuses. Common debugging use: `"dead_letter"` to surface failed deliveries.
    */
   readonly status?: "pending" | "delivering" | "succeeded" | "dead_letter" | null;
+  /**
+   * Filter to deliveries whose latest failure has this structured reason code —
+   * one-query failure triage ("show me everything that failed with
+   * `connection_refused`"). Omit (or `null`) for no reason filter. Composes with
+   * `status`. Deliveries that have never failed are excluded when this is set.
+   */
+  readonly failureReason?: DeliveryFailureReason | null;
 }
 
 /**
@@ -1168,9 +1175,11 @@ export class PosthornClient {
   /**
    * List all deliveries for the authenticated tenant, newest-first —
    * `GET /v1/deliveries`. The app-wide cross-endpoint view: every (message,
-   * endpoint) delivery pair with `status`, `attempts`, `lastError`, `messageId`,
-   * and `endpointId`. Filter by `?status=dead_letter` to surface all failed
-   * deliveries at a glance — the canonical "what broke?" debugging view.
+   * endpoint) delivery pair with `status`, `attempts`, `lastError`,
+   * `failureReason`, `messageId`, and `endpointId`. Filter by `status:
+   * "dead_letter"` to surface all failed deliveries, and/or by `failureReason`
+   * (e.g. `"connection_refused"`) for one-query failure triage — the two filters
+   * compose into the canonical "what broke, and why?" debugging view.
    * Keyset-paginated: pass the returned {@link AppDeliveryListPage.nextCursor}
    * back as {@link ListDeliveriesParams.cursor} (`null` = last page).
    */
@@ -1179,6 +1188,9 @@ export class PosthornClient {
     if (params.limit !== undefined) query.set("limit", String(params.limit));
     if (params.cursor !== undefined && params.cursor !== null) query.set("cursor", params.cursor);
     if (params.status !== undefined && params.status !== null) query.set("status", params.status);
+    if (params.failureReason !== undefined && params.failureReason !== null) {
+      query.set("failureReason", params.failureReason);
+    }
     const qs = query.toString();
     return this.#transport.request<AppDeliveryListPage>(
       "GET",

@@ -154,6 +154,32 @@ check(
   `(got ${d2?.failureReason})`,
 );
 
+// ── Case 2.5: the ?failureReason= triage filter (one-query failure lookup) ──
+// id1 fanned to one endpoint (http_5xx). id2 fanned to BOTH endpoints, so it has an
+// http_5xx task (receiver) and a connection_refused task (dead port). The filter must
+// return only rows matching the requested reason — no cross-reason leakage.
+const only5xx = await api("GET", "/v1/deliveries?failureReason=http_5xx", undefined, apiKey);
+const rows5xx = only5xx.body?.data ?? [];
+check("filter http_5xx: returns at least one row", rows5xx.length >= 1);
+check("filter http_5xx: every row carries http_5xx", rows5xx.every((d) => d.failureReason === "http_5xx"));
+check("filter http_5xx: includes id1's delivery", rows5xx.some((d) => d.messageId === id1));
+
+const onlyRefused = await api("GET", "/v1/deliveries?failureReason=connection_refused", undefined, apiKey);
+const rowsRefused = onlyRefused.body?.data ?? [];
+check("filter connection_refused: returns at least one row", rowsRefused.length >= 1);
+check(
+  "filter connection_refused: every row carries connection_refused (no http_5xx leakage)",
+  rowsRefused.every((d) => d.failureReason === "connection_refused"),
+);
+check(
+  "filter connection_refused: includes the dead-endpoint delivery",
+  rowsRefused.some((d) => d.endpointId === ep2.body.id),
+);
+
+// An unrecognised reason code is a 400, not a silent empty list.
+const badReason = await api("GET", "/v1/deliveries?failureReason=not_a_reason", undefined, apiKey);
+check("filter: unrecognised failureReason → 400", badReason.status === 400, `(got ${badReason.status})`);
+
 // ── Case 3: the reason survives a restart on the same node:sqlite files ─────
 await gw.stop();
 gw = boot();

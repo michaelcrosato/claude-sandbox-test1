@@ -18,9 +18,11 @@ import {
   StaleLeaseError,
   UnknownDeliveryTaskError,
   type DeliveryQueue,
+  type DeliveryTask,
   type ListByAppOptions,
 } from "./delivery-queue.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
+import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
 import {
   fixedSchedule,
   type JitterOptions,
@@ -983,6 +985,107 @@ export function describeDeliveryQueueContract(
         const okOnly = await queue.listByApp("app_1", { status: "succeeded" });
         expect(okOnly.deliveries).toHaveLength(1);
         expect(okOnly.deliveries[0]!.id).toBe(tOk.id);
+      });
+
+      describe("failureReason filter", () => {
+        /**
+         * Enqueue a task for `appId` and drive it to `dead_letter`, stamping
+         * `failureReason` on each fail. Runs in isolation: at the moment it is
+         * called the only claimable task is the one just enqueued (any prior
+         * tasks are already terminal), so `claimDue({ limit: 1 })` always returns
+         * exactly it — the assertion guards that invariant.
+         */
+        const deadLetterWith = async (
+          messageId: string,
+          appId: string,
+          failureReason: DeliveryFailureReason,
+        ): Promise<DeliveryTask> => {
+          const task = await queue.enqueue({ messageId, appId });
+          // 2-retry policy ⇒ 3 fails dead-letter it.
+          for (let i = 0; i < 3; i++) {
+            clock.advance(10_000);
+            const [claimed] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+            expect(claimed?.id).toBe(task.id);
+            await queue.fail(claimed!.id, claimed!.leaseToken!, {
+              error: "boom",
+              failureReason,
+              nowMs: clock.now(),
+            });
+          }
+          const final = await queue.get(task.id);
+          expect(final?.status).toBe("dead_letter");
+          expect(final?.failureReason).toBe(failureReason);
+          return final!;
+        };
+
+        it("filters by failureReason, excluding tasks that never failed", async () => {
+          const refused = await deadLetterWith("m-refused", "app_1", "connection_refused");
+          const http5xx = await deadLetterWith("m-5xx", "app_1", "http_5xx");
+          // A succeeded task keeps failureReason = null.
+          await queue.enqueue({ messageId: "m-ok", appId: "app_1" });
+          const [ok] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.complete(ok!.id, ok!.leaseToken!);
+
+          // No filter → all three.
+          expect((await queue.listByApp("app_1")).deliveries).toHaveLength(3);
+
+          // Each reason isolates exactly its own task.
+          const onlyRefused = await queue.listByApp("app_1", {
+            failureReason: "connection_refused",
+          });
+          expect(onlyRefused.deliveries.map((t) => t.id)).toEqual([refused.id]);
+          expect(onlyRefused.nextCursor).toBeNull();
+
+          const only5xx = await queue.listByApp("app_1", { failureReason: "http_5xx" });
+          expect(only5xx.deliveries.map((t) => t.id)).toEqual([http5xx.id]);
+
+          // A reason no task carries (incl. the never-failed succeeded task) → empty.
+          const none = await queue.listByApp("app_1", { failureReason: "tls_error" });
+          expect(none.deliveries).toEqual([]);
+        });
+
+        it("composes the status and failureReason filters", async () => {
+          const refused = await deadLetterWith("m-refused", "app_1", "connection_refused");
+          await queue.enqueue({ messageId: "m-ok", appId: "app_1" });
+          const [ok] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.complete(ok!.id, ok!.leaseToken!);
+
+          // dead_letter + connection_refused → the dead-lettered task.
+          const both = await queue.listByApp("app_1", {
+            status: "dead_letter",
+            failureReason: "connection_refused",
+          });
+          expect(both.deliveries.map((t) => t.id)).toEqual([refused.id]);
+
+          // succeeded + connection_refused → empty (a succeeded task has no reason).
+          const conflicting = await queue.listByApp("app_1", {
+            status: "succeeded",
+            failureReason: "connection_refused",
+          });
+          expect(conflicting.deliveries).toEqual([]);
+        });
+
+        it("paginates a failureReason-filtered result, newest-first", async () => {
+          const t1 = await deadLetterWith("m1", "app_1", "http_5xx");
+          const t2 = await deadLetterWith("m2", "app_1", "http_5xx");
+          const t3 = await deadLetterWith("m3", "app_1", "http_5xx");
+          // A different reason that must never leak into the filtered pages.
+          await deadLetterWith("m-other", "app_1", "tls_error");
+
+          const opts: ListByAppOptions = { failureReason: "http_5xx", limit: 2 };
+          const first = await queue.listByApp("app_1", opts);
+          expect(first.deliveries.map((t) => t.id)).toEqual([t3.id, t2.id]);
+          expect(first.deliveries.every((t) => t.failureReason === "http_5xx")).toBe(true);
+          expect(first.nextCursor).not.toBeNull();
+
+          const second = await queue.listByApp("app_1", {
+            ...opts,
+            cursor: first.nextCursor!,
+          });
+          expect(second.deliveries.map((t) => t.id)).toEqual([t1.id]);
+          expect(second.deliveries[0]!.failureReason).toBe("http_5xx");
+          expect(second.nextCursor).toBeNull();
+        });
       });
 
       it("reflects a task's current state after a transition", async () => {

@@ -86,7 +86,7 @@ Key capabilities:
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | Rotate signing secret, zero-downtime. |
 | POST | `/v1/endpoints/:id/test` | Bearer | Send a one-shot test delivery; returns result synchronously. |
 | GET | `/v1/endpoints/:id/deliveries` | Bearer | Endpoint delivery history (paginated). |
-| GET | `/v1/deliveries` | Bearer | App-wide delivery listing (`?status=dead_letter` etc., paginated). |
+| GET | `/v1/deliveries` | Bearer | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |
 | GET | `/v1/usage` | Bearer | Tenant's own message + delivery usage and current-month quota status. |
 | POST | `/v1/portal/sessions` | Bearer | Mint a consumer portal session token. |
 | GET/POST/PATCH/DELETE | `/v1/event-types` / `/v1/event-types/:id` | Bearer | Event type catalog (create, list, update, archive). |

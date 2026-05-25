@@ -41,6 +41,46 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T22:36 · iter-0095 · GREEN · failure-reason-triage-filter-on-deliveries
+
+- **Baseline:** clean main @ `e481793` (iter-0094 denormalized `failureReason` onto the delivery
+  task). Verified green first: `tsc --noEmit` 0, `vitest run` **1779**, `npm run build` 0,
+  `assert-gate-integrity.ps1` 0.
+- **Move:** Land the payoff iter-0094 teed up across the iter-0091→0094 Next lists — a
+  `?failureReason=` filter on `GET /v1/deliveries`. The structured reason was denormalized onto
+  `DeliveryTask` last tick *specifically* as the column this filter indexes; it answers "show me every
+  delivery that failed with `connection_refused`" in one query (the operator's failure-triage view) and
+  composes with the existing `?status=` filter.
+- **Changed:**
+  - `queue/delivery-queue.ts`: `ListByAppOptions.failureReason?` (closed-domain, composes with `status`).
+  - `queue/in-memory-queue.ts`: one composing `.filter`.
+  - `queue/sqlite-queue.ts`: replaced the 4 precompiled `listByApp` statements with a bounded
+    prepared-statement cache keyed by composed SQL (≤ 8 shapes) + a dynamic WHERE builder; new
+    `idx_delivery_tasks_app_reason (app_id, failure_reason, created_at, id)` partial index created in the
+    failure_reason migration (after the column is guaranteed present).
+  - `queue/postgres-queue.ts`: same dynamic WHERE (it already built inline) + the companion index after
+    the `ADD COLUMN IF NOT EXISTS failure_reason` ALTER.
+  - `http/api.ts`: `parseListByAppParams` parses/validates `?failureReason=` via `isDeliveryFailureReason`
+    (unknown → 400); `sdk/client.ts`: `ListDeliveriesParams.failureReason` + query; `http/openapi.ts`: the
+    `failureReason` query param (enum) on `listDeliveries`; README row updated.
+  - Tests: +3 conformance (filter+exclude-never-failed, composes-with-status, paginates) ×2 live backends
+    = +6; +2 HTTP (filter/compose/exclude + 400); +1 SDK (query string); `smoke-failure-reason` +7 (reason
+    isolation + 400 through compiled ESM).
+- **Decisions:** Swapped the precompiled `listByApp` statements for a small cached dynamic builder rather
+  than enumerate 8 status×reason×cursor variants — `listByApp` is a cold operator path, and the cache
+  keeps the prepare-once discipline. SQLite index is partial (`WHERE app_id IS NOT NULL`), mirroring
+  `idx_delivery_tasks_app_status`; the status+reason combo rides either single-column index and filters
+  the rest (fine off the hot path). Filter values are validated against the closed reason set *and*
+  parameterized.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1788** (+9; 52 files, 6 PG-skipped, no flaky exit);
+  `npm run build` 0; `node scripts/smoke-failure-reason.mjs` **20/20** (+7, real failures filtered by
+  reason through compiled ESM on file-backed node:sqlite); `assert-gate-integrity.ps1` 0; `local-gate.ps1`
+  PASS; `validate-log-compliance.py` `[PASS]`.
+- **Next:** A `posthorn_deliveries_by_reason` point-in-time backlog gauge off the denormalized column
+  (complements the per-tick lifetime failure tally); surface the structured reason as a column/filter in
+  the tenant dashboard delivery rows; or honor `X-Forwarded-Proto` so HSTS emits only on requests believed
+  to have arrived over HTTPS.
+
 ## 2026-05-24T22:11 · iter-0094 · GREEN · denormalize-failure-reason-onto-delivery-task
 
 - **Baseline:** clean main @ `bea57cf` (iter-0093 CSP confirmations). Verified green first:

@@ -111,6 +111,10 @@ import {
   type ListDeliveriesOptions,
 } from "../queue/delivery-queue.js";
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
+import {
+  isDeliveryFailureReason,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 import { retryMessageDeliveries } from "../queue/retry-message.js";
 import { cancelMessageDeliveries } from "../queue/cancel-message.js";
 import {
@@ -493,26 +497,41 @@ function parseListDeliveriesParams(
 }
 
 /**
- * Parse the `?limit=`, `?cursor=`, and `?status=` query of the app deliveries
- * route into store options. `?status=` is optional; an unrecognised value is a 400.
+ * Parse the `?limit=`, `?cursor=`, `?status=`, and `?failureReason=` query of the
+ * app deliveries route into store options. `?status=` and `?failureReason=` are
+ * both optional and compose; an unrecognised value for either is a 400.
  */
 function parseListByAppParams(
   query: Readonly<Record<string, string | undefined>>,
 ): ListByAppOptions {
-  const base = parseListDeliveriesParams(query);
+  let options: ListByAppOptions = parseListDeliveriesParams(query);
+
   const rawStatus = query["status"];
-  if (rawStatus === undefined || rawStatus.length === 0) {
-    return base;
+  if (rawStatus !== undefined && rawStatus.length > 0) {
+    const validStatuses: readonly string[] = ["pending", "delivering", "succeeded", "dead_letter"];
+    if (!validStatuses.includes(rawStatus)) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `status must be one of: ${validStatuses.join(", ")}`,
+      );
+    }
+    options = { ...options, status: rawStatus as DeliveryStatus };
   }
-  const validStatuses: readonly string[] = ["pending", "delivering", "succeeded", "dead_letter"];
-  if (!validStatuses.includes(rawStatus)) {
-    throw new HttpError(
-      400,
-      "invalid_request",
-      `status must be one of: ${validStatuses.join(", ")}`,
-    );
+
+  const rawReason = query["failureReason"];
+  if (rawReason !== undefined && rawReason.length > 0) {
+    if (!isDeliveryFailureReason(rawReason)) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        `failureReason is not a recognised delivery-failure reason code`,
+      );
+    }
+    options = { ...options, failureReason: rawReason as DeliveryFailureReason };
   }
-  return { ...base, status: rawStatus as DeliveryStatus };
+
+  return options;
 }
 
 /**

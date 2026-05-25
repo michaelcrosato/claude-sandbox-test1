@@ -145,10 +145,12 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   readonly #selectByEndpointAfter: StatementSync;
   readonly #selectByEndpointFiltered: StatementSync;
   readonly #selectByEndpointFilteredAfter: StatementSync;
-  readonly #selectByApp: StatementSync;
-  readonly #selectByAppAfter: StatementSync;
-  readonly #selectByAppFiltered: StatementSync;
-  readonly #selectByAppFilteredAfter: StatementSync;
+  // listByApp composes optional, independent `status` and `failureReason`
+  // filters with an optional cursor — a small, bounded set of SQL shapes
+  // (≤ 8). Rather than a precompiled statement per shape, each distinct SQL is
+  // prepared on first use and cached here, preserving the prepare-once-and-reuse
+  // discipline on this cold operator-listing path. See #prepareCached / listByApp.
+  readonly #listByAppStmtCache = new Map<string, StatementSync>();
   readonly #selectClaimable: StatementSync;
   readonly #insertTask: StatementSync;
   readonly #updateTask: StatementSync;
@@ -225,34 +227,10 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
     );
-    // App-wide listing, newest-first — backed by idx_delivery_tasks_app.
-    this.#selectByApp = this.#db.prepare(
-      `SELECT * FROM delivery_tasks
-       WHERE app_id = ?
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-    );
-    this.#selectByAppAfter = this.#db.prepare(
-      `SELECT * FROM delivery_tasks
-       WHERE app_id = ?
-         AND (created_at < ? OR (created_at = ? AND id < ?))
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-    );
-    // Status-filtered app listing — backed by idx_delivery_tasks_app_status.
-    this.#selectByAppFiltered = this.#db.prepare(
-      `SELECT * FROM delivery_tasks
-       WHERE app_id = ? AND status = ?
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-    );
-    this.#selectByAppFilteredAfter = this.#db.prepare(
-      `SELECT * FROM delivery_tasks
-       WHERE app_id = ? AND status = ?
-         AND (created_at < ? OR (created_at = ? AND id < ?))
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-    );
+    // App-wide listing (listByApp) is built dynamically and cached — see
+    // #listByAppStmtCache / #prepareCached / listByApp. The supporting indexes
+    // (idx_delivery_tasks_app, _app_status, _app_reason) are created in the
+    // migration helpers below.
     // Claimable = due pending OR delivering with a lapsed lease.
     // ORDER BY priority DESC, rowid ASC: highest-priority tasks claimed first;
     // within the same priority, oldest-first (insertion order).
@@ -313,8 +291,20 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     const columns = this.#db.prepare("PRAGMA table_info(delivery_tasks)").all() as {
       name: string;
     }[];
-    if (columns.some((c) => c.name === "failure_reason")) return;
-    this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN failure_reason TEXT");
+    if (!columns.some((c) => c.name === "failure_reason")) {
+      this.#db.exec("ALTER TABLE delivery_tasks ADD COLUMN failure_reason TEXT");
+    }
+    // Reason-filtered app listing: (app_id, failure_reason, created_at, id) covers
+    // WHERE app_id = ? AND failure_reason = ? (the ?failureReason= triage filter).
+    // Created here — unconditionally and idempotently — *after* the column is
+    // guaranteed to exist: it references failure_reason, so it can live neither in
+    // SCHEMA (a pre-migration DB lacks the column) nor in #migrateAppIdColumn
+    // (which runs before this ALTER). Mirrors how the app indexes follow app_id.
+    this.#db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_tasks_app_reason" +
+        " ON delivery_tasks (app_id, failure_reason, created_at, id)" +
+        " WHERE app_id IS NOT NULL",
+    );
   }
 
   /**
@@ -549,39 +539,56 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   async listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage> {
     const { limit, cursor } = resolveListDeliveriesQuery(options);
     const status = options?.status ?? null;
+    const failureReason = options?.failureReason ?? null;
     // Fetch one extra to detect whether a further page exists.
     const fetchLimit = limit + 1;
-    let rows: unknown[];
-    if (status === null) {
-      rows =
-        cursor === null
-          ? this.#selectByApp.all(appId, fetchLimit)
-          : this.#selectByAppAfter.all(
-              appId,
-              cursor.createdAt,
-              cursor.createdAt,
-              cursor.id,
-              fetchLimit,
-            );
-    } else {
-      rows =
-        cursor === null
-          ? this.#selectByAppFiltered.all(appId, status, fetchLimit)
-          : this.#selectByAppFilteredAfter.all(
-              appId,
-              status,
-              cursor.createdAt,
-              cursor.createdAt,
-              cursor.id,
-              fetchLimit,
-            );
+
+    // Compose the predicate and bind parameters in lock-step. `status` and
+    // `failureReason` are independent and may combine, so the WHERE clause is
+    // built dynamically (avoiding a precompiled statement per filter
+    // combination); the resulting SQL shape is prepared once and cached.
+    const conditions = ["app_id = ?"];
+    const params: (string | number)[] = [appId];
+    if (status !== null) {
+      conditions.push("status = ?");
+      params.push(status);
     }
+    if (failureReason !== null) {
+      conditions.push("failure_reason = ?");
+      params.push(failureReason);
+    }
+    if (cursor !== null) {
+      conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    params.push(fetchLimit);
+
+    const sql =
+      `SELECT * FROM delivery_tasks WHERE ${conditions.join(" AND ")}` +
+      " ORDER BY created_at DESC, id DESC LIMIT ?";
+    const rows = this.#prepareCached(sql).all(...params);
+
     const hasMore = rows.length > limit;
     const deliveries = (rows as unknown as TaskRow[]).slice(0, limit).map(rowToTask);
     const last = deliveries[deliveries.length - 1];
     const nextCursor =
       hasMore && last !== undefined ? encodeDeliveryCursor(last) : null;
     return { deliveries, nextCursor };
+  }
+
+  /**
+   * Prepare `sql` on first use and cache the statement for reuse. {@link listByApp}
+   * has a small bounded set of SQL shapes (its optional, composable filters and
+   * cursor yield ≤ 8); caching keeps the prepare-once-and-reuse discipline the
+   * rest of this class follows without one precompiled field per shape.
+   */
+  #prepareCached(sql: string): StatementSync {
+    let stmt = this.#listByAppStmtCache.get(sql);
+    if (stmt === undefined) {
+      stmt = this.#db.prepare(sql);
+      this.#listByAppStmtCache.set(sql, stmt);
+    }
+    return stmt;
   }
 
   async pruneTerminalTasks(olderThanMs: number): Promise<number> {

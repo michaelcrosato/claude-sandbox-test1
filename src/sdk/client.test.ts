@@ -751,6 +751,20 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(seenUrl).toContain("status=dead_letter");
   });
 
+  it("includes failureReason in listDeliveries query string (composes with status)", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listDeliveries({ status: "dead_letter", failureReason: "connection_refused" });
+    expect(seenUrl).toContain("/v1/deliveries");
+    expect(seenUrl).toContain("status=dead_letter");
+    expect(seenUrl).toContain("failureReason=connection_refused");
+  });
+
   it("listMessageAttempts returns requestBody and responseBody from the server payload", async () => {
     const attempt = {
       id: "datt_1",

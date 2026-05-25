@@ -3076,6 +3076,80 @@ describe("createApi — GET /v1/deliveries (app-wide delivery listing)", () => {
     expect(res.status).toBe(400);
     expect(body(res).error.code).toBe("invalid_request");
   });
+
+  it("filters by failureReason, composes with status, excludes never-failed", async () => {
+    // 0-retry queue so one fail → dead_letter immediately.
+    const apps = new InMemoryAppStore();
+    const endpoints = new InMemoryEndpointStore();
+    const messages = new InMemoryMessageStore();
+    const queue = new InMemoryDeliveryQueue({ retryPolicy: fixedSchedule([]) });
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const api = createApi({ apps, endpoints, messages, queue, attempts, eventTypes: new InMemoryEventTypeStore() });
+    const app = await apps.create({ name: "Test" });
+    const { secret } = await apps.createApiKey(app.id);
+
+    // Two endpoints → two delivery tasks for one message.
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://a.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/endpoints", { url: "https://b.example/hook" }, secret));
+    await api(jsonRequest("POST", "/v1/messages", { eventType: "e", payload: {} }, secret));
+
+    // Fail the two tasks with distinct reasons → both dead_letter.
+    const nowMs = Date.now();
+    const batch = await queue.claimDue({ nowMs, limit: 10 });
+    expect(batch.length).toBe(2);
+    await queue.fail(batch[0]!.id, batch[0]!.leaseToken!, { error: "x", failureReason: "http_5xx", nowMs });
+    await queue.fail(batch[1]!.id, batch[1]!.leaseToken!, { error: "y", failureReason: "connection_refused", nowMs });
+
+    // Filter by http_5xx → exactly the one task.
+    const only5xx = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { failureReason: "http_5xx" },
+      }),
+    );
+    expect(only5xx.status).toBe(200);
+    const d = body(only5xx).data as Record<string, unknown>[];
+    expect(d.length).toBe(1);
+    expect(d[0]!["failureReason"]).toBe("http_5xx");
+
+    // Compose status + failureReason: dead_letter + http_5xx → still the one.
+    const composed = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { status: "dead_letter", failureReason: "http_5xx" },
+      }),
+    );
+    expect((body(composed).data as unknown[]).length).toBe(1);
+
+    // A reason no task carries → empty (excludes the connection_refused task too).
+    const none = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { failureReason: "tls_error" },
+      }),
+    );
+    expect((body(none).data as unknown[]).length).toBe(0);
+  });
+
+  it("returns 400 for an unrecognised failureReason value", async () => {
+    const { api, secret } = await setup();
+    const res = await api(
+      request({
+        method: "GET",
+        path: "/v1/deliveries",
+        headers: { authorization: `Bearer ${secret}` },
+        query: { failureReason: "not_a_reason" },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
 });
 
 describe("createApi — POST /v1/deliveries/retry (bulk dead-letter retry)", () => {

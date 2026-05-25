@@ -221,7 +221,10 @@ export interface ListByEndpointOptions extends ListDeliveriesOptions {
 
 /**
  * Options for {@link DeliveryQueue.listByApp} — extends the base pagination
- * options with an optional status filter.
+ * options with optional `status` and `failureReason` filters. The two filters
+ * compose: supplying both narrows to deliveries that match the status *and* the
+ * structured failure reason (e.g. `dead_letter` deliveries that failed with
+ * `connection_refused`).
  */
 export interface ListByAppOptions extends ListDeliveriesOptions {
   /**
@@ -229,6 +232,14 @@ export interface ListByAppOptions extends ListDeliveriesOptions {
    * return deliveries in all statuses (the default).
    */
   readonly status?: DeliveryStatus | null;
+  /**
+   * When set, only return deliveries whose latest {@link DeliveryTask.failureReason}
+   * equals this code — the one-query failure-triage filter ("show me every
+   * delivery that failed with `connection_refused`"). Omit (or `null`) to apply
+   * no reason filter (the default). Tasks that have never failed carry a `null`
+   * `failureReason` and are excluded whenever this filter is set.
+   */
+  readonly failureReason?: DeliveryFailureReason | null;
 }
 
 /** One page of {@link DeliveryQueue.listByEndpoint}, newest-first. */
@@ -430,12 +441,14 @@ export interface DeliveryQueue {
   ): Promise<DeliveryPage>;
   /**
    * List delivery tasks for `appId`, newest-first (enqueue-time descending),
-   * keyset-paginated, with an optional `status` filter. Returns an empty page
-   * when the app has no tasks. A pure read: never mutates, never throws on an
-   * unknown app id. This is the tenant-wide cross-endpoint view: "show me all
-   * my deliveries" (or just the dead-lettered ones). Only tasks enqueued with
-   * `appId` set appear; tasks without an `appId` (pre-migration rows) are
-   * silently excluded — honest, since the attribution data was never recorded.
+   * keyset-paginated, with optional `status` and `failureReason` filters (which
+   * compose). Returns an empty page when the app has no tasks. A pure read:
+   * never mutates, never throws on an unknown app id. This is the tenant-wide
+   * cross-endpoint view: "show me all my deliveries" (or just the dead-lettered
+   * ones, or just the ones that failed with `connection_refused`). Only tasks
+   * enqueued with `appId` set appear; tasks without an `appId` (pre-migration
+   * rows) are silently excluded — honest, since the attribution data was never
+   * recorded.
    */
   listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage>;
   /**

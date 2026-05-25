@@ -133,6 +133,14 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
     await this.#pool.query(
       "ALTER TABLE delivery_tasks ADD COLUMN IF NOT EXISTS failure_reason TEXT",
     );
+    // Reason-filtered app listing index — created after the failure_reason column
+    // is guaranteed to exist (it references that column, so it cannot live in the
+    // INDEXES block, which runs before the ALTER on a pre-migration DB).
+    await this.#pool.query(
+      "CREATE INDEX IF NOT EXISTS idx_delivery_tasks_app_reason" +
+        " ON delivery_tasks (app_id, failure_reason, created_at, id)" +
+        " WHERE app_id IS NOT NULL",
+    );
   }
 
   async truncate(): Promise<void> {
@@ -397,39 +405,37 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
   async listByApp(appId: string, options?: ListByAppOptions): Promise<DeliveryPage> {
     const { limit, cursor } = resolveListDeliveriesQuery(options);
     const status = options?.status ?? null;
+    const failureReason = options?.failureReason ?? null;
     const fetchLimit = limit + 1;
-    let rows: TaskRow[];
-    if (status === null) {
-      if (cursor === null) {
-        ({ rows } = await this.#pool.query<TaskRow>(
-          "SELECT * FROM delivery_tasks WHERE app_id = $1" +
-            " ORDER BY created_at DESC, id DESC LIMIT $2",
-          [appId, fetchLimit],
-        ));
-      } else {
-        ({ rows } = await this.#pool.query<TaskRow>(
-          "SELECT * FROM delivery_tasks WHERE app_id = $1" +
-            " AND (created_at < $2 OR (created_at = $3 AND id < $4))" +
-            " ORDER BY created_at DESC, id DESC LIMIT $5",
-          [appId, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
-        ));
-      }
-    } else {
-      if (cursor === null) {
-        ({ rows } = await this.#pool.query<TaskRow>(
-          "SELECT * FROM delivery_tasks WHERE app_id = $1 AND status = $2" +
-            " ORDER BY created_at DESC, id DESC LIMIT $3",
-          [appId, status, fetchLimit],
-        ));
-      } else {
-        ({ rows } = await this.#pool.query<TaskRow>(
-          "SELECT * FROM delivery_tasks WHERE app_id = $1 AND status = $2" +
-            " AND (created_at < $3 OR (created_at = $4 AND id < $5))" +
-            " ORDER BY created_at DESC, id DESC LIMIT $6",
-          [appId, status, cursor.createdAt, cursor.createdAt, cursor.id, fetchLimit],
-        ));
-      }
+
+    // Build the predicate and positional params in lock-step. `status` and
+    // `failureReason` are independent, composable filters, so the WHERE clause
+    // is assembled dynamically rather than enumerating every combination.
+    const conditions = ["app_id = $1"];
+    const params: (string | number)[] = [appId];
+    const next = (value: string | number): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    if (status !== null) {
+      conditions.push(`status = ${next(status)}`);
     }
+    if (failureReason !== null) {
+      conditions.push(`failure_reason = ${next(failureReason)}`);
+    }
+    if (cursor !== null) {
+      const lt = next(cursor.createdAt);
+      const eq = next(cursor.createdAt);
+      const id = next(cursor.id);
+      conditions.push(`(created_at < ${lt} OR (created_at = ${eq} AND id < ${id}))`);
+    }
+    const limitPlaceholder = next(fetchLimit);
+
+    const { rows } = await this.#pool.query<TaskRow>(
+      `SELECT * FROM delivery_tasks WHERE ${conditions.join(" AND ")}` +
+        ` ORDER BY created_at DESC, id DESC LIMIT ${limitPlaceholder}`,
+      params,
+    );
     const hasMore = rows.length > limit;
     const deliveries = (rows as TaskRow[]).slice(0, limit).map(rowToTask);
     const last = deliveries[deliveries.length - 1];

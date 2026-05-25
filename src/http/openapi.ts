@@ -705,7 +705,8 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "List all deliveries for the authenticated tenant, newest-first — the " +
             "app-wide cross-endpoint view that complements `GET /v1/endpoints/{id}/deliveries` " +
             "(one endpoint) and `GET /v1/messages/{id}` (one message). Optionally filter by " +
-            "`?status=` to surface only, e.g., `dead_letter` deliveries. Each entry carries " +
+            "`?status=` (e.g. `dead_letter`) and/or `?failureReason=` (e.g. `connection_refused`) " +
+            "— the two filters compose, for one-query failure triage. Each entry carries " +
             "both `messageId` and `endpointId` so you can navigate to either detail view. " +
             "Only deliveries that were enqueued with an `appId` appear; deliveries created " +
             "before per-tenant tracking was added are silently excluded. Keyset-paginated: " +
@@ -722,6 +723,16 @@ export function buildOpenApiDocument(): OpenApiDocument {
               },
               description:
                 "Filter by delivery status. Omit to return all statuses.",
+            },
+            {
+              name: "failureReason",
+              in: "query",
+              required: false,
+              schema: { type: "string", enum: [...DELIVERY_FAILURE_REASONS] },
+              description:
+                "Filter by the delivery's latest structured failure-reason code (e.g. " +
+                "`connection_refused`, `http_5xx`, `request_timeout`). Omit for no reason " +
+                "filter. Composes with `?status=`; deliveries that never failed are excluded.",
             },
             {
               name: "limit",
@@ -743,7 +754,9 @@ export function buildOpenApiDocument(): OpenApiDocument {
               "A page of deliveries for the tenant, newest-first.",
               ref("AppDeliveryList"),
             ),
-            "400": errorResponse("Malformed `?status=`, `?limit=`, or `?cursor=` parameter."),
+            "400": errorResponse(
+              "Malformed `?status=`, `?failureReason=`, `?limit=`, or `?cursor=` parameter.",
+            ),
             "401": errorResponse("Missing or invalid API key."),
           },
         },
