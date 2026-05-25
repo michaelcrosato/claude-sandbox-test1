@@ -241,6 +241,33 @@ describe("createPortalHandler", () => {
     expect(await endpoints.get(ep.id)).toBeNull();
   });
 
+  it("GET /portal/endpoints/:id/delete renders a confirmation page and does not delete", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/delete` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    expect(body).toContain("Delete endpoint");
+    expect(body).toContain("This cannot be undone");
+    expect(body).toContain(`action="/portal/endpoints/${ep.id}/delete"`);
+    // Viewing the confirmation must not mutate state.
+    expect(await endpoints.get(ep.id)).not.toBeNull();
+    // CSP-safe: no inline JS confirm (which `script-src 'none'` blocks).
+    expect(body).not.toContain("onsubmit");
+    expect(body).not.toContain("confirm(");
+  });
+
+  it("GET /portal/endpoints/:id/delete for another tenant's endpoint returns 404", async () => {
+    const { endpoints, sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_42", clock.t);
+    const ep = await endpoints.create({ appId: "app_2", url: "https://other.example/hook" });
+    const r = withCookie(req({ path: `/portal/endpoints/${ep.id}/delete` }), COOKIE, token);
+    const res = await handler(r);
+    expect(res.status).toBe(404);
+  });
+
   it("POST /portal/endpoints/:id/rotate-secret shows the new secret once", async () => {
     const { endpoints, sessions, handler, clock } = setup();
     const token = sessions.createSession("app_1", "user_42", clock.t);
@@ -718,6 +745,41 @@ describe("createPortalHandler", () => {
     expect(res.headers?.["location"]).toBe("/portal/event-types");
     const et = await eventTypes.get("app_1", "user.created");
     expect(et!.archived).toBe(true);
+  });
+
+  it("GET /portal/event-types/:id/archive renders a confirmation page and does not archive", async () => {
+    const { eventTypes, sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    await eventTypes.create({ appId: "app_1", id: "user.created", name: "User created" });
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/user.created/archive" }), COOKIE, token),
+    );
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    expect(body).toContain("Archive event type");
+    expect(body).toContain(`action="/portal/event-types/user.created/archive"`);
+    // Viewing the confirmation must not mutate state.
+    expect((await eventTypes.get("app_1", "user.created"))!.archived).toBe(false);
+    expect(body).not.toContain("onsubmit");
+    expect(body).not.toContain("confirm(");
+  });
+
+  it("GET /portal/event-types/:id/archive without an event-type store returns 404", async () => {
+    const { sessions, handler, clock } = setup();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/user.created/archive" }), COOKIE, token),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /portal/event-types/:id/archive for unknown id returns 404", async () => {
+    const { sessions, handler, clock } = setupWithEventTypes();
+    const token = sessions.createSession("app_1", "user_1", clock.t);
+    const res = await handler(
+      withCookie(req({ path: "/portal/event-types/no.such.type/archive" }), COOKIE, token),
+    );
+    expect(res.status).toBe(404);
   });
 
   it("GET /portal/event-types/:id shows no subscribers when no endpoints are subscribed", async () => {

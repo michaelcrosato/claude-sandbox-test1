@@ -145,7 +145,27 @@ const sessionCookie = `ph_session=${sessionMatch[1]}`;
   });
   assert("Minted key authenticates the tenant API (200)", authRes.status === 200);
 
-  // ── 8. Delete the app via the dashboard ───────────────────────────────────
+  // ── 8. The delete-confirmation interstitial (GET) renders without inline JS ─
+  const confirmRes = await fetch(`${base}/dashboard/apps/${appId}/delete`, {
+    headers: { cookie: sessionCookie },
+    redirect: "manual",
+  });
+  assert("GET /dashboard/apps/:id/delete → 200 (confirmation page)", confirmRes.status === 200);
+  const confirmBody = await confirmRes.text();
+  assert("Confirmation page shows 'Delete app'", confirmBody.includes("Delete app"));
+  assert("Confirmation page warns it cannot be undone", confirmBody.includes("This cannot be undone"));
+  assert(
+    "Confirmation page POSTs to the real delete route",
+    confirmBody.includes(`action="/dashboard/apps/${appId}/delete"`),
+  );
+  assert("Confirmation page carries no inline JS (CSP-safe)", !confirmBody.includes("onsubmit"));
+  // Viewing the confirmation must not have deleted the app — the key still works.
+  const stillAuthRes = await fetch(`${base}/v1/endpoints`, {
+    headers: { authorization: `Bearer ${secret}` },
+  });
+  assert("App not deleted by viewing the confirmation (key still 200)", stillAuthRes.status === 200);
+
+  // ── 9. Delete the app via the dashboard ───────────────────────────────────
   const delRes = await fetch(`${base}/dashboard/apps/${appId}/delete`, {
     method: "POST",
     headers: {
@@ -165,7 +185,7 @@ const sessionCookie = `ph_session=${sessionMatch[1]}`;
   assert("Key rejected after app deletion (401)", afterDelRes.status === 401);
 }
 
-// ── 9. Logout clears the session ──────────────────────────────────────────────
+// ── 10. Logout clears the session ─────────────────────────────────────────────
 {
   const res = await fetch(`${base}/dashboard/logout`, {
     method: "POST",

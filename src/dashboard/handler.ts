@@ -22,7 +22,7 @@ import type { AppStore } from "../apps/app.js";
 import type { MessageStore } from "../storage/message-store.js";
 import { utcMonthRange } from "../storage/message-store.js";
 import type { SessionStore } from "./sessions.js";
-import { loginPage, appsPage, appDetailPage } from "./views.js";
+import { loginPage, appsPage, appDetailPage, appDeleteConfirmPage } from "./views.js";
 
 export interface DashboardDeps {
   /** App/tenant store — the same instance the JSON API uses. */
@@ -258,6 +258,21 @@ export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
       if (unauth) return unauth;
       await apps.revokeApiKey(s3);
       return redirect(`/dashboard/apps/${s1}`);
+    }
+
+    // ── GET /dashboard/apps/:appId/delete (delete confirmation) ───────────────
+    if (
+      method === "GET" &&
+      s0 === "apps" &&
+      s1 !== undefined &&
+      s2 === "delete" &&
+      segs.length === 3
+    ) {
+      const unauth = requireAuth(req);
+      if (unauth) return unauth;
+      const app = await apps.get(s1);
+      if (app === null) return NOT_FOUND;
+      return html(200, appDeleteConfirmPage(app));
     }
 
     // ── POST /dashboard/apps/:appId/delete ────────────────────────────────────

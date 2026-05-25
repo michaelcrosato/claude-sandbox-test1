@@ -187,6 +187,62 @@ describe("createDashboardHandler — apps CRUD", () => {
     expect((res.headers as Record<string, string>)["location"]).toBe("/dashboard/apps");
     expect(await apps.get(app.id)).toBeNull();
   });
+
+  it("GET /dashboard/apps/:id/delete renders a confirmation page and does not delete", async () => {
+    const { handler, apps } = setup();
+    const app = await apps.create({ name: "Doomed" });
+    const res = await authed(handler, "GET", `/dashboard/apps/${app.id}/delete`);
+    expect(res.status).toBe(200);
+    const body = String(res.body);
+    expect(body).toContain("Delete app");
+    expect(body).toContain("This cannot be undone");
+    // The confirm action POSTs to the real delete route.
+    expect(body).toContain(`action="/dashboard/apps/${app.id}/delete"`);
+    // Viewing the confirmation must not mutate state.
+    expect(await apps.get(app.id)).not.toBeNull();
+    // CSP-safe: the confirmation uses no inline JS (which `script-src 'none'` blocks).
+    expect(body).not.toContain("onsubmit");
+    expect(body).not.toContain("confirm(");
+  });
+
+  it("GET /dashboard/apps/:id/delete for unknown app returns 404", async () => {
+    const { handler } = setup();
+    const res = await authed(handler, "GET", "/dashboard/apps/app_ghost/delete");
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /dashboard/apps/:id/delete without a session redirects to login", async () => {
+    const { handler, apps } = setup();
+    const app = await apps.create({ name: "Doomed" });
+    const res = await handler(req("GET", `/dashboard/apps/${app.id}/delete`));
+    expect(res.status).toBe(302);
+    expect((res.headers as Record<string, string>)["location"]).toBe("/dashboard/login");
+  });
+
+  it("the app detail delete control links to the confirmation page, not inline JS", async () => {
+    const { handler, apps } = setup();
+    const app = await apps.create({ name: "My App" });
+    const res = await authed(handler, "GET", `/dashboard/apps/${app.id}`);
+    const body = String(res.body);
+    expect(body).toContain(`href="/dashboard/apps/${app.id}/delete"`);
+    expect(body).not.toContain("onsubmit");
+    expect(body).not.toContain("confirm(");
+  });
+
+  it("a JS-breakout app name is HTML-escaped on the delete surfaces (no script to break into)", async () => {
+    const { handler, apps } = setup();
+    // A name crafted to break out of the OLD inline `confirm('Delete …')` JS string.
+    const app = await apps.create({ name: "'+alert(document.cookie)+'" });
+    const detail = String((await authed(handler, "GET", `/dashboard/apps/${app.id}`)).body);
+    const confirmPage = String(
+      (await authed(handler, "GET", `/dashboard/apps/${app.id}/delete`)).body,
+    );
+    for (const body of [detail, confirmPage]) {
+      expect(body).not.toContain("onsubmit"); // no inline event handler remains
+      expect(body).not.toContain("'+alert(document.cookie)+'"); // raw quote never emitted
+      expect(body).toContain("&#39;+alert(document.cookie)+&#39;"); // escaped text only
+    }
+  });
 });
 
 describe("createDashboardHandler — API key management", () => {

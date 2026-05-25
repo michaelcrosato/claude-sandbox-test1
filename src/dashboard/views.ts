@@ -235,10 +235,47 @@ ${newKeyBanner}
 <h3>Danger zone</h3>
 <div class="card">
   <p class="meta" style="margin-bottom:12px">Permanently delete this app and all its API keys. This cannot be undone.</p>
-  <form method="POST" action="/dashboard/apps/${esc(app.id)}/delete" onsubmit="return confirm('Delete ${esc(app.name !== "" ? app.name : app.id)} and all its keys? This cannot be undone.')">
-    <button type="submit" class="btn btn-red">Delete app</button>
-  </form>
+  <a href="/dashboard/apps/${esc(app.id)}/delete" class="btn btn-red">Delete app</a>
 </div>`;
 
   return base(`App: ${app.name !== "" ? app.name : app.id}`, body, nav);
+}
+
+/**
+ * Delete-confirmation interstitial for an app — rendered by
+ * `GET /dashboard/apps/:id/delete`. This is the server-rendered confirmation
+ * step that replaces the former inline `onsubmit="return confirm(...)"` guard on
+ * the detail page's delete button. That inline handler was both (a) silently
+ * disabled by the dashboard CSP (`script-src 'none'` blocks inline event
+ * handlers, so the destructive form had been submitting with no prompt) and (b)
+ * a latent XSS sink — it interpolated the app name into a JavaScript string, and
+ * `esc()` (an HTML-entity encoder) does not neutralize a JS-string-context
+ * breakout because the HTML parser decodes `&#39;` back to `'` before the script
+ * runs. Here the name appears only in HTML-text context, where `esc()` is the
+ * correct and sufficient encoding, and the confirmation works under the strict
+ * CSP because it needs no JavaScript at all.
+ */
+export function appDeleteConfirmPage(app: App): string {
+  const name = app.name !== "" ? app.name : app.id;
+  const nav = `<a href="/dashboard/apps/${esc(app.id)}" style="color:#94a3b8;font-size:13px">← Cancel</a>
+  <form method="POST" action="/dashboard/logout" style="display:inline;margin-left:12px">
+    <button type="submit" class="btn btn-gray btn-sm">Sign out</button>
+  </form>`;
+
+  const body = `<h2>Delete app</h2>
+<div class="card">
+  <div class="alert alert-err" style="margin-bottom:16px">
+    <strong>This cannot be undone.</strong> Deleting <strong>${esc(name)}</strong> permanently
+    removes the app and all of its API keys — any service using those keys will immediately stop
+    authenticating.
+  </div>
+  <div class="form-row">
+    <form method="POST" action="/dashboard/apps/${esc(app.id)}/delete" style="display:inline">
+      <button type="submit" class="btn btn-red">Yes, delete app</button>
+    </form>
+    <a href="/dashboard/apps/${esc(app.id)}" class="btn btn-gray">Cancel</a>
+  </div>
+</div>`;
+
+  return base(`Delete ${name}`, body, nav);
 }

@@ -41,6 +41,48 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T22:05 · iter-0093 · GREEN · csp-safe-destructive-action-confirmations
+
+- **Baseline:** clean main @ `7799e55` (iter-0092 HSTS). Verified green first: `tsc --noEmit` 0,
+  `vitest run` **1761/1761** (52 files, 6 PG-skipped, no flaky exit), `npm run build` 0,
+  `assert-gate-integrity.ps1` 0. Audited the three HTML view files for non-`esc()` / wrong-context
+  interpolation — the standing iter-0089/0090/0091/0092 Next residual.
+- **Move:** The audit found a class defect. iter-0090's dashboard/portal CSP `script-src 'none'`
+  **silently disabled all three inline `onsubmit="return confirm(...)"` guards** (delete app, delete
+  endpoint, archive event type) — CSP blocks inline event handlers, so each destructive form had been
+  submitting on the first click with **no prompt**. The admin one was additionally a **latent XSS
+  sink**: it interpolated user-controlled `app.name` into a JS string, and `esc()` (an HTML-entity
+  encoder) does *not* neutralize a JS-string-context breakout — the HTML parser decodes `&#39;` back
+  to `'` before the handler runs, so a name like `'+alert(document.cookie)+'` would execute (only the
+  CSP that broke the handler was saving it). Replace all three with server-rendered confirmation
+  interstitials: CSP-safe (zero JS), restoring the prompt, and removing the JS-context interpolation.
+- **Changed:**
+  - `dashboard/views.ts`: delete control on the app-detail page is now a link to a new
+    `appDeleteConfirmPage(app)` (GET interstitial — app name in HTML-text context, `esc()`-correct;
+    a POST form for "Yes, delete" + a Cancel link). `dashboard/handler.ts`: new route
+    `GET /dashboard/apps/:id/delete` (auth-gated, 404 on unknown). POST delete route unchanged.
+  - `portal/portal-views.ts`: `portalEndpointDeleteConfirmPage` + `portalEventTypeArchiveConfirmPage`;
+    the endpoint-detail delete button and event-type archive button become links to them.
+    `portal/portal-handler.ts`: new `GET /portal/endpoints/:id/delete` (tenant-scoped, cross-tenant
+    404) + `GET /portal/event-types/:id/archive` (404 if no event-type store / unknown id).
+  - `http/security-headers.ts`: corrected the module doc — its "zero `<script>`" claim now explicitly
+    covers "no inline event handlers", documenting *why* destructive confirmations are server-rendered
+    (so `script-src 'none'` holds without silently disabling them).
+  - +10 unit tests (5 admin, 5 portal: confirm renders + does-not-mutate + no-inline-JS + 404 paths +
+    a JS-breakout-name-is-escaped regression); `smoke-dashboard.mjs` +6 confirm-page checks.
+- **Decisions:** Kept the hard CSP (`script-src 'none'`) and removed the JS instead of relaxing it to
+  `'unsafe-inline'` — output-correctness over weakening the header. The confirm GET is a pure render
+  (no mutation), safe under prefetch. Fixed all three together (one defect class) so the codebase's
+  no-JS invariant is actually true and the header comment is accurate end-to-end.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1771/1771** (+10; 52 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-dashboard.mjs` **32/32** (+6 — the GET confirm renders
+  through compiled ESM on a real socket, carries no `onsubmit`, and does not delete the app);
+  `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Add a portal-delivery dist smoke check for the new endpoint-delete confirm (admin is the
+  only one smoke-covered); or thread the structured `failureReason` into a `?failureReason=` triage
+  filter on `GET /v1/deliveries` (the long-deferred core-FSM denormalization); or honor an upstream
+  `X-Forwarded-Proto` so HSTS is emitted only on requests believed to have arrived over HTTPS.
+
 ## 2026-05-24T21:39 · iter-0092 · GREEN · hsts-response-header-behind-config-flag
 
 - **Baseline:** clean main @ `5be3727` (iter-0091 no-store cache-control), recorded green

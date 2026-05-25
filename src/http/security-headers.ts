@@ -12,10 +12,13 @@
  * `node:http` adapter stays a thin I/O shell.
  *
  * Why these directives are safe to lock down this hard: every HTML view in this
- * repo is server-rendered with **zero** `<script>` tags (the consumer-portal XSS
- * fix removed the last inline `<script>`), no external scripts/styles/fonts/images,
- * and same-origin `<form action>` targets only — its sole dynamic content is inline
- * `<style>` blocks and `style=` attributes. So `default-src 'none'` with just
+ * repo is server-rendered with **zero** `<script>` tags and **no inline event
+ * handlers** (`onclick`/`onsubmit`/…) — destructive-action confirmations are
+ * server-rendered interstitial pages, not JS `confirm()`, *precisely so*
+ * `script-src 'none'` can hold without silently disabling them — plus no external
+ * scripts/styles/fonts/images and same-origin `<form action>` targets only; its
+ * sole dynamic content is inline `<style>` blocks and `style=` attributes. So
+ * `default-src 'none'` with just
  * `style-src 'unsafe-inline'` + `form-action 'self'` renders every page intact
  * while making a reflected/stored-XSS payload non-executable by construction
  * (a second layer behind output escaping). JSON/text API responses carry no markup,

@@ -389,9 +389,7 @@ export function portalEndpointDetailPage(
   const deleteForm = `<div class="card">
   <h2 style="margin-bottom:8px">Delete endpoint</h2>
   <p class="meta" style="margin-bottom:12px">Permanently remove this endpoint. Any in-flight deliveries will not be retried.</p>
-  <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/delete" onsubmit="return confirm('Delete this endpoint? This cannot be undone.')">
-    <button type="submit" class="btn btn-red">Delete endpoint</button>
-  </form>
+  <a href="/portal/endpoints/${esc(endpoint.id)}/delete" class="btn btn-red">Delete endpoint</a>
 </div>`;
 
   const verifyResultHtml = verifyResult
@@ -630,9 +628,7 @@ export function portalEventTypeDetailPage(
     : `<div class="card">
   <h2 style="margin-bottom:8px">Archive event type</h2>
   <p class="meta" style="margin-bottom:12px">Archived event types are hidden from subscription suggestions. Existing subscriptions that reference this type continue to work.</p>
-  <form method="POST" action="/portal/event-types/${esc(eventType.id)}/archive" onsubmit="return confirm('Archive this event type?')">
-    <button type="submit" class="btn btn-gray">Archive</button>
-  </form>
+  <a href="/portal/event-types/${esc(eventType.id)}/archive" class="btn btn-gray">Archive</a>
 </div>`;
 
   const subscribersSection = (() => {
@@ -698,4 +694,62 @@ export function portalRotatedSecretPage(endpoint: Endpoint, newSecret: string): 
 <p><a href="/portal/endpoints/${esc(endpoint.id)}" class="btn btn-gray">← Back to endpoint</a></p>`;
 
   return base("Secret rotated", body);
+}
+
+/**
+ * Delete-confirmation interstitial for an endpoint — rendered by
+ * `GET /portal/endpoints/:id/delete`. Replaces the former inline
+ * `onsubmit="return confirm(...)"` guard, which the portal CSP (`script-src
+ * 'none'`) silently disabled, so the delete form had been submitting with no
+ * prompt. The confirmation is now a server-rendered page that needs no
+ * JavaScript and therefore works under the strict CSP.
+ */
+export function portalEndpointDeleteConfirmPage(endpoint: Endpoint): string {
+  const body = `<h2>Delete endpoint</h2>
+<div class="card">
+  <div class="alert alert-err" style="margin-bottom:16px">
+    <strong>This cannot be undone.</strong> Permanently remove the endpoint
+    <span class="mono">${esc(endpoint.url)}</span>. Any in-flight deliveries will not be retried.
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <form method="POST" action="/portal/endpoints/${esc(endpoint.id)}/delete" style="display:inline">
+      <button type="submit" class="btn btn-red">Yes, delete endpoint</button>
+    </form>
+    <a href="/portal/endpoints/${esc(endpoint.id)}" class="btn btn-gray">Cancel</a>
+  </div>
+</div>`;
+
+  return base(
+    "Delete endpoint",
+    body,
+    `<a href="/portal/endpoints/${esc(endpoint.id)}" style="color:#64748b;font-size:13px">← Cancel</a>`,
+  );
+}
+
+/**
+ * Archive-confirmation interstitial for an event type — rendered by
+ * `GET /portal/event-types/:id/archive`. Same server-rendered replacement of the
+ * inline `confirm()` the portal CSP disables.
+ */
+export function portalEventTypeArchiveConfirmPage(eventType: EventType): string {
+  const body = `<h2>Archive event type</h2>
+<div class="card">
+  <div class="alert" style="background:#fffbeb;color:#92400e;border:1px solid #fde68a;margin-bottom:16px">
+    Archive <strong>${esc(eventType.name)}</strong> (<span class="mono">${esc(eventType.id)}</span>)?
+    It will be hidden from subscription suggestions. Existing subscriptions that reference this type
+    continue to work.
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <form method="POST" action="/portal/event-types/${esc(eventType.id)}/archive" style="display:inline">
+      <button type="submit" class="btn btn-blue">Yes, archive</button>
+    </form>
+    <a href="/portal/event-types/${esc(eventType.id)}" class="btn btn-gray">Cancel</a>
+  </div>
+</div>`;
+
+  return base(
+    "Archive event type",
+    body,
+    `<a href="/portal/event-types/${esc(eventType.id)}" style="color:#64748b;font-size:13px">← Cancel</a>`,
+  );
 }

@@ -54,6 +54,8 @@ import {
   portalRotatedSecretPage,
   portalEventTypesPage,
   portalEventTypeDetailPage,
+  portalEndpointDeleteConfirmPage,
+  portalEventTypeArchiveConfirmPage,
   type DeliveryRow,
   type PortalTestResult,
   type VerifyWidgetResult,
@@ -384,6 +386,15 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
       return html(200, portalRotatedSecretPage(rotated, rotated.secret));
     }
 
+    // ── GET /portal/endpoints/:id/delete (delete confirmation) ────────────────
+    if (method === "GET" && s0 === "endpoints" && s1 !== undefined && s2 === "delete" && segs.length === 3) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      const ep = await endpoints.get(s1);
+      if (ep === null || ep.appId !== auth.appId) return NOT_FOUND;
+      return html(200, portalEndpointDeleteConfirmPage(ep));
+    }
+
     // ── POST /portal/endpoints/:id/delete ─────────────────────────────────────
     if (method === "POST" && s0 === "endpoints" && s1 !== undefined && s2 === "delete") {
       const auth = requireAuth(req);
@@ -613,6 +624,16 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
         return html(200, portalEventTypeDetailPage(et, errMsg));
       }
       return html(200, portalEventTypeDetailPage(updated, undefined, true));
+    }
+
+    // ── GET /portal/event-types/:id/archive (archive confirmation) ────────────
+    if (method === "GET" && s0 === "event-types" && s1 !== undefined && s2 === "archive" && segs.length === 3) {
+      const auth = requireAuth(req);
+      if ("status" in auth) return auth;
+      if (eventTypesStore === undefined) return NOT_FOUND;
+      const et = await eventTypesStore.get(auth.appId, s1);
+      if (et === null) return NOT_FOUND;
+      return html(200, portalEventTypeArchiveConfirmPage(et));
     }
 
     // ── POST /portal/event-types/:id/archive ──────────────────────────────────
