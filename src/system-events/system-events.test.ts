@@ -6,13 +6,23 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import type { LookupAddress } from "node:dns";
 import { verify, HEADERS } from "../signing/webhook-signature.js";
 import {
   emitEndpointDisabledEvent,
   emitMessageDeadLetteredEvent,
+  systemEventTransportFrom,
   type SystemWebhookConfig,
   type SystemEventTransport,
 } from "./index.js";
+import type {
+  Transport,
+  HttpDeliveryRequest,
+  HttpDeliveryResponse,
+} from "../worker/delivery-worker.js";
+import { createGuardedTransport } from "../net/guarded-transport.js";
+import { createGuardedLookup, type AddressResolver } from "../net/guarded-lookup.js";
+import { BlockedUrlError, type SsrfPolicy } from "../net/ssrf-guard.js";
 
 /** A minimal endpoint snapshot stub for tests. */
 const ENDPOINT_STUB = {
@@ -272,5 +282,85 @@ describe("emitMessageDeadLetteredEvent", () => {
     await expect(
       emitMessageDeadLetteredEvent(CONFIG, INFO, { transport, now: () => 1_700_100_000_000 }),
     ).rejects.toThrow("net fail");
+  });
+});
+
+describe("systemEventTransportFrom", () => {
+  /** A fake delivery {@link Transport} that records what it received and returns a fixed response. */
+  function recordingTransport(response: HttpDeliveryResponse = { status: 202 }) {
+    const calls: { request: HttpDeliveryRequest; signal: AbortSignal }[] = [];
+    const transport: Transport = (request, signal) => {
+      calls.push({ request, signal });
+      return Promise.resolve(response);
+    };
+    return { transport, calls };
+  }
+
+  it("forwards url/headers/body as a POST and returns the transport's status", async () => {
+    const { transport, calls } = recordingTransport({ status: 202 });
+    const send = systemEventTransportFrom(transport);
+
+    const res = await send("https://ops.example/hook", {
+      method: "POST",
+      headers: { "content-type": "application/json", "webhook-id": "sys_x" },
+      body: '{"event":"endpoint.disabled"}',
+    });
+
+    expect(res).toEqual({ status: 202 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.request).toEqual({
+      url: "https://ops.example/hook",
+      method: "POST",
+      headers: { "content-type": "application/json", "webhook-id": "sys_x" },
+      body: '{"event":"endpoint.disabled"}',
+    });
+  });
+
+  it("supplies a non-aborted signal when the caller passes none (fire-and-forget)", async () => {
+    const { transport, calls } = recordingTransport();
+    const send = systemEventTransportFrom(transport);
+    await send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" });
+    const { signal } = calls[0]!;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("forwards an explicit caller signal unchanged", async () => {
+    const { transport, calls } = recordingTransport();
+    const send = systemEventTransportFrom(transport);
+    const controller = new AbortController();
+    await send("https://ops.example/hook", {
+      method: "POST",
+      headers: {},
+      body: "{}",
+      signal: controller.signal,
+    });
+    expect(calls[0]!.signal).toBe(controller.signal);
+  });
+
+  it("rejects when the underlying transport rejects (fail-closed; never swallowed)", async () => {
+    const transport: Transport = () => Promise.reject(new Error("boom"));
+    const send = systemEventTransportFrom(transport);
+    await expect(
+      send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("propagates a connection-time SSRF block from the guarded transport", async () => {
+    // Wrap a guarded transport whose DNS resolution is pinned to the cloud-metadata
+    // address — the same connection-time defense the tenant delivery path uses. The
+    // system-event transport must surface the BlockedUrlError, proving a system webhook
+    // that resolves to a private/internal IP is refused before any bytes are sent.
+    const policy: SsrfPolicy = { allowPrivateNetworks: false };
+    const resolver: AddressResolver = (_h, _o, cb) =>
+      cb(null, [{ address: "169.254.169.254", family: 4 } as LookupAddress]);
+    const guarded = createGuardedTransport(policy, {
+      lookup: createGuardedLookup(policy, resolver),
+    });
+    const send = systemEventTransportFrom(guarded);
+
+    await expect(
+      send("http://metadata.example/hook", { method: "POST", headers: {}, body: "{}" }),
+    ).rejects.toBeInstanceOf(BlockedUrlError);
   });
 });

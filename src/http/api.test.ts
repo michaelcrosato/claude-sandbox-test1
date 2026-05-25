@@ -228,6 +228,102 @@ describe("createApi — SSRF guard on endpoint URLs", () => {
   });
 });
 
+describe("createApi — SSRF guard on system webhook URLs (admin)", () => {
+  const ADMIN_TOKEN = "test-admin-token-1234567890";
+
+  /** Build an admin-enabled API; pass `true` to exercise the allowPrivateNetworks opt-out. */
+  function adminApi(allowPrivateNetworks = false): ApiHandler {
+    return createApi({
+      apps: new InMemoryAppStore(),
+      endpoints: new InMemoryEndpointStore(),
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      adminToken: ADMIN_TOKEN,
+      ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
+    });
+  }
+
+  /** An admin JSON request carrying the bearer admin token. */
+  function adminJson(method: string, path: string, payload: unknown): ApiRequest {
+    return request({
+      method,
+      path,
+      headers: { "content-type": "application/json", authorization: `Bearer ${ADMIN_TOKEN}` },
+      rawBody: JSON.stringify(payload),
+    });
+  }
+
+  it.each([
+    "http://127.0.0.1:6379/",
+    "http://localhost:8080/hook",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://10.0.0.5/admin",
+    "http://[::1]:9200/",
+    "http://redis:6379/",
+  ])("rejects creating an app with systemWebhookUrl = %s (400 url_not_allowed)", async (url) => {
+    const api = adminApi();
+    const res = await api(adminJson("POST", "/v1/admin/apps", { systemWebhookUrl: url }));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("url_not_allowed");
+  });
+
+  it("rejects updating systemWebhookUrl to an internal address (400 url_not_allowed)", async () => {
+    const api = adminApi();
+    const created = await api(adminJson("POST", "/v1/admin/apps", { name: "Acme" }));
+    const id = body(created).id as string;
+    const res = await api(
+      adminJson("PATCH", `/v1/admin/apps/${id}`, { systemWebhookUrl: "http://169.254.169.254/" }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("url_not_allowed");
+  });
+
+  it("allows a public systemWebhookUrl on create and update", async () => {
+    const api = adminApi();
+    const created = await api(
+      adminJson("POST", "/v1/admin/apps", { systemWebhookUrl: "https://ops.example/hook" }),
+    );
+    expect(created.status).toBe(201);
+    expect(body(created).systemWebhookUrl).toBe("https://ops.example/hook");
+
+    const id = body(created).id as string;
+    const updated = await api(
+      adminJson("PATCH", `/v1/admin/apps/${id}`, { systemWebhookUrl: "https://ops2.example/hook" }),
+    );
+    expect(updated.status).toBe(200);
+    expect(body(updated).systemWebhookUrl).toBe("https://ops2.example/hook");
+  });
+
+  it("allows clearing systemWebhookUrl with null (null is not a blocked host)", async () => {
+    const api = adminApi();
+    const created = await api(
+      adminJson("POST", "/v1/admin/apps", { systemWebhookUrl: "https://ops.example/hook" }),
+    );
+    const id = body(created).id as string;
+    const cleared = await api(adminJson("PATCH", `/v1/admin/apps/${id}`, { systemWebhookUrl: null }));
+    expect(cleared.status).toBe(200);
+    expect(body(cleared).systemWebhookUrl).toBeNull();
+  });
+
+  it("allows an internal systemWebhookUrl when allowPrivateNetworks is enabled (self-host opt-out)", async () => {
+    const api = adminApi(true);
+    const res = await api(
+      adminJson("POST", "/v1/admin/apps", { systemWebhookUrl: "http://127.0.0.1:9000/hook" }),
+    );
+    expect(res.status).toBe(201);
+    expect(body(res).systemWebhookUrl).toBe("http://127.0.0.1:9000/hook");
+  });
+
+  it("still rejects a syntactically-invalid systemWebhookUrl as a generic 400 (guard defers to the store)", async () => {
+    const api = adminApi();
+    const res = await api(adminJson("POST", "/v1/admin/apps", { systemWebhookUrl: "not-a-url" }));
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+});
+
 describe("createApi — POST /v1/messages (ingest)", () => {
   it("accepts a message and fans it out to a subscribed endpoint", async () => {
     const { api, secret, queue } = await setup();

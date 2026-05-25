@@ -50,6 +50,7 @@ import { MEMORY_DATA_DIR, type GatewayConfig } from "./config.js";
 import {
   emitEndpointDisabledEvent,
   emitMessageDeadLetteredEvent,
+  systemEventTransportFrom,
   type SystemEventTransport,
 } from "../system-events/index.js";
 
@@ -189,16 +190,13 @@ export function createGateway(config: GatewayConfig): Gateway {
     allowPrivateNetworks: config.allowPrivateNetworks,
   });
 
-  /** Simple fetch-based transport for system webhook delivery. */
-  const systemEventTransport: SystemEventTransport = async (url, init) => {
-    const res = await fetch(url, {
-      method: init.method,
-      headers: init.headers,
-      body: init.body,
-      ...(init.signal !== undefined ? { signal: init.signal } : {}),
-    });
-    return { status: res.status };
-  };
+  // System webhook delivery rides the **same** guarded transport as every tenant send:
+  // the app's system webhook URL is operator-configured but still a stored, mutable
+  // destination, so it gets the connection-time resolved-IP SSRF check and the
+  // no-redirect-following behavior (a compromised receiver can't 3xx-redirect a signed
+  // system event toward an internal address). Governed by the same
+  // POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS opt-out as the delivery path.
+  const systemEventTransport: SystemEventTransport = systemEventTransportFrom(deliveryTransport);
 
   const worker = new DeliveryWorker({
     queue,

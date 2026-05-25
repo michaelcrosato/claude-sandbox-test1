@@ -18,6 +18,7 @@ import { randomBytes } from "node:crypto";
 import { sign, HEADERS } from "../signing/webhook-signature.js";
 import { SYSTEM_WEBHOOK_SECRET_PREFIX } from "../apps/app.js";
 import type { Endpoint } from "../endpoints/endpoint.js";
+import type { Transport } from "../worker/delivery-worker.js";
 
 /** The wire payload for a `message.dead_lettered` system event. */
 export interface MessageDeadLetteredPayload {
@@ -66,6 +67,36 @@ export type SystemEventTransport = (
     signal?: AbortSignal;
   },
 ) => Promise<{ status: number }>;
+
+/**
+ * Adapt a delivery {@link Transport} into a {@link SystemEventTransport}, so a system
+ * webhook delivery rides the **same** connection-time SSRF guard (the resolved-IP
+ * check in {@link import("../net/guarded-transport.js").createGuardedTransport}) and
+ * no-redirect-following policy as a tenant webhook delivery.
+ *
+ * The app's system webhook URL is operator-configured, but it is still a stored,
+ * mutable destination: a public hostname that resolves (or rebinds) to a private IP,
+ * or a compromised receiver that answers a signed system event with a 3xx toward an
+ * internal address, are the same SSRF vectors the tenant delivery path already
+ * defends against. Routing system events through the guarded transport closes that
+ * gap and keeps the two delivery paths consistent (one `allowPrivateNetworks` opt-out
+ * governs both).
+ *
+ * System events are always `POST` and are fire-and-forget — they carry no abort
+ * deadline of their own — so a never-aborting signal is supplied when the caller
+ * passes none. A transport-level failure, **including an SSRF block**, rejects; the
+ * emit helpers' caller treats that as a best-effort failure that never blocks or
+ * changes a delivery (see the worker's `onError` seam).
+ */
+export function systemEventTransportFrom(transport: Transport): SystemEventTransport {
+  return async (url, init) => {
+    const response = await transport(
+      { url, method: "POST", headers: init.headers, body: init.body },
+      init.signal ?? new AbortController().signal,
+    );
+    return { status: response.status };
+  };
+}
 
 /**
  * Normalize a system webhook secret for use with the Standard Webhooks signing

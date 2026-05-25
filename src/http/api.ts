@@ -1648,6 +1648,14 @@ export function createApi(deps: ApiDeps): ApiHandler {
     // `name`, `monthlyMessageQuota`, and `systemWebhookUrl` are validated by the
     // store's normalizeNewApp (TypeError → 400).
     const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
+    // Reject a private/internal system webhook URL before it is stored, mirroring the
+    // endpoint-URL guard (BlockedUrlError → 400 url_not_allowed). The system-event send
+    // is also guarded at connection time (the gateway's guarded transport); both layers
+    // share the allowPrivateNetworks opt-out. A non-string (incl. null = clear) defers to
+    // the store's syntactic validation.
+    if (typeof body["systemWebhookUrl"] === "string") {
+      assertUrlDeliverable(body["systemWebhookUrl"], ssrfPolicy);
+    }
     const input: NewApp = {
       ...("name" in body ? { name: body["name"] as string } : {}),
       ...("monthlyMessageQuota" in body
@@ -1665,6 +1673,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
   const updateApp: RouteHandler = async (ctx) => {
     const id = requireParam(ctx.params, "id");
     const body = parseJsonObject(ctx.req);
+    // Reject a private/internal system webhook URL before it is stored — same guard as
+    // create (BlockedUrlError → 400 url_not_allowed). `null` (clear the webhook) and any
+    // non-string skip this and defer to applyAppUpdate's syntactic validation.
+    if (typeof body["systemWebhookUrl"] === "string") {
+      assertUrlDeliverable(body["systemWebhookUrl"], ssrfPolicy);
+    }
     // Only the patchable fields are forwarded; values are validated by applyAppUpdate
     // (TypeError → 400). Setting `monthlyMessageQuota` is the plan upgrade/downgrade
     // path (null removes the limit). `systemWebhookUrl` null clears the system webhook.

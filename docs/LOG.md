@@ -41,6 +41,52 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:05 · iter-0081 · GREEN · ssrf-guard-on-system-webhook-urls
+
+- **Baseline:** clean main @ `3fe6366` (iter-0080 connection-time SSRF guard on delivery).
+  Verified green first: `tsc --noEmit` 0, `vitest run` **1610/1610** (6 PG-skipped; a one-off
+  tinypool "Worker exited unexpectedly" cleared on re-run), `npm run build` 0,
+  `assert-gate-integrity.ps1` 0, `validate-log-compliance.py` `[PASS]`.
+- **Move:** Close the parallel SSRF residual iter-80 named as Next #1. The app's **system
+  webhook URL** (operator-set via `POST/PATCH /v1/admin/apps`, fired on `endpoint.disabled` /
+  `message.dead_lettered`) had **neither** guard: registration accepted any http(s) URL incl.
+  private, and delivery used a plain redirect-following `fetch` — while tenant endpoint URLs
+  already have both the registration (iter-78) and connection-time (iter-80) layers. Apply
+  Posthorn's existing two-layer defense to the system-webhook path for full parity.
+- **Changed:**
+  - `src/system-events/index.ts`: new `systemEventTransportFrom(transport)` adapts a delivery
+    `Transport` into a `SystemEventTransport`, so system events ride the guarded transport
+    (connection-time resolved-IP check + no redirect-following). System events are POST and
+    fire-and-forget → a never-aborting signal is supplied when none is passed; a block rejects
+    and is absorbed by the worker's `onError` seam (unchanged from the prior fetch, which also
+    threw). Type-only `Transport` import (no runtime coupling/cycle).
+  - `src/runtime/gateway.ts`: replaced the plain-`fetch` `systemEventTransport` with
+    `systemEventTransportFrom(deliveryTransport)` — both delivery paths now share one guarded
+    transport and the single `allowPrivateNetworks` opt-out.
+  - `src/http/api.ts`: registration guard — `assertUrlDeliverable(systemWebhookUrl, ssrfPolicy)`
+    in admin `createApp`/`updateApp` when the value is a non-null string (`BlockedUrlError` →
+    `400 url_not_allowed`; null/non-string defers to the store's syntactic validation). Mirrors
+    the endpoint guard at lines 1347/1388.
+  - Tests: +5 system-events (adapter forward/signal-default/signal-forward/reject + a
+    connection-time block propagating through the real guarded transport) and +11 api (6 admin
+    create block vectors, update→internal block, public allow on create+update, null clear,
+    opt-out allow, invalid-URL→generic 400). These are also the first coverage of setting
+    `systemWebhookUrl` via the admin API surface.
+- **Decisions:** Two-layer parity over connection-guard-only — avoids a "saves 201 but silently
+  fails at delivery" asymmetry. Reused the existing guarded transport instance (**zero new
+  deps**). Secure-by-default block; an operator who points a system webhook at internal alerting
+  flips the same documented `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=true` (governs both paths).
+  Guard kept at the API boundary, not inside pure `normalizeSystemWebhookUrl`, so the trusted
+  CLI/library path stays unconstrained (same model as iter-78). Helper stays internal —
+  `system-events` is not a public `index.ts` export.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1626/1626** (+16; 6 PG-skipped, no flaky exit
+  on the full run); `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`; compiled-`dist` ESM smoke **2/2** (system event to a
+  metadata-resolving host blocked with `BlockedUrlError`; loopback delivered under the opt-out).
+- **Next:** Surface `url_not_allowed` in the OpenAPI 400s for endpoint + admin-app create/update
+  (iter-80 Next #2, still open); or add a per-attempt request timeout to system-event delivery
+  (it currently has none — the never-abort signal preserves prior behavior).
+
 ## 2026-05-24T17:45 · iter-0080 · GREEN · connection-time-ssrf-guard-on-delivery
 
 - **Baseline:** clean main @ `a501770` (iter-0079 hex/NAT64 SSRF fix). Verified green first:
