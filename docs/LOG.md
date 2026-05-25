@@ -41,6 +41,42 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T18:25 · iter-0082 · GREEN · system-event-delivery-per-attempt-timeout
+
+- **Baseline:** clean main @ `546c94d` (iter-0081 two-layer SSRF guard on system-webhook URLs).
+  Verified green first: `tsc --noEmit` 0, `vitest run` **1626/1626** (6 PG-skipped), `npm run
+  build` 0, `assert-gate-integrity.ps1` 0, `validate-log-compliance.py` `[PASS]`.
+- **Move:** Close iter-0081 Next #2 — **system-event delivery had no per-attempt timeout.** The
+  tenant delivery path wraps every send in the worker's `#send` (`AbortController` +
+  `setTimeout(requestTimeoutMs)`), but the `endpoint.disabled` / `message.dead_lettered`
+  notification path passed **no signal**, so `systemEventTransportFrom` substituted a
+  *never-aborting* signal — a system-webhook receiver that accepts the TCP connection but never
+  responds would pin a socket open indefinitely. Bring system events to delivery-path parity.
+- **Changed:**
+  - `src/system-events/index.ts`: `systemEventTransportFrom(transport, options?)` gains an optional
+    `timeoutMs` (`SystemEventTransportOptions`). When `> 0` and the caller supplies no signal, the
+    request is bounded by an `AbortController` + `setTimeout` cleared on settle (the worker's exact
+    `#send` idiom). A caller-supplied signal still wins (forwarded unchanged); `timeoutMs ≤ 0`
+    preserves the prior never-abort fire-and-forget behavior.
+  - `src/runtime/gateway.ts`: the single system-event transport instance now passes
+    `timeoutMs: config.worker.requestTimeoutMs` — both emit paths inherit the worker's per-attempt
+    deadline through one wiring point.
+  - Tests: +4 (`system-events.test.ts`) — timeout aborts a hung transport (fake timers), the timer
+    is cleared so a finished request never aborts late, a caller signal overrides the timeout, and
+    `timeoutMs:0` stays never-abort.
+- **Decisions:** Reused `config.worker.requestTimeoutMs` rather than adding a config knob — a system
+  event is a webhook POST like any other, same deadline semantics, and **no new env var** means no
+  config-docs drift (iter-77 guard). Timeout lives in the transport adapter, not each emit helper, so
+  both paths are covered at one seam. No unref on the timer (matches the worker's `#send`; it is
+  always cleared on settle).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1630/1630** (+4, 6 PG-skipped); `npm run build`
+  0; `assert-gate-integrity.ps1` 0 (zero substrate edits); `validate-log-compliance.py` `[PASS]`;
+  compiled-`dist` ESM smoke **5/5** (hung receiver aborts at ~50ms; finished request not aborted
+  after the deadline; `timeoutMs:0` never aborts — all via `dist/system-events/index.js`).
+- **Next:** Surface `url_not_allowed` in the OpenAPI 400s for endpoint + admin-app create/update
+  (iter-80 Next #2 / iter-81 Next #1, still open); or a connect-vs-total split on the delivery
+  timeout (today one deadline covers DNS+connect+response — adequate, but Svix exposes both).
+
 ## 2026-05-24T18:05 · iter-0081 · GREEN · ssrf-guard-on-system-webhook-urls
 
 - **Baseline:** clean main @ `3fe6366` (iter-0080 connection-time SSRF guard on delivery).

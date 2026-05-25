@@ -68,6 +68,17 @@ export type SystemEventTransport = (
   },
 ) => Promise<{ status: number }>;
 
+/** Construction options for {@link systemEventTransportFrom}. */
+export interface SystemEventTransportOptions {
+  /**
+   * Per-attempt timeout in ms. When `> 0` and the caller supplies no signal of its
+   * own, the request is aborted after this many ms — the same per-attempt deadline
+   * the delivery worker applies, so a hung system webhook receiver cannot pin a
+   * socket open forever. `0` (the default) preserves the prior never-abort behavior.
+   */
+  readonly timeoutMs?: number;
+}
+
 /**
  * Adapt a delivery {@link Transport} into a {@link SystemEventTransport}, so a system
  * webhook delivery rides the **same** connection-time SSRF guard (the resolved-IP
@@ -83,18 +94,40 @@ export type SystemEventTransport = (
  * governs both).
  *
  * System events are always `POST` and are fire-and-forget — they carry no abort
- * deadline of their own — so a never-aborting signal is supplied when the caller
- * passes none. A transport-level failure, **including an SSRF block**, rejects; the
- * emit helpers' caller treats that as a best-effort failure that never blocks or
+ * deadline of their own. When `options.timeoutMs > 0` and the caller passes no
+ * signal, the request is aborted after that many ms (an `AbortController` +
+ * `setTimeout` cleared on settle, the same per-attempt-timeout pattern the delivery
+ * worker uses) — so a system webhook receiver that accepts the connection but never
+ * responds cannot hold a socket open indefinitely. A caller-supplied signal owns its
+ * own deadline and is forwarded unchanged; with no signal and no timeout a
+ * never-aborting signal preserves the original fire-and-forget behavior. A
+ * transport-level failure, **including an SSRF block or a timeout abort**, rejects;
+ * the emit helpers' caller treats that as a best-effort failure that never blocks or
  * changes a delivery (see the worker's `onError` seam).
  */
-export function systemEventTransportFrom(transport: Transport): SystemEventTransport {
+export function systemEventTransportFrom(
+  transport: Transport,
+  options: SystemEventTransportOptions = {},
+): SystemEventTransport {
+  const timeoutMs = options.timeoutMs ?? 0;
   return async (url, init) => {
-    const response = await transport(
-      { url, method: "POST", headers: init.headers, body: init.body },
-      init.signal ?? new AbortController().signal,
-    );
-    return { status: response.status };
+    const request = { url, method: "POST", headers: init.headers, body: init.body } as const;
+    // A caller-supplied signal owns its own deadline; with no timeout configured,
+    // a never-aborting signal preserves the prior fire-and-forget behavior.
+    if (init.signal !== undefined || timeoutMs <= 0) {
+      const response = await transport(request, init.signal ?? new AbortController().signal);
+      return { status: response.status };
+    }
+    // No caller signal + a configured timeout: bound the attempt, clearing the timer
+    // on settle so a finished request never leaves a dangling abort scheduled.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await transport(request, controller.signal);
+      return { status: response.status };
+    } finally {
+      clearTimeout(timer);
+    }
   };
 }
 

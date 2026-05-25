@@ -346,6 +346,70 @@ describe("systemEventTransportFrom", () => {
     ).rejects.toThrow("boom");
   });
 
+  it("aborts the request after timeoutMs when the caller passes no signal", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedSignal: AbortSignal | undefined;
+      // A transport that never settles on its own — only the timeout can end it.
+      const transport: Transport = (_request, signal) => {
+        capturedSignal = signal;
+        return new Promise<HttpDeliveryResponse>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted by timeout")));
+        });
+      };
+      const send = systemEventTransportFrom(transport, { timeoutMs: 5000 });
+      const promise = send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" });
+      expect(capturedSignal).toBeInstanceOf(AbortSignal);
+      expect(capturedSignal!.aborted).toBe(false);
+      vi.advanceTimersByTime(5000);
+      await expect(promise).rejects.toThrow("aborted by timeout");
+      expect(capturedSignal!.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the timeout when the transport resolves first (no late abort)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, calls } = recordingTransport({ status: 200 });
+      const send = systemEventTransportFrom(transport, { timeoutMs: 5000 });
+      const res = await send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" });
+      expect(res).toEqual({ status: 200 });
+      // Advancing past the deadline must not abort a signal for a finished request.
+      vi.advanceTimersByTime(60_000);
+      expect(calls[0]!.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a caller-supplied signal win over the configured timeout", async () => {
+    const { transport, calls } = recordingTransport();
+    const send = systemEventTransportFrom(transport, { timeoutMs: 5000 });
+    const controller = new AbortController();
+    await send("https://ops.example/hook", {
+      method: "POST",
+      headers: {},
+      body: "{}",
+      signal: controller.signal,
+    });
+    expect(calls[0]!.signal).toBe(controller.signal);
+  });
+
+  it("with timeoutMs 0 supplies a never-aborting signal (preserves fire-and-forget)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, calls } = recordingTransport();
+      const send = systemEventTransportFrom(transport, { timeoutMs: 0 });
+      await send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" });
+      vi.advanceTimersByTime(1_000_000);
+      expect(calls[0]!.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates a connection-time SSRF block from the guarded transport", async () => {
     // Wrap a guarded transport whose DNS resolution is pinned to the cloud-metadata
     // address — the same connection-time defense the tenant delivery path uses. The
