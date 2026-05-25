@@ -17,10 +17,12 @@ procedures.
 7. [Logging](#logging)
 8. [Alerting](#alerting)
 9. [Grafana (optional)](#grafana-optional)
-10. [Upgrading](#upgrading)
-11. [Standalone binary (without Docker)](#standalone-binary-without-docker)
-12. [Embedding as a library](#embedding-as-a-library)
-13. [Tuning for throughput](#tuning-for-throughput)
+10. [PostgreSQL backend](#postgresql-backend)
+11. [Running multiple replicas (active/active)](#running-multiple-replicas-activeactive)
+12. [Upgrading](#upgrading)
+13. [Standalone binary (without Docker)](#standalone-binary-without-docker)
+14. [Embedding as a library](#embedding-as-a-library)
+15. [Tuning for throughput](#tuning-for-throughput)
 
 ---
 
@@ -345,6 +347,12 @@ Posthorn exposes a Prometheus text-format `/metrics` endpoint with the following
 series.  All counters reset on process restart (correct for a single-process
 Prometheus model; Prometheus detects resets via the `_created` convention).
 
+> **Running more than one replica?** `/metrics` is per-process, and the queue-backed
+> gauges below report the *same* shared value on every replica while the counters are
+> per-replica. See [Monitoring a fleet](#monitoring-a-fleet) for the PromQL (sum the
+> counters, `max` the gauges) and the alert-rule adjustments — getting this wrong
+> reports the backlog N× and mis-fires the shipped alerts.
+
 ### Counters (monotonic, reset on restart)
 
 | Metric | Labels | Description |
@@ -564,6 +572,191 @@ stray SQLite file.
 **Backup** is now your Postgres operator's job — `pg_dump` / managed snapshots /
 streaming replication — rather than the SQLite file copy described below. The
 SQLite-specific `.backup` guidance does not apply to a Postgres deployment.
+
+---
+
+## Running multiple replicas (active/active)
+
+A single container on embedded SQLite is **single-host** by design — wonderfully
+simple, but one process. When you need high availability (survive a node failure) or
+more delivery throughput than one process provides, switch to the shared
+[PostgreSQL backend](#postgresql-backend) and run **several identical gateway replicas
+against the same database**. There is still no Redis and **no leader election**: every
+replica runs the full engine, and all coordination lives in Postgres rows.
+
+### What runs on every replica — and how they stay out of each other's way
+
+Each gateway process runs the HTTP API, the delivery worker, the fan-out dispatcher,
+and (when `POSTHORN_RETENTION_DAYS > 0`) the data pruner. None of them needs to know
+another replica exists; they coordinate entirely through the shared tables:
+
+| Subsystem | Coordination mechanism | Behavior across N replicas |
+|-----------|------------------------|----------------------------|
+| **Delivery worker** (the hot path) | `SELECT … FOR UPDATE SKIP LOCKED` lease + visibility timeout | Each due delivery is claimed by exactly one replica; the rest skip the locked rows and claim *different* work, so delivery throughput scales with replica count. A replica that dies mid-delivery has its lease reclaimed after `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` and the task is re-driven elsewhere — nothing is lost or stranded. |
+| **Idempotent intake** | composite unique index on `(app_id, idempotency_key)` | Two replicas accepting the same key at the same instant still collapse to one stored message and one fan-out. |
+| **Endpoint health / auto-disable** | folded per terminal outcome inside a `SELECT … FOR UPDATE` transaction | Concurrent failure reports from different replicas never lose an increment, so auto-disable fires on the true consecutive-failure streak, not an undercount. |
+| **Fan-out dispatcher** (outbox relay) | none — *duplicate-safe by design* | Runs on every replica. The rare orphan it recovers — a message accepted but not inline-fanned-out because a crash struck in between — can be swept by more than one replica at once, producing a duplicate fan-out. Delivery is **at-least-once** and every webhook carries a stable `webhook-id`, so a compliant receiver dedups the repeat; `POSTHORN_FANOUT_GRACE_MS` keeps the dispatcher from racing a *healthy* inline fan-out. The only cost is occasionally double-counting a metered operation on an orphan. |
+| **Data pruner** | idempotent `DELETE … WHERE … < cutoff` | Safe to run on every replica: concurrent sweeps merely race to delete the same expired rows and the loser deletes nothing — redundant work, never destructive. Set `POSTHORN_RETENTION_DAYS` identically on every replica. |
+| **Monthly quota** | per-request count over the current UTC month — no scheduled reset job | The window "resets" implicitly at the UTC month boundary, so there is nothing to coordinate. Under heavy concurrency two replicas can both pass the check on the boundary message and overshoot the cap by a hair — the quota is a guard, not a hard ceiling. |
+
+The takeaway: **scale the replica count freely.** The load-bearing delivery path is
+lease-serialized, and every other subsystem is either idempotent or
+at-least-once-safe.
+
+### A worked example (Docker Compose)
+
+```yaml
+# docker-compose.yml — three gateway replicas behind nginx, one shared Postgres.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: posthorn
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: posthorn
+    command: ["postgres", "-c", "max_connections=100"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  posthorn:
+    image: posthorn
+    environment:
+      POSTHORN_DATABASE_URL: postgres://posthorn:secret@db:5432/posthorn
+      POSTHORN_PG_POOL_MAX: "10"          # 3 replicas × 10 = 30 ≤ max_connections
+      POSTHORN_ADMIN_TOKEN: ${POSTHORN_ADMIN_TOKEN}
+    depends_on: [db]
+    # No host port published — nginx fronts the replicas.
+
+  lb:
+    image: nginx:alpine
+    ports: ["3000:80"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [posthorn]
+
+volumes:
+  pgdata:
+```
+
+Scale the gateway tier; Compose's embedded DNS returns one address per replica:
+
+```bash
+docker compose up -d --scale posthorn=3
+```
+
+`nginx.conf` — re-resolve the Compose service name each request so nginx round-robins
+across whatever replicas are currently up (the `resolver` + variable-`proxy_pass`
+pattern; a static `upstream` would pin to the addresses present at nginx start):
+
+```nginx
+resolver 127.0.0.11 valid=10s;   # Docker's embedded DNS
+server {
+    listen 80;
+    location / {
+        set $backend http://posthorn:3000;
+        proxy_pass $backend;     # variable proxy_pass forwards the original request URI
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;   # also drives HTTPS portal links / HSTS
+    }
+}
+```
+
+On Kubernetes the same shape is a `Deployment` with `replicas: 3`, the database URL
+from a `Secret`, a `readinessProbe`/`livenessProbe` on `GET /healthz`, and an ordinary
+`Service` in front — no `StatefulSet` and no per-pod volume, because the replicas hold
+no local state.
+
+### Load balancing and health checks
+
+- Replicas are **stateless** — no sticky sessions or session affinity. Any algorithm
+  (round-robin, least-connections) works.
+- Health-check each replica on **`GET /healthz`**, a static `200 {"status":"ok"}`
+  served as soon as the HTTP listener is up. It is a **liveness** signal
+  (process-is-serving), **not** a database probe: a replica whose Postgres connection
+  is failing still answers it, so pair it with the delivery-failure and
+  connection-timeout signals in [Monitoring a fleet](#monitoring-a-fleet) to catch a
+  degraded-but-listening replica.
+- **Rolling deploys and replica loss are safe.** Drain or kill a replica at any time:
+  any delivery it held mid-flight loses its lease and is reclaimed by a peer after the
+  visibility timeout, so the only observable effect is at-least-once redelivery (which
+  receivers already dedup on `webhook-id`). No draining beyond your load balancer's
+  normal in-flight-request grace is required.
+
+### Connection budget — the one number to plan
+
+This is the single PostgreSQL knob a multi-replica deployment *must* get right.
+Postgres caps total connections server-side (`max_connections` — often ~100 on a
+managed instance, far less on small tiers), and **every replica opens its own pool of
+up to `POSTHORN_PG_POOL_MAX` (default 10)** against that shared budget:
+
+```
+replicas × POSTHORN_PG_POOL_MAX  ≤  max_connections − headroom
+```
+
+Reserve headroom (a dozen connections is safe) for the `posthorn admin` CLI, ad-hoc
+`psql`, backups, and Postgres's own background workers. Three replicas at the default
+10 draw 30 connections; eight replicas on a 100-connection server still fit at the
+default (80), but sixteen would need `POSTHORN_PG_POOL_MAX` lowered to ~5. If a healthy
+fleet starts logging connection-acquisition timeouts (`timeout exceeded when trying to
+connect`), that replica's pool is under-provisioned for its load — raise
+`POSTHORN_PG_POOL_MAX` *and* `max_connections` together, never just one. See
+[Connection pool sizing](#postgresql-backend) for the per-pool details.
+
+### Monitoring a fleet
+
+`/metrics` is **per-process**, so point Prometheus at **every replica as its own scrape
+target** (Compose / Kubernetes service discovery does this automatically, tagging each
+with a distinct `instance`). Two metric families then behave differently, and
+conflating them is the easiest multi-replica monitoring mistake:
+
+- **Counters are per-replica — sum them.** `posthorn_messages_ingested_total`,
+  `posthorn_deliveries_total`, `posthorn_messages_deduplicated_total`, and
+  `posthorn_delivery_failures_total` each accumulate in the process that handled the
+  work, so a fleet total is a `sum`:
+
+  ```promql
+  # Fleet-wide ingest rate (msgs/min):
+  sum(rate(posthorn_messages_ingested_total[5m])) * 60
+
+  # Fleet-wide delivery success rate — sum numerator and denominator *first*:
+  sum(rate(posthorn_deliveries_total{outcome="succeeded"}[10m]))
+    / sum(rate(posthorn_deliveries_total[10m]))
+  ```
+
+- **Queue gauges are global — do *not* sum them.** `posthorn_delivery_tasks` and
+  `posthorn_dead_letter_tasks` are read from the *shared* queue at scrape time, so every
+  replica reports the **same** backlog. Prometheus stores one identical series per
+  `instance`; summing them inflates the backlog N-fold. Collapse the duplicates with
+  `max` instead:
+
+  ```promql
+  # True dead-letter backlog across the fleet (NOT sum — that would be N× the truth):
+  max without (instance) (posthorn_delivery_tasks{status="dead_letter"})
+
+  # True pending depth:
+  max without (instance) (posthorn_delivery_tasks{status="pending"})
+  ```
+
+- `posthorn_uptime_seconds` and `posthorn_build_info` are genuinely per-replica; during
+  a rolling upgrade `count by (version) (posthorn_build_info)` shows the live version mix.
+
+**The shipped `monitoring/alerts.yml` rules assume a single scrape target.** Under
+multiple replicas the gauge-based rules (`PosthornDeadLetterBacklog`,
+`PosthornDeadLetterBacklogHigh`, `PosthornDeliveryQueueDepthHigh`) compare *each*
+replica's copy of the shared gauge, so they still test the correct value but raise one
+duplicate alert per replica — wrap the gauge in `max without (instance) (…)` to fire
+once. The failure-rate rule (`PosthornDeliveryFailureRateHigh`) is evaluated per
+replica, which is useful for catching a single sick replica; for a true *fleet* ratio,
+rewrite it as `sum(rate(…failed…)) / sum(rate(…total…))`. `PosthornDown` (`up == 0`) is
+already per-target and correct as-is.
+
+### Rolling upgrades across the fleet
+
+Posthorn's schema migrations are **forward-only and additive**
+(`ADD COLUMN IF NOT EXISTS` — see [Upgrading](#upgrading)), so a mixed-version fleet
+*during* a rolling deploy is safe: a new replica adds any missing columns on boot, and
+older replicas ignore columns they do not know about. Upgrade one replica at a time
+behind the load balancer; no maintenance window or separate migration step is required.
 
 ---
 

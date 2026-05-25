@@ -41,6 +41,47 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T00:50 · iter-0106 · GREEN · multi-replica-active-active-deploy-guide
+
+- **Baseline:** clean main @ `541cd5b` (iter-0105 bounded the PG pool max + acquisition
+  timeout). Verified green first: `tsc --noEmit` 0, `vitest run` 1840 (6 PG-skipped),
+  `npm run build` 0; `assert-gate-integrity.ps1` 0.
+- **Move:** Write the operator guide for the one capability the entire iter-0103→0105 Postgres
+  investment exists to enable but never documented — **running more than one gateway replica
+  active/active**. The machinery (deployable PG backend, lock/idle timeouts, bounded pool) is in
+  and correct; an operator who set `POSTHORN_DATABASE_URL` still had no instructions for scaling
+  out, and the Monitoring section silently assumed a single process.
+- **Changed:** New `## Running multiple replicas (active/active)` section in `docs/DEPLOY.md`,
+  grounded in a read of how every background loop actually coordinates:
+  - Per-subsystem coordination table — worker (`FOR UPDATE SKIP LOCKED` lease, verified
+    `postgres-queue.ts:207`), idempotency unique index, endpoint-health fold (transactional
+    `SELECT … FOR UPDATE`, `postgres-endpoint-store.ts:251`), fan-out dispatcher (uncoordinated
+    but at-least-once / duplicate-safe), pruner (idempotent `DELETE … < cutoff`), monthly quota
+    (per-request UTC-month count, no reset job).
+  - A Docker-Compose worked example (3 replicas + shared `postgres:16` + nginx `resolver`
+    round-robin), a k8s `Deployment` sketch, LB/health-check guidance (`/healthz` is a static
+    liveness signal, not a DB probe), and the `replicas × POSTHORN_PG_POOL_MAX ≤ max_connections`
+    budget example.
+  - **Monitoring a fleet** — the load-bearing nuance: counters are per-replica (sum them), but
+    the queue-backed gauges are read from the shared store at scrape time, so every replica
+    reports the *same* value — `max without(instance)`, never `sum` (else N× the truth) — plus
+    the `monitoring/alerts.yml` adjustments (gauge alerts fire per-replica; failure-rate rule is
+    per-replica).
+  - TOC fixed (it was also missing the existing PostgreSQL-backend entry) + a forward-ref note
+    on the single-process Monitoring intro.
+- **Decisions:** Docs-only — verified each operational claim against source rather than asserting
+  it; no code change, so no new `POSTHORN_*` var and no config↔docs drift. Chose this over a 5th
+  consecutive PG-pool knob (`idleTimeoutMillis`/`maxLifetimeSeconds`, diminishing returns) because
+  the undocumented scale-out story blocks *all* multi-replica adoption — the capstone that makes
+  the PG investment usable.
+- **Validation:** `vitest run src/runtime/config.test.ts` 121/121 (the config↔docs drift guard
+  reads the edited DEPLOY.md — every var still documented); `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); `validate-log-compliance.py` `[PASS]`. Docs-only: the iter-0105 code baseline
+  (tsc 0 · vitest 1840 · build 0) is unchanged and stands.
+- **Next:** Optional PG pool `idleTimeoutMillis` / `maxLifetimeSeconds` recycling knobs behind a
+  connection-capping proxy; or commit a runnable k8s manifest / Helm values under `deploy/` to
+  complement the in-doc sketch.
+
 ## 2026-05-25T00:30 · iter-0105 · GREEN · postgres-pool-max-and-connection-acquisition-timeout
 
 - **Baseline:** clean main @ `07ca4f1` (iter-0104 added the per-connection lock +
