@@ -40,6 +40,7 @@ import {
 import {
   isDeliveryFailureReason,
   type DeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
 } from "../delivery/failure-reason.js";
 
 /**
@@ -466,6 +467,18 @@ export interface DeliveryQueue {
    * never throws on an empty queue.
    */
   countByStatus(): Promise<DeliveryCountsByStatus>;
+  /**
+   * Count tasks currently in `dead_letter`, grouped by {@link DeliveryTask.failureReason}
+   * — the point-in-time "*why* are deliveries permanently failing right now?" gauge
+   * that refines {@link countByStatus}'s single `dead_letter` total. Summed across
+   * reasons it equals that total. Every {@link DeliveryFailureReason} key is always
+   * present (zero when none), so a caller renders a complete gauge family. A dead-letter
+   * row with a `null` or unrecognized reason — e.g. one dead-lettered before the
+   * `failure_reason` column existed, or settled with no classification — folds into the
+   * `other` bucket, so the sum invariant always holds. A pure read: never mutates,
+   * never throws on an empty queue.
+   */
+  countDeadLettersByReason(): Promise<DeliveryFailureReasonCounts>;
 }
 
 /** Thrown when an operation references a task id the queue does not hold. */

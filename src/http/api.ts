@@ -1025,14 +1025,18 @@ export function createApi(deps: ApiDeps): ApiHandler {
       // exist. 404 keeps that indistinguishable from any other unknown path.
       throw new HttpError(404, "not_found", "metrics are not enabled");
     }
-    // Counters are in-memory (instant); the backlog gauge is read from the queue
-    // at scrape time so it is never stale.
-    const deliveryTasksByStatus = await deps.queue.countByStatus();
+    // Counters are in-memory (instant); the backlog gauges are read from the queue
+    // at scrape time so they are never stale. One round-trip each, in parallel.
+    const [deliveryTasksByStatus, deadLettersByReason] = await Promise.all([
+      deps.queue.countByStatus(),
+      deps.queue.countDeadLettersByReason(),
+    ]);
     const text = renderPrometheus({
       version: registry.version,
       uptimeSeconds: registry.uptimeSeconds(),
       counters: registry.counters(),
       deliveryTasksByStatus,
+      deadLettersByReason,
     });
     return { status: 200, body: text, contentType: PROMETHEUS_CONTENT_TYPE };
   };

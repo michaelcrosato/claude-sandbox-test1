@@ -46,6 +46,11 @@ import {
   type RetryPolicy,
 } from "../delivery/retry-policy.js";
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
+import {
+  emptyDeliveryFailureCounts,
+  isDeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
 
 export interface PostgresQueueOptions {
   now?: () => number;
@@ -461,6 +466,21 @@ export class PostgresDeliveryQueue implements DeliveryQueue {
       if (row.status in counts) {
         counts[row.status as DeliveryStatus] += Number(row.n);
       }
+    }
+    return counts;
+  }
+
+  async countDeadLettersByReason(): Promise<DeliveryFailureReasonCounts> {
+    const counts = emptyDeliveryFailureCounts();
+    const { rows } = await this.#pool.query<{ reason: string | null; n: string }>(
+      "SELECT failure_reason AS reason, COUNT(*) AS n FROM delivery_tasks" +
+        " WHERE status = 'dead_letter' GROUP BY failure_reason",
+    );
+    for (const row of rows) {
+      // A null (legacy/pre-classification) or unrecognized reason folds into `other`,
+      // keeping the sum equal to the dead_letter total.
+      const reason = isDeliveryFailureReason(row.reason) ? row.reason : "other";
+      counts[reason] += Number(row.n);
     }
     return counts;
   }

@@ -41,6 +41,43 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T23:00 · iter-0098 · GREEN · dead-letter-backlog-gauge-by-reason
+
+- **Baseline:** clean main @ `de07ee5` (iter-0097 leftmost-token XFP portal parse). Verified green
+  first: `tsc --noEmit` 0, `vitest run` **1797**, `npm run build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Land the point-in-time **dead-letter-by-reason** gauge deferred across the iter-0091→0097
+  Next lists. The `failure_reason` column was denormalized onto the task (iter-0094) and exposed as a
+  filter (iter-0095) and a *lifetime counter* (`posthorn_delivery_failures_total`), but nothing showed
+  the **current** dead-letter backlog broken down by *why* — the actionable alerting view ("4k
+  deliveries dead-lettered on `connection_refused` right now ⇒ an endpoint is down"). This adds it.
+- **Changed:**
+  - `queue/delivery-queue.ts`: new `countDeadLettersByReason(): Promise<DeliveryFailureReasonCounts>`
+    on the `DeliveryQueue` interface — counts `dead_letter` tasks grouped by reason; a `null`/legacy/
+    unrecognized reason folds into `other` so the sum always equals the `dead_letter` total.
+  - All three backends implement it: in-memory filter+group; sqlite prepared grouped scan over the
+    `dead_letter` slice; postgres grouped query. Two `DeliveryQueue` stub fakes in the worker test fixed up.
+  - `metrics/metrics.ts`: `deadLettersByReason` on `MetricsSnapshot` + new `posthorn_dead_letter_tasks`
+    gauge family (one series per reason, zeros included, stable order).
+  - `http/api.ts`: `/metrics` route reads `countByStatus` + `countDeadLettersByReason` in parallel.
+  - `docs/DEPLOY.md` gauge-table row + `topk` PromQL; `README.md` example line.
+  - Tests: +6 conformance (empty→zero; grouped, excludes succeeded/pending-retrying, asserts the
+    sum-equals-dead_letter invariant; `null`→`other`) ×2 live backends; +1 metrics render; +1 HTTP
+    route series; `smoke-failure-reason.mjs` +3 (gauge served via `/metrics`).
+- **Decisions:** Counted only `dead_letter` (terminal, accumulating, actionable) — not pending-retrying
+  tasks, which drain themselves and would muddy the alerting signal and break the sum invariant.
+  `null`/legacy reason → `other` rather than a new `unknown` label, staying inside the closed reason
+  set so the renderer iterates `DELIVERY_FAILURE_REASONS` unchanged. No new SQLite index: mirrors
+  `countByStatus`'s grouped-scan precedent on the cold scrape path. Kept it a separate query, not
+  merged into `countByStatus`, to preserve the clean single-purpose interface methods.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1804** (+7; 52 files, 6 PG-skipped, no flaky exit);
+  `npm run build` 0; `node scripts/smoke-failure-reason.mjs` **23/23** (+3, gauge served through compiled
+  ESM on file-backed `node:sqlite`); `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Next:** Surface the dead-letter reason breakdown as a panel/column in the tenant dashboard; or an
+  Alertmanager rule example keyed on `posthorn_dead_letter_tasks` (which reason crossed threshold); or
+  the still-deferred `X-Forwarded-Host` portal-URL handling (needs a trusted-host allowlist — a distinct
+  trust decision, not a parse fix).
+
 ## 2026-05-24T22:45 · iter-0097 · GREEN · portal-url-leftmost-token-xfp-parse
 
 - **Baseline:** clean main @ `dbdec96` (iter-0096 X-Forwarded-Proto-aware HSTS). Verified green

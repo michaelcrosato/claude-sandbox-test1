@@ -580,6 +580,7 @@ describe("DeliveryWorker.processOnce", () => {
         dead_letter: 0,
         cancelled: 0,
       }),
+      countDeadLettersByReason: async () => emptyDeliveryFailureCounts(),
     };
     const worker = new DeliveryWorker({
       queue: stubQueue,
@@ -1723,6 +1724,7 @@ describe("DeliveryWorker.run", () => {
         dead_letter: 0,
         cancelled: 0,
       }),
+      countDeadLettersByReason: async () => emptyDeliveryFailureCounts(),
     };
     const errors: unknown[] = [];
     let worker!: DeliveryWorker;

@@ -133,6 +133,11 @@ describe("renderPrometheus", () => {
       dead_letter: 1,
       cancelled: 0,
     },
+    // Sums to the dead_letter total above (1), per the gauge's invariant.
+    deadLettersByReason: {
+      ...emptyDeliveryFailureCounts(),
+      connection_refused: 1,
+    },
   };
 
   it("emits HELP and TYPE lines for every family", () => {
@@ -145,6 +150,7 @@ describe("renderPrometheus", () => {
       "posthorn_deliveries_total",
       "posthorn_delivery_failures_total",
       "posthorn_delivery_tasks",
+      "posthorn_dead_letter_tasks",
     ]) {
       expect(text).toContain(`# HELP ${name} `);
       expect(text).toContain(`# TYPE ${name} `);
@@ -185,6 +191,14 @@ describe("renderPrometheus", () => {
     expect(text).toContain('posthorn_delivery_tasks{status="delivering"} 1');
     expect(text).toContain('posthorn_delivery_tasks{status="succeeded"} 39');
     expect(text).toContain('posthorn_delivery_tasks{status="dead_letter"} 1');
+  });
+
+  it("renders the dead-letter-by-reason gauge with one series per reason (zeros included)", () => {
+    const text = renderPrometheus(snapshot);
+    expect(text).toContain("# TYPE posthorn_dead_letter_tasks gauge");
+    expect(text).toContain('posthorn_dead_letter_tasks{reason="connection_refused"} 1');
+    // A reason with no current dead-letters still emits a zero series so the label exists.
+    expect(text).toContain('posthorn_dead_letter_tasks{reason="http_5xx"} 0');
   });
 
   it("ends with a trailing newline (exposition format requirement)", () => {

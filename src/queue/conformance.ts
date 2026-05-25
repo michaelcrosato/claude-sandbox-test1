@@ -22,7 +22,10 @@ import {
   type ListByAppOptions,
 } from "./delivery-queue.js";
 import { DeliveryStateError } from "../delivery/delivery-state.js";
-import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
+import {
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 import {
   fixedSchedule,
   type JitterOptions,
@@ -1261,6 +1264,81 @@ export function describeDeliveryQueueContract(
         counts = await queue.countByStatus();
         expect(counts.delivering).toBe(0);
         expect(counts.succeeded).toBe(1);
+      });
+    });
+
+    describe("countDeadLettersByReason", () => {
+      /**
+       * Drive a fresh task all the way to dead_letter, tagging each failure with
+       * `reason` (the last one — the dead-lettering attempt — is the one that persists).
+       * `CONFORMANCE_POLICY` is `fixedSchedule([1_000, 2_000])`, so the initial attempt
+       * plus two retries (three `fail`s) exhaust the budget.
+       */
+      async function deadLetterWithReason(
+        messageId: string,
+        reason: DeliveryFailureReason | undefined,
+      ): Promise<void> {
+        await queue.enqueue({ messageId });
+        for (const delay of [0, 1_000, 2_000]) {
+          clock.advance(delay);
+          const [t] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+          await queue.fail(t!.id, t!.leaseToken!, {
+            error: "x",
+            failureReason: reason ?? null,
+            nowMs: clock.now(),
+          });
+        }
+      }
+
+      it("returns all-zero counts for an empty queue", async () => {
+        expect(await queue.countDeadLettersByReason()).toEqual(emptyDeliveryFailureCounts());
+      });
+
+      it("groups dead-letter tasks by reason, excluding non-dead-letter tasks", async () => {
+        await deadLetterWithReason("m-refused-1", "connection_refused");
+        await deadLetterWithReason("m-5xx", "http_5xx");
+        await deadLetterWithReason("m-refused-2", "connection_refused");
+
+        // A task that failed once (tagged tls_error) but then *succeeded*: terminal,
+        // retains its last reason, yet is succeeded — not dead_letter → never counted.
+        await queue.enqueue({ messageId: "m-ok" });
+        const [ok] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.fail(ok!.id, ok!.leaseToken!, {
+          error: "x",
+          failureReason: "tls_error",
+          nowMs: clock.now(),
+        });
+        clock.advance(1_000);
+        const [okRetry] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.complete(okRetry!.id, okRetry!.leaseToken!);
+
+        // A still-retrying (pending) task that failed once with a reason → not yet
+        // terminal → excluded; only dead_letter counts.
+        await queue.enqueue({ messageId: "m-pending" });
+        const [pendingTask] = await queue.claimDue({ nowMs: clock.now(), limit: 1 });
+        await queue.fail(pendingTask!.id, pendingTask!.leaseToken!, {
+          error: "x",
+          failureReason: "dns_failure",
+          nowMs: clock.now(),
+        });
+
+        const counts = await queue.countDeadLettersByReason();
+        expect(counts.connection_refused).toBe(2);
+        expect(counts.http_5xx).toBe(1);
+        expect(counts.tls_error).toBe(0); // succeeded → excluded
+        expect(counts.dns_failure).toBe(0); // pending retry → excluded
+
+        // The invariant: summed across reasons it equals the dead_letter total.
+        const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+        expect(total).toBe(3);
+        expect(total).toBe((await queue.countByStatus()).dead_letter);
+      });
+
+      it("folds a dead-letter task with no classified reason into `other`", async () => {
+        await deadLetterWithReason("m-unclassified", undefined);
+        const counts = await queue.countDeadLettersByReason();
+        expect(counts.other).toBe(1);
+        expect(Object.values(counts).reduce((sum, n) => sum + n, 0)).toBe(1);
       });
     });
 

@@ -259,6 +259,7 @@ posthorn_messages_ingested_total 1234
 posthorn_deliveries_total{outcome="succeeded"} 1220
 posthorn_deliveries_total{outcome="dead_lettered"} 3
 posthorn_delivery_tasks{status="dead_letter"} 3   ← the gauge to alert on
+posthorn_dead_letter_tasks{reason="connection_refused"} 3   ← why they died
 posthorn_uptime_seconds 86400
 posthorn_build_info{version="0.0.1"} 1
 ```

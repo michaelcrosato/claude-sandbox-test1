@@ -80,6 +80,13 @@ export interface MetricsSnapshot {
   readonly counters: MetricsCounters;
   /** Point-in-time count of delivery tasks by status, read from the queue at scrape time. */
   readonly deliveryTasksByStatus: DeliveryCountsByStatus;
+  /**
+   * Point-in-time count of tasks currently in `dead_letter`, broken down by failure
+   * *reason* — the actionable refinement of {@link deliveryTasksByStatus}'s single
+   * `dead_letter` total ("*why* are deliveries permanently failing right now?"). Read
+   * from the queue at scrape time; summed across reasons it equals that total.
+   */
+  readonly deadLettersByReason: DeliveryFailureReasonCounts;
 }
 
 /** Construction options for {@link MetricsRegistry}. */
@@ -218,7 +225,7 @@ function renderFamily(
  * (zeros included), terminated by a trailing newline as the format requires.
  */
 export function renderPrometheus(snapshot: MetricsSnapshot): string {
-  const { counters, deliveryTasksByStatus: tasks } = snapshot;
+  const { counters, deliveryTasksByStatus: tasks, deadLettersByReason } = snapshot;
   const families = [
     renderFamily(
       "posthorn_build_info",
@@ -274,6 +281,16 @@ export function renderPrometheus(snapshot: MetricsSnapshot): string {
         { labels: { status: "succeeded" }, value: tasks.succeeded },
         { labels: { status: "dead_letter" }, value: tasks.dead_letter },
       ],
+    ),
+    renderFamily(
+      "posthorn_dead_letter_tasks",
+      "gauge",
+      "Tasks currently in dead_letter by failure reason (point-in-time; sums to the " +
+        "dead_letter series of posthorn_delivery_tasks).",
+      DELIVERY_FAILURE_REASONS.map((reason) => ({
+        labels: { reason },
+        value: deadLettersByReason[reason],
+      })),
     ),
   ];
   return families.join("\n") + "\n";

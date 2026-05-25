@@ -2097,6 +2097,9 @@ describe("createApi — GET /metrics", () => {
     expect(text).toContain("posthorn_messages_ingested_total 2");
     // Two distinct messages fanned out to the one endpoint → two pending tasks.
     expect(text).toContain('posthorn_delivery_tasks{status="pending"} 2');
+    // The dead-letter-by-reason gauge is wired through the route too; nothing has
+    // failed yet, so every reason series is present at zero.
+    expect(text).toContain('posthorn_dead_letter_tasks{reason="connection_refused"} 0');
   });
 
   it("counts a deduplicated replay without re-fanning it out", async () => {

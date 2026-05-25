@@ -330,6 +330,7 @@ Prometheus model; Prometheus detects resets via the `_created` convention).
 | Metric | Labels | Description |
 |--------|--------|-------------|
 | `posthorn_delivery_tasks` | `status` | Current delivery-task counts per status. Labels: `pending`, `delivering`, `succeeded`, `dead_letter`. The `dead_letter` gauge is the one to **alert on**: non-zero means deliveries have exhausted retries and need manual replay. |
+| `posthorn_dead_letter_tasks` | `reason` | The **why** behind the current `dead_letter` backlog — the same closed reason set as `posthorn_delivery_failures_total` (the gauge counterpart of that lifetime counter). Summed across reasons it equals `posthorn_delivery_tasks{status="dead_letter"}`. Use it to triage *which* downstream is responsible for a dead-letter spike (e.g. `connection_refused` ⇒ an endpoint is down) without scrolling the per-delivery list. A dead-letter with no recorded classification folds into `other`. |
 
 ### Info / uptime
 
@@ -356,6 +357,9 @@ rate(posthorn_delivery_failures_total{reason="connect_timeout"}[10m])
 
 # Dead-letter backlog (the number to keep at zero):
 posthorn_delivery_tasks{status="dead_letter"}
+
+# Which reason dominates the current dead-letter backlog (triage a spike):
+topk(3, posthorn_dead_letter_tasks)
 
 # Pending queue depth:
 posthorn_delivery_tasks{status="pending"}

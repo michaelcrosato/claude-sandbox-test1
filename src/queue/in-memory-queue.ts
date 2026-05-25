@@ -46,6 +46,11 @@ import {
   type ListByEndpointOptions,
 } from "./delivery-queue.js";
 import {
+  emptyDeliveryFailureCounts,
+  isDeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
+import {
   DEFAULT_RETRY_POLICY,
   type JitterOptions,
   type RetryPolicy,
@@ -304,6 +309,18 @@ export class InMemoryDeliveryQueue implements DeliveryQueue {
     const counts = zeroDeliveryCounts();
     for (const task of this.#tasks.values()) {
       counts[task.status] += 1;
+    }
+    return counts;
+  }
+
+  async countDeadLettersByReason(): Promise<DeliveryFailureReasonCounts> {
+    const counts = emptyDeliveryFailureCounts();
+    for (const task of this.#tasks.values()) {
+      if (task.status !== "dead_letter") continue;
+      // A pre-classification (null) or unrecognized reason folds into `other`, so the
+      // sum stays equal to the dead_letter total.
+      const reason = isDeliveryFailureReason(task.failureReason) ? task.failureReason : "other";
+      counts[reason] += 1;
     }
     return counts;
   }

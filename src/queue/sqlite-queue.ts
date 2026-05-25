@@ -50,6 +50,11 @@ import {
   type ListByEndpointOptions,
 } from "./delivery-queue.js";
 import {
+  emptyDeliveryFailureCounts,
+  isDeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
+import {
   DEFAULT_RETRY_POLICY,
   type JitterOptions,
   type RetryPolicy,
@@ -156,6 +161,7 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
   readonly #updateTask: StatementSync;
   readonly #countTasks: StatementSync;
   readonly #countByStatus: StatementSync;
+  readonly #countDeadLettersByReason: StatementSync;
 
   constructor(options: SqliteQueueOptions = {}) {
     const {
@@ -263,6 +269,11 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
     // Backlog/health gauge: a single grouped scan, far cheaper than four counts.
     this.#countByStatus = this.#db.prepare(
       "SELECT status, COUNT(*) AS n FROM delivery_tasks GROUP BY status",
+    );
+    // Dead-letter-by-reason gauge: a grouped scan over the (small) dead_letter slice.
+    this.#countDeadLettersByReason = this.#db.prepare(
+      "SELECT failure_reason AS reason, COUNT(*) AS n FROM delivery_tasks" +
+        " WHERE status = 'dead_letter' GROUP BY failure_reason",
     );
   }
 
@@ -611,6 +622,21 @@ export class SqliteDeliveryQueue implements DeliveryQueue {
       if (row.status in counts) {
         counts[row.status as DeliveryStatus] += Number(row.n);
       }
+    }
+    return counts;
+  }
+
+  async countDeadLettersByReason(): Promise<DeliveryFailureReasonCounts> {
+    const counts = emptyDeliveryFailureCounts();
+    const rows = this.#countDeadLettersByReason.all() as unknown as {
+      reason: string | null;
+      n: number;
+    }[];
+    for (const row of rows) {
+      // A null (legacy/pre-classification) or unrecognized reason folds into `other`,
+      // keeping the sum equal to the dead_letter total.
+      const reason = isDeliveryFailureReason(row.reason) ? row.reason : "other";
+      counts[reason] += Number(row.n);
     }
     return counts;
   }

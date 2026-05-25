@@ -198,6 +198,25 @@ check(
   `(got ${d1after?.failureReason})`,
 );
 
+// ── Case 4: the dead-letter-by-reason gauge is served over /metrics ─────────
+// The compiled route runs countDeadLettersByReason() against the real node:sqlite
+// backend and renders it; a wiring/query fault would 500 or drop the family. (The
+// failing tasks above are still pending/retrying, not dead-lettered, so the current
+// values are 0 — the grouped non-zero counting is proven in the queue conformance suite.)
+const metricsRes = await fetch(`${base}/metrics`);
+const metricsText = await metricsRes.text();
+check("metrics: GET /metrics 200", metricsRes.status === 200, `(got ${metricsRes.status})`);
+check(
+  "metrics: posthorn_dead_letter_tasks family declared as a gauge",
+  metricsText.includes("# TYPE posthorn_dead_letter_tasks gauge"),
+);
+check(
+  "metrics: the gauge carries every reason label (zeros included)",
+  metricsText.includes('posthorn_dead_letter_tasks{reason="connection_refused"} 0') &&
+    metricsText.includes('posthorn_dead_letter_tasks{reason="http_5xx"} 0') &&
+    metricsText.includes('posthorn_dead_letter_tasks{reason="other"} 0'),
+);
+
 // ── Teardown ────────────────────────────────────────────────────────────────
 await gw.stop();
 receiver.close();
