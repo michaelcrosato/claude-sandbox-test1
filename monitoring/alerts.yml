@@ -96,3 +96,23 @@ groups:
             reachability), but a sustained rate means the database is flapping and
             deliveries may stall.  Check the managed-Postgres status and the gateway
             logs ("postgres pool error").
+
+      - alert: PosthornPostgresAcquireTimeouts
+        # posthorn_pg_pool_acquire_timeouts_total is per-replica (the timeout occurs in the
+        # process whose pool was saturated), so alert per-instance — do NOT aggregate.  Only
+        # fires when POSTHORN_DATABASE_URL is set; on the SQLite backend the counter is always
+        # 0 and this rule never triggers.
+        expr: rate(posthorn_pg_pool_acquire_timeouts_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connection pool saturating on {{ $labels.instance }}"
+          description: >
+            The Postgres connection pool on {{ $labels.instance }} timed out acquiring a
+            connection over the last 5 minutes — every pooled connection was busy past the
+            checkout timeout, or a new connection's handshake stalled.  Unlike a recoverable
+            pool error, these timeouts FAIL the request/delivery that hit them.  Raise
+            POSTHORN_PG_POOL_MAX (keeping replicas × max under the database's max_connections),
+            reduce POSTHORN_WORKER_CONCURRENCY, or investigate a slow/overloaded database.
+            Check the gateway logs ("postgres pool acquisition timeout").

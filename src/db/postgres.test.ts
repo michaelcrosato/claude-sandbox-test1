@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   createPostgresPool,
   DEFAULT_PG_POOL_MAX,
+  isPgAcquireTimeoutError,
   POSTGRES_CONNECTION_TIMEOUT_MS,
   POSTGRES_IDLE_IN_TXN_TIMEOUT_MS,
   POSTGRES_LOCK_TIMEOUT_MS,
@@ -60,6 +61,41 @@ describe("createPostgresPool — pool configuration (no database needed)", () =>
     } finally {
       await pool.end(); // never dialed (bogus host) — resolves immediately
     }
+  });
+});
+
+// The acquisition-timeout classifier is the one brittle part of the saturation
+// counter — pg gives no error `code`, only a message — so it is pinned here without
+// needing a live, saturated pool. The end-to-end interception (the connect() wrapper
+// actually firing the sink on a real timeout) is proven in the gated suite below.
+describe("isPgAcquireTimeoutError — classifies a pg-pool acquisition timeout", () => {
+  it("matches both messages pg-pool raises for a connectionTimeoutMillis timeout", () => {
+    // Saturated-pool wait (every connection busy, checkout queue timed out).
+    expect(isPgAcquireTimeoutError(new Error("timeout exceeded when trying to connect"))).toBe(true);
+    // Slow new-connection handshake exceeding the bound.
+    expect(
+      isPgAcquireTimeoutError(new Error("Connection terminated due to connection timeout")),
+    ).toBe(true);
+  });
+
+  it("does not match other connection errors, so the counter tracks only saturation", () => {
+    // A severed idle connection (the onError path) — a different failure mode.
+    expect(
+      isPgAcquireTimeoutError(new Error("terminating connection due to administrator command")),
+    ).toBe(false);
+    expect(isPgAcquireTimeoutError(new Error("ECONNREFUSED"))).toBe(false);
+    expect(isPgAcquireTimeoutError(new Error("getaddrinfo ENOTFOUND db.invalid"))).toBe(false);
+    // A SQL-level statement timeout is unrelated to pool acquisition.
+    expect(isPgAcquireTimeoutError(new Error("canceling statement due to lock timeout"))).toBe(false);
+  });
+
+  it("is false for non-Error values (never throws on an odd rejection)", () => {
+    expect(isPgAcquireTimeoutError(undefined)).toBe(false);
+    expect(isPgAcquireTimeoutError(null)).toBe(false);
+    expect(isPgAcquireTimeoutError("timeout exceeded when trying to connect")).toBe(false);
+    expect(isPgAcquireTimeoutError({ message: "timeout exceeded when trying to connect" })).toBe(
+      false,
+    );
   });
 });
 
@@ -145,15 +181,19 @@ if (!pgUrl) {
 
   describe("createPostgresPool checkout timeout — never waits forever for a connection", () => {
     it(
-      "fails a checkout fast when the pool is saturated, instead of blocking indefinitely",
+      "fails a checkout fast when the pool is saturated, and counts it via onAcquireTimeout",
       async () => {
         // max:1 so a single held client saturates the pool. An explicit short
         // connection timeout proves the bound is honored without the 10 s
         // production wait — the same shape as the lock_timeout test above.
         const timeoutMs = 250;
+        let acquireTimeouts = 0;
         const pool = createPostgresPool(pgUrl, {
           max: 1,
           connectionTimeoutMillis: timeoutMs,
+          onAcquireTimeout: () => {
+            acquireTimeouts += 1;
+          },
         });
         try {
           const held = await pool.connect(); // claims the only slot
@@ -171,11 +211,49 @@ if (!pgUrl) {
           const elapsed = Date.now() - start;
           held.release();
 
+          // The error still propagates unchanged — the wrapper only *observes* it.
           expect(message).toMatch(/timeout exceeded when trying to connect/);
+          // ...and the sink fired exactly once for the one timed-out checkout, so the
+          // metrics counter would tick. This is the saturation series' load-bearing path.
+          expect(acquireTimeouts).toBe(1);
           // Bounds prove the timeout is genuinely in force: it neither failed
           // instantly (a real wait happened) nor hung indefinitely.
           expect(elapsed).toBeGreaterThanOrEqual(timeoutMs * 0.5);
           expect(elapsed).toBeLessThan(timeoutMs * 8);
+        } finally {
+          await pool.end();
+        }
+      },
+      10_000,
+    );
+
+    it(
+      "leaves the happy path untouched — query() and connect() succeed without firing the sink",
+      async () => {
+        // The connect() wrapper sits in front of *every* acquisition (pool.query
+        // checks out internally too), so a bug there would break all DB access. Prove
+        // both acquisition paths still work and the sink never fires on success.
+        let acquireTimeouts = 0;
+        const pool = createPostgresPool(pgUrl, {
+          onAcquireTimeout: () => {
+            acquireTimeouts += 1;
+          },
+        });
+        try {
+          // One-shot query path (Pool.query → this.connect(callback)).
+          const viaQuery = await pool.query<{ n: number }>("SELECT 1 AS n");
+          expect(viaQuery.rows[0]?.n).toBe(1);
+
+          // Transaction-checkout path (await pool.connect() → promise form).
+          const client = await pool.connect();
+          try {
+            const viaCheckout = await client.query<{ n: number }>("SELECT 2 AS n");
+            expect(viaCheckout.rows[0]?.n).toBe(2);
+          } finally {
+            client.release();
+          }
+
+          expect(acquireTimeouts).toBe(0);
         } finally {
           await pool.end();
         }

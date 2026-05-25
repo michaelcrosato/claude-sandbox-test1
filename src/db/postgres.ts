@@ -147,6 +147,48 @@ export interface PostgresPoolOptions {
    * prevents the crash.
    */
   readonly onError?: (err: Error) => void;
+  /**
+   * Sink for a connection-**acquisition timeout** — a `pool.connect()` checkout that
+   * could not be satisfied within {@link POSTGRES_CONNECTION_TIMEOUT_MS} because the pool
+   * is at its `max` busy connections (saturation), or a brand-new connection's handshake
+   * stalled. Wired by the gateway to the metrics counter
+   * (`posthorn_pg_pool_acquire_timeouts_total`).
+   *
+   * This is the **saturation twin** of {@link onError}. Where `onError` fires on a severed
+   * *idle* connection (the database dropping us, request-invisible and recoverable), this
+   * fires when *our* side runs out of connections — back-pressure that **does** fail the
+   * query/worker tick that hit it. The timeout already propagates to the caller as a
+   * rejected query (which the worker/HTTP layers already handle); this sink does not change
+   * that, it only *observes* the timeout so the otherwise-indistinguishable failure mode
+   * becomes a dedicated, alertable series. The error is re-thrown unchanged after the sink
+   * runs. Every pool acquisition is observed: `createPostgresPool` wraps the pool's
+   * `connect`, through which `pool.query` also acquires, so both one-shot queries and
+   * transaction checkouts are covered.
+   */
+  readonly onAcquireTimeout?: () => void;
+}
+
+/**
+ * The two error messages `pg-pool` raises for a connection-acquisition timeout (the
+ * `connectionTimeoutMillis` path) — there is no error `code` to match on, so the message
+ * is the only signal. `'timeout exceeded when trying to connect'` is the saturated-pool
+ * wait (every connection busy, the checkout queue timed out); `'Connection terminated due
+ * to connection timeout'` is a brand-new connection whose handshake exceeded the bound.
+ * Pinned to `pg-pool` (bundled with `pg` 8.x); a driver upgrade that reworded these would
+ * surface as the acquire-timeout counter going quiet, caught by the live saturation smoke.
+ */
+const PG_ACQUIRE_TIMEOUT_MESSAGES: readonly string[] = [
+  "timeout exceeded when trying to connect",
+  "Connection terminated due to connection timeout",
+];
+
+/**
+ * True when `err` is a `pg-pool` connection-acquisition timeout (see
+ * {@link PG_ACQUIRE_TIMEOUT_MESSAGES}). Exported so the classification is unit-tested
+ * independently of a live, saturated pool.
+ */
+export function isPgAcquireTimeoutError(err: unknown): boolean {
+  return err instanceof Error && PG_ACQUIRE_TIMEOUT_MESSAGES.includes(err.message);
 }
 
 /**
@@ -196,5 +238,40 @@ export function createPostgresPool(
   pool.on("error", (err) => {
     options.onError?.(err);
   });
+
+  // Observe connection-acquisition timeouts. Unlike the 'error' event above, pg emits *no*
+  // pool event for a checkout that times out — it simply rejects the connect() call — so we
+  // wrap connect(), the single seam every acquisition funnels through (pool.query() calls
+  // this.connect() internally), and count the timeout before re-throwing it unchanged. Only
+  // installed when a sink is wired, so the no-op default path stays the unmodified pg method.
+  const { onAcquireTimeout } = options;
+  if (onAcquireTimeout) {
+    type PoolConnect = InstanceType<typeof Pool>["connect"];
+    const originalConnect = pool.connect.bind(pool) as PoolConnect;
+    const wrappedConnect = ((callback?: unknown): unknown => {
+      if (typeof callback === "function") {
+        // Callback form — used internally by pool.query(); inspect the err argument.
+        const cb = callback as (err: Error, client: unknown, done: unknown) => void;
+        type ConnectWithCallback = (
+          cb: (err: Error, client: unknown, done: unknown) => void,
+        ) => void;
+        return (originalConnect as unknown as ConnectWithCallback)((err, client, done) => {
+          if (err && isPgAcquireTimeoutError(err)) {
+            onAcquireTimeout();
+          }
+          cb(err, client, done);
+        });
+      }
+      // Promise form — used by store transaction checkouts; observe a rejection, re-throw.
+      return (originalConnect as unknown as () => Promise<unknown>)().catch((err: unknown) => {
+        if (isPgAcquireTimeoutError(err)) {
+          onAcquireTimeout();
+        }
+        throw err;
+      });
+    }) as unknown as PoolConnect;
+    pool.connect = wrappedConnect;
+  }
+
   return pool;
 }

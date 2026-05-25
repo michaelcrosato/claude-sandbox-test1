@@ -78,6 +78,20 @@ export interface MetricsCounters {
    * dedicated series and alert.
    */
   readonly pgPoolErrors: number;
+  /**
+   * Postgres connection-pool **acquisition timeouts** over the process lifetime — a
+   * `pool.connect()` checkout that could not be satisfied within
+   * `POSTGRES_CONNECTION_TIMEOUT_MS` because the pool is at its `max` busy connections
+   * (saturation) or a brand-new connection's handshake stalled. The saturation twin of
+   * {@link pgPoolErrors}: that counter tracks a severed *idle* connection (the database
+   * dropping us), this one tracks *our* side running out of connections (back-pressure).
+   * Unlike a pool `'error'`, a timeout **does** fail the request/worker tick that hit it
+   * (it surfaces as a rejected query the caller already handles), but it is otherwise
+   * indistinguishable from any other delivery/HTTP error — so a dedicated series makes the
+   * "pool is too small / the database is too slow" failure mode observable and alertable.
+   * Always `0` on the embedded SQLite backend (no pool).
+   */
+  readonly pgPoolAcquireTimeouts: number;
 }
 
 /** Everything {@link renderPrometheus} needs: counters + live gauges + metadata. */
@@ -129,6 +143,7 @@ export class MetricsRegistry {
   #deadLettered = 0;
   #stale = 0;
   #pgPoolErrors = 0;
+  #pgPoolAcquireTimeouts = 0;
   readonly #deliveryFailures = emptyDeliveryFailureCounts();
 
   constructor(options: MetricsRegistryOptions = {}) {
@@ -173,6 +188,17 @@ export class MetricsRegistry {
     this.#pgPoolErrors += 1;
   };
 
+  /**
+   * Record one Postgres connection-pool acquisition timeout (a `pool.connect()`
+   * checkout that exceeded `POSTGRES_CONNECTION_TIMEOUT_MS` — pool saturation or a
+   * stalled handshake). Arrow-bound so the composition root hands it straight to
+   * {@link PostgresPoolOptions.onAcquireTimeout}. A no-op concept on the SQLite
+   * backend — that path never calls it, so the counter stays `0` there.
+   */
+  recordPgPoolAcquireTimeout = (): void => {
+    this.#pgPoolAcquireTimeouts += 1;
+  };
+
   /** Seconds since this registry (≈ the process) started; never negative. */
   uptimeSeconds(): number {
     return Math.max(0, (this.#now() - this.#startedAtMs) / 1000);
@@ -192,6 +218,7 @@ export class MetricsRegistry {
       // A copy so the snapshot can never mutate the registry's live tally.
       deliveryFailures: { ...this.#deliveryFailures },
       pgPoolErrors: this.#pgPoolErrors,
+      pgPoolAcquireTimeouts: this.#pgPoolAcquireTimeouts,
     };
   }
 }
@@ -301,6 +328,15 @@ export function renderPrometheus(snapshot: MetricsSnapshot): string {
         "restart/failover/idle timeout; the pool reconnects automatically). Always 0 on the " +
         "embedded SQLite backend. A sustained rate signals a flapping database.",
       [{ value: counters.pgPoolErrors }],
+    ),
+    renderFamily(
+      "posthorn_pg_pool_acquire_timeouts_total",
+      "counter",
+      "Postgres connection-pool acquisition timeouts (a pool.connect() checkout that " +
+        "exceeded the connection timeout — pool saturation or a stalled handshake). Unlike " +
+        "posthorn_pg_pool_errors_total this fails the request that hit it. Always 0 on the " +
+        "embedded SQLite backend. A sustained rate signals an undersized pool or a slow database.",
+      [{ value: counters.pgPoolAcquireTimeouts }],
     ),
     renderFamily(
       "posthorn_delivery_tasks",

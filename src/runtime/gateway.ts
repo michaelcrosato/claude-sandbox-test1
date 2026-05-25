@@ -264,11 +264,20 @@ function openStoreBackend(
     // unhandled-'error' rule crash the whole gateway over a recoverable blip, and
     // counts it (`posthorn_pg_pool_errors_total`) so a database that flaps is
     // alertable — the event fails no request, so it is otherwise invisible to metrics.
+    // The acquisition-timeout sink counts the saturation twin: a checkout that exhausted
+    // the connection timeout (pool at `max`, or a stalled handshake). That one *does* fail
+    // its query, but is otherwise indistinguishable from any other error — so the dedicated
+    // `posthorn_pg_pool_acquire_timeouts_total` series makes "the pool is too small / the
+    // database is too slow" observable and alertable.
     const pool = createPostgresPool(config.databaseUrl, {
       max: config.databasePoolMax,
       onError: (err) => {
         logger.error("postgres pool error", { component: "db", err });
         metrics.recordPgPoolError();
+      },
+      onAcquireTimeout: () => {
+        logger.error("postgres pool acquisition timeout", { component: "db" });
+        metrics.recordPgPoolAcquireTimeout();
       },
     });
     const apps = new PostgresAppStore(pool);

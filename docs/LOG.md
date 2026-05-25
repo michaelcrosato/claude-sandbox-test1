@@ -41,6 +41,47 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T02:10 · iter-0109 · GREEN · pg-pool-acquire-timeout-counter-and-saturation-alert
+
+- **Baseline:** clean main @ `eee8276` (iter-0108 `posthorn_pg_pool_errors_total`). Verified green
+  first: `tsc` 0, `vitest run` 1847 (6 PG-skipped), `build` 0.
+- **Move:** Close iter-0108's own "Next" — the *other* DB-pressure failure mode. iter-0108 made a
+  severed *idle* connection observable; the saturation twin (a `pool.connect()` checkout that
+  exhausts `connectionTimeoutMillis` because the pool is at `max`, or a stalled handshake) still
+  failed requests *invisibly*. Add `posthorn_pg_pool_acquire_timeouts_total` so it is alertable.
+- **Changed:**
+  - `db/postgres.ts`: new `onAcquireTimeout` sink + exported pure `isPgAcquireTimeoutError` (matches
+    pg-pool's two timeout messages — there is no error `code`). `createPostgresPool` wraps the pool's
+    `connect` (the single seam every acquisition funnels through — `pool.query` calls `this.connect`
+    internally), observing both the callback form (query) and promise form (txn checkout), counting
+    the timeout then **re-throwing it unchanged**. Wrapper installed only when a sink is wired.
+  - `metrics.ts`: `pgPoolAcquireTimeouts` counter + arrow-bound `recordPgPoolAcquireTimeout`, rendered
+    as `posthorn_pg_pool_acquire_timeouts_total` (always present, `0` on SQLite).
+  - `gateway.ts`: wire the sink → log + counter (admin path in `main.ts` left as-is: a CLI
+    acquire-timeout already fails the command loudly, unlike the request-invisible idle error).
+  - `monitoring/alerts.yml`: `PosthornPostgresAcquireTimeouts` (`rate(...[5m]) > 0`, per-`instance`).
+  - `docs/DEPLOY.md`: counter row + multi-replica note; **reconciled** the stale alert table (said
+    "four", listed 5, omitted iter-0108's `PosthornPostgresPoolErrors`) → now lists all **seven**.
+- **Decisions:** Message-string match is the only signal pg gives (pinned to pg-pool 8.x, comment +
+  unit-tested; a reword surfaces as the counter going quiet). No new `POSTHORN_*` var — always-on
+  like `pgPoolErrors`. Wrapper *only observes*, never alters control flow, given its blast radius
+  (every DB acquisition).
+- **Validation:** `tsc` 0; `vitest run` **1852** ungated (+5; 6 PG-skipped). Against live Docker
+  `postgres:16`: gated `postgres.test.ts` **11/11** incl. a real saturated-pool timeout firing the
+  sink once + re-throwing unchanged, and a happy-path guard (query + checkout succeed, sink silent);
+  full suite PG-enabled **2128/2128** (60 files — wrapper transparent to every store). `build` 0.
+  **Compiled-`dist` smoke** vs Docker PG: production ESM wrapper 6/6 (happy path silent → saturate →
+  timeout classified, re-thrown, sink fired once). `assert-gate-integrity.ps1` 0 (zero substrate
+  edits); `validate-log-compliance.py` `[PASS]`.
+- **Notes:** A gateway-HTTP `/metrics` trigger is impractical — the production timeout is a fixed
+  10 s and the gateway's queries are sub-ms, so the pool never naturally stays saturated that long;
+  the gateway *wiring* is covered by the PG-gated `createGateway` suite. The first full PG run threw a
+  one-off tinypool "worker exited" ([[vitest-tinypool-flaky-worker-exit]]); clean on re-run.
+- **Next:** Both DB-pressure failure modes (idle-loss + saturation) are now observable. A
+  pool-utilization gauge (`in-use / max` at scrape time) would let operators see saturation
+  *approaching* before timeouts fire; or a brief `/readyz` cache if a high LB probe cadence makes the
+  per-request `SELECT 1` load undesirable.
+
 ## 2026-05-25T01:35 · iter-0108 · GREEN · pg-pool-errors-counter-and-flapping-db-alert
 
 - **Baseline:** clean main @ `0f95e79` (iter-0107 crash-safe PG pool + `/readyz`). Verified

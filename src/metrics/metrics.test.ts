@@ -39,6 +39,7 @@ describe("MetricsRegistry", () => {
       deliveries: { succeeded: 0, failed: 0, deadLettered: 0, stale: 0 },
       deliveryFailures: emptyDeliveryFailureCounts(),
       pgPoolErrors: 0,
+      pgPoolAcquireTimeouts: 0,
     });
   });
 
@@ -110,6 +111,19 @@ describe("MetricsRegistry", () => {
     expect(reg.counters().pgPoolErrors).toBe(2);
   });
 
+  it("counts Postgres pool acquisition timeouts and stays bound as a bare callback", () => {
+    const reg = new MetricsRegistry();
+    expect(reg.counters().pgPoolAcquireTimeouts).toBe(0);
+    // Mirrors the wiring: `onAcquireTimeout: ... metrics.recordPgPoolAcquireTimeout`.
+    const onAcquireTimeout = reg.recordPgPoolAcquireTimeout;
+    onAcquireTimeout();
+    onAcquireTimeout();
+    onAcquireTimeout();
+    expect(reg.counters().pgPoolAcquireTimeouts).toBe(3);
+    // Independent of the pool-error counter — the two failure modes don't conflate.
+    expect(reg.counters().pgPoolErrors).toBe(0);
+  });
+
   it("computes uptime from the injected clock and never goes negative", () => {
     let now = 10_000;
     const reg = new MetricsRegistry({ now: () => now });
@@ -137,6 +151,7 @@ describe("renderPrometheus", () => {
         http_5xx: 3,
       },
       pgPoolErrors: 4,
+      pgPoolAcquireTimeouts: 7,
     },
     deliveryTasksByStatus: {
       pending: 2,
@@ -162,6 +177,7 @@ describe("renderPrometheus", () => {
       "posthorn_deliveries_total",
       "posthorn_delivery_failures_total",
       "posthorn_pg_pool_errors_total",
+      "posthorn_pg_pool_acquire_timeouts_total",
       "posthorn_delivery_tasks",
       "posthorn_dead_letter_tasks",
     ]) {
@@ -202,6 +218,12 @@ describe("renderPrometheus", () => {
     const text = renderPrometheus(snapshot);
     expect(text).toContain("# TYPE posthorn_pg_pool_errors_total counter");
     expect(text).toContain("posthorn_pg_pool_errors_total 4");
+  });
+
+  it("renders the Postgres pool acquisition-timeout counter as an unlabeled series", () => {
+    const text = renderPrometheus(snapshot);
+    expect(text).toContain("# TYPE posthorn_pg_pool_acquire_timeouts_total counter");
+    expect(text).toContain("posthorn_pg_pool_acquire_timeouts_total 7");
   });
 
   it("renders the backlog gauge with one series per status", () => {

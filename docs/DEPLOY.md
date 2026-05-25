@@ -364,6 +364,7 @@ Prometheus model; Prometheus detects resets via the `_created` convention).
 | `posthorn_deliveries_total` | `outcome` | Delivery attempt outcomes. Labels: `succeeded`, `failed`, `dead_lettered`, `stale` (lease-lapsed, counted but not retried by this worker). |
 | `posthorn_delivery_failures_total` | `reason` | The **why** behind `failed` + `dead_lettered` (their sum equals the sum of this family). Labels: `connect_timeout` (endpoint unreachable — DNS+connect deadline hit), `request_timeout` (connected but too slow — total deadline hit), `dns_failure`, `connection_refused`, `connection_reset`, `tls_error`, `ssrf_blocked` (resolved to a private/internal address), `http_4xx`, `http_5xx`, `http_other`, `no_endpoint` (subscription gone), `expired` (message TTL elapsed), `other`. |
 | `posthorn_pg_pool_errors_total` | — | Recoverable Postgres connection-pool errors: a severed *idle* connection (DB restart/failover, idle timeout, network blip) the pool reconnects from on its own. **Always `0` on the SQLite backend** (no pool). No request fails when it ticks, so it is the only signal a flapping database leaves behind — a sustained `rate()` is the alert (see `PosthornPostgresPoolErrors` in `monitoring/alerts.yml`). |
+| `posthorn_pg_pool_acquire_timeouts_total` | — | The **saturation twin** of `posthorn_pg_pool_errors_total`: a `pool.connect()` checkout that timed out because every pooled connection was busy past the checkout deadline, or a new connection's handshake stalled. **Always `0` on the SQLite backend** (no pool). Unlike a pool *error*, a timeout **fails** the request/delivery that hit it — a sustained `rate()` means the pool is undersized or the database is too slow (raise `POSTHORN_PG_POOL_MAX`, lower `POSTHORN_WORKER_CONCURRENCY`, or fix the DB; see `PosthornPostgresAcquireTimeouts` in `monitoring/alerts.yml`). |
 
 ### Gauges (point-in-time, read from queue at scrape time)
 
@@ -453,7 +454,7 @@ platform and alert on `level="error"`.
 
 ## Alerting
 
-The shipped `monitoring/alerts.yml` defines four alerting rules out of the box.
+The shipped `monitoring/alerts.yml` defines seven alerting rules out of the box.
 They are loaded by the Prometheus instance in the Docker Compose stack
 automatically.
 
@@ -464,6 +465,8 @@ automatically.
 | `PosthornDeadLetterBacklogHigh` | critical | > 100 dead-lettered deliveries | Investigate systemic receiver outage. |
 | `PosthornDeliveryFailureRateHigh` | warning | > 20% failure rate over 10 min | Check delivery attempt logs and receiver health. |
 | `PosthornDeliveryQueueDepthHigh` | warning | > 1 000 pending tasks for > 5 min | Consider tuning `POSTHORN_WORKER_BATCH_SIZE` / `POSTHORN_WORKER_CONCURRENCY`. |
+| `PosthornPostgresPoolErrors` | warning | Recoverable PG pool errors over 5 min (per-instance) | Check managed-Postgres status; the pool reconnects on its own, but a flapping DB stalls deliveries. (Postgres backend only.) |
+| `PosthornPostgresAcquireTimeouts` | warning | PG pool acquisition timeouts over 5 min (per-instance) | Raise `POSTHORN_PG_POOL_MAX`, lower `POSTHORN_WORKER_CONCURRENCY`, or fix a slow DB; these timeouts fail the request that hit them. (Postgres backend only.) |
 
 Wire alerts to Alertmanager by adding the standard Prometheus Alertmanager
 configuration to `monitoring/prometheus.yml`:
@@ -728,11 +731,11 @@ conflating them is the easiest multi-replica monitoring mistake:
 - **Counters are per-replica — sum them.** `posthorn_messages_ingested_total`,
   `posthorn_deliveries_total`, `posthorn_messages_deduplicated_total`, and
   `posthorn_delivery_failures_total` each accumulate in the process that handled the
-  work, so a fleet total is a `sum`. (`posthorn_pg_pool_errors_total` is also
-  per-replica — each replica owns its own pool — but it tracks the *health of a
-  replica's connection to the shared database*, so the shipped alert keeps it
-  per-`instance` rather than summing, surfacing exactly which replica lost its
-  connections.)
+  work, so a fleet total is a `sum`. (`posthorn_pg_pool_errors_total` and
+  `posthorn_pg_pool_acquire_timeouts_total` are also per-replica — each replica owns
+  its own pool — but they track the *health of a replica's connection to the shared
+  database*, so the shipped alerts keep them per-`instance` rather than summing,
+  surfacing exactly which replica lost its connections or saturated its pool.)
 
   ```promql
   # Fleet-wide ingest rate (msgs/min):
