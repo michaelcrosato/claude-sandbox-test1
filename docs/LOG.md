@@ -41,6 +41,50 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-25T09:55 · iter-0114 · GREEN · graceful-shutdown-drains-in-flight-http-requests
+
+- **Baseline:** clean main @ `99ee820` (iter-0113 per-endpoint failure-reason stats). Verified
+  green first: `tsc` 0, `vitest run` 1876 no-PG (6 PG-skipped), `build` 0.
+- **Move:** Off the saturated PG-pool/observability tunnels onto the **shutdown-correctness** axis.
+  `gateway.stop()` closed the HTTP server with `httpServer.closeAllConnections()`, which destroys
+  **in-flight** request sockets, not just idle keep-alives — so a `POST /v1/messages` in flight when
+  `SIGTERM` arrives (rolling deploy, the exact case the multi-replica DEPLOY guide covers) is reset
+  mid-response. A producer without an idempotency key then cannot tell if the event landed, and
+  retries → duplicate or lost. DEPLOY.md even promised "no draining beyond your LB's grace" — the
+  code contradicted it.
+- **Changed:**
+  - `gateway.ts` `stop()`: `close()` (in-flight responses get `Connection: close`, so keep-alive
+    sockets end after their current response) + `closeIdleConnections()` (drop only currently-idle
+    sockets) replaces the blanket `closeAllConnections()`. A bounded force-close timer
+    (`unref()`'d) then aborts any still-active socket after the grace, so a stuck request can't hang
+    shutdown past the orchestrator's termination window. `0`/omitted = no cutoff (drain bounded only
+    by the per-request timeout).
+  - New `POSTHORN_HTTP_SHUTDOWN_GRACE_MS` knob (default `DEFAULT_HTTP_SHUTDOWN_GRACE_MS` = 10_000,
+    `min: 0`), mirroring the existing `http*Timeout` flat fields. Documented in the `loadConfig`
+    JSDoc, `.env.example`, and DEPLOY.md (new "Graceful shutdown and the drain window" section +
+    rolling-deploys bullet corrected); config↔docs drift guard auto-covers it.
+  - Tests: `config.test.ts` default/parse/0/negative/non-integer + the full-object default; two
+    real-socket `gateway.test.ts` integration tests — an in-flight test-send **drains to its `200`**
+    during `stop()` (the regression guard), and one outlasting a 40 ms grace is **force-closed**
+    (client rejects, `stop()` still returns).
+- **Decisions:** Made the grace configurable (operators must align it with
+  `terminationGracePeriodSeconds`/`docker stop -t`) rather than a fixed constant; default 10 s fits
+  k8s's 30 s default and matches Docker's stop grace. Kept the existing stop ordering (worker →
+  HTTP → backend). Guarded the field read with `typeof === "number"` so a hand-built (non-`loadConfig`)
+  config degrades to unbounded-drain instead of crashing. Logged to LOG.md only (PROJECT.md is the
+  frozen roadmap; this is runtime hardening).
+- **Validation:** `tsc` 0; `vitest run` **1885** (+9; 6 PG-skipped, no flaky exit) incl. the two new
+  booted-gateway drain tests over real sockets; `build` 0; `assert-gate-integrity.ps1` 0 (zero
+  substrate edits); working tree = the 6 intended files.
+- **Notes:** The drain test forces `POSTHORN_FANOUT_IDLE_POLL_MS=5` so `stop()` reaches the HTTP-close
+  phase fast (the dispatcher's 1 s default poll would otherwise delay it), then releases the receiver
+  after an 80 ms beat so the request is provably in flight when `closeIdleConnections()` runs — under
+  the old `closeAllConnections()` it would have been reset. No bespoke dist smoke: the new tests boot
+  the real composition over real sockets, which is what a smoke would add.
+- **Next:** Audit dashboard/portal HTML error rendering against the `error-codes.ts` vocabulary
+  (iter-0113 Next #2); or export a typed `narrowApiError` SDK helper; or expose
+  `connectionsCheckingInterval` so sub-second header/request deadlines aren't coarsened by the 30 s sweep.
+
 ## 2026-05-25T04:15 · iter-0113 · GREEN · per-endpoint-failure-reason-breakdown-on-stats
 
 - **Baseline:** clean main @ `9d88937` (iter-0112 error-code enum). Verified green first:

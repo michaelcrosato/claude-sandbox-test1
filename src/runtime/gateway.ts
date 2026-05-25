@@ -683,9 +683,37 @@ export function createGateway(
       ),
     );
     await new Promise<void>((resolve) => {
-      httpServer.close(() => resolve());
-      // Force-close idle keep-alive sockets so close() does not hang waiting on them.
-      httpServer.closeAllConnections();
+      let forceTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (): void => {
+        if (forceTimer !== null) {
+          clearTimeout(forceTimer);
+          forceTimer = null;
+        }
+        resolve();
+      };
+      // Stop accepting new connections and drain in-flight requests: close() resolves
+      // once every in-flight request has finished and its socket closed (Node marks an
+      // in-flight response `Connection: close` while the server is closing, so a
+      // keep-alive socket ends after its current response instead of lingering).
+      httpServer.close(() => finish());
+      // Drop sockets that are idle *right now* so they don't hold close() open — but,
+      // unlike closeAllConnections(), leave an in-flight request to finish rather than
+      // aborting it mid-response. This is the graceful-drain fix: a request in flight
+      // when SIGTERM arrives (e.g. a POST /v1/messages) completes and the producer gets
+      // its 202, instead of seeing a connection reset and having to guess + retry.
+      httpServer.closeIdleConnections();
+      // Bound the drain: after the grace window, force-close any still-active socket so
+      // a slow or stuck request cannot delay shutdown past the orchestrator's
+      // termination grace. `0` (or a hand-built config that omits the field) disables
+      // the cutoff — the drain is then bounded only by the per-request timeout. unref()
+      // so the timer itself never keeps the process alive.
+      const graceMs = config.httpShutdownGraceMs;
+      if (typeof graceMs === "number" && graceMs > 0) {
+        forceTimer = setTimeout(() => {
+          httpServer.closeAllConnections();
+        }, graceMs);
+        forceTimer.unref();
+      }
     });
     // Release the backend: close the SQLite file handles (so the files can be
     // reopened on a restart and temp dirs cleaned up) or drain the Postgres pool.

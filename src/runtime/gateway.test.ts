@@ -77,6 +77,61 @@ function startReceiver(responseStatus = 200): Promise<Receiver> {
   });
 }
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A receiver whose response is held until {@link ControllableReceiver.release} is
+ * called. Used to pin an inbound gateway request *in flight* (the gateway blocks on
+ * this receiver while serving `POST /v1/endpoints/:id/test`), so a test can trigger
+ * `stop()` while a request is mid-processing and observe whether it drains or is
+ * force-closed.
+ */
+interface ControllableReceiver {
+  readonly url: string;
+  /** Resolves when the receiver has received a request (the gateway request is now in flight). */
+  readonly hit: Promise<void>;
+  /** Make the receiver send its `200` response, completing the in-flight gateway request. */
+  release(): void;
+  close(): Promise<void>;
+}
+
+function startControllableReceiver(): Promise<ControllableReceiver> {
+  let resolveHit!: () => void;
+  const hit = new Promise<void>((resolve) => {
+    resolveHit = resolve;
+  });
+  let releaseFn!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseFn = resolve;
+  });
+  const server = createServer((req, res) => {
+    req.resume(); // drain the request body
+    req.on("end", () => {
+      resolveHit();
+      void released.then(() => {
+        res.writeHead(200);
+        res.end();
+      });
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${port}/hook`,
+        hit,
+        release: releaseFn,
+        close: () =>
+          new Promise<void>((done) => {
+            releaseFn(); // let any still-pending handler finish so the server can close
+            server.close(() => done());
+            server.closeAllConnections();
+          }),
+      });
+    });
+  });
+}
+
 /** A small ephemeral-port, in-memory gateway config with a fast idle poll for tests. */
 function memoryConfig(overrides: Record<string, string> = {}) {
   return loadConfig({
@@ -120,6 +175,90 @@ describe("createGateway", () => {
 
     await gateway.stop();
     await gateway.stop(); // second stop is a no-op, not an error
+  });
+
+  it("drains an in-flight request during stop() instead of force-closing it", async () => {
+    // Fast worker AND dispatcher idle polls so stop() reaches the HTTP-close phase
+    // promptly (the dispatcher's default poll is 1s — without this override stop()
+    // would not begin draining the socket until the dispatcher loop next wakes).
+    const gateway = createGateway(memoryConfig({ POSTHORN_FANOUT_IDLE_POLL_MS: "5" }));
+    gateways.push(gateway);
+    const address = await gateway.start();
+    const base = `http://127.0.0.1:${address.port}`;
+    const app = await gateway.apps.create({ name: "Drain" });
+    const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+    const auth = { "content-type": "application/json", authorization: `Bearer ${apiKey}` };
+
+    const receiver = await startControllableReceiver();
+    try {
+      const createRes = await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["test"] }),
+      });
+      expect(createRes.status).toBe(201);
+      const { id } = (await createRes.json()) as { id: string };
+
+      // The test-send holds this inbound request open while the gateway POSTs to the
+      // (not-yet-responding) receiver. Don't await — it must stay in flight.
+      const testP = fetch(`${base}/v1/endpoints/${id}/test`, { method: "POST", headers: auth });
+      await receiver.hit; // the gateway's inbound request is now in flight
+
+      // Begin shutdown while the request is in flight, give stop() time to reach
+      // close() + closeIdleConnections(), then let the receiver respond.
+      const stopP = gateway.stop();
+      await delay(80);
+      receiver.release();
+
+      // The in-flight request drained to completion rather than being reset — the
+      // regression guard for the closeAllConnections()→closeIdleConnections() fix.
+      const res = await testP;
+      expect(res.status).toBe(200);
+      expect((await res.json() as { success: boolean }).success).toBe(true);
+      await stopP;
+    } finally {
+      await receiver.close();
+    }
+  });
+
+  it("force-closes an in-flight request that outlasts the shutdown grace window", async () => {
+    const gateway = createGateway(
+      memoryConfig({ POSTHORN_FANOUT_IDLE_POLL_MS: "5", POSTHORN_HTTP_SHUTDOWN_GRACE_MS: "40" }),
+    );
+    gateways.push(gateway);
+    const address = await gateway.start();
+    const base = `http://127.0.0.1:${address.port}`;
+    const app = await gateway.apps.create({ name: "Grace" });
+    const { secret: apiKey } = await gateway.apps.createApiKey(app.id);
+    const auth = { "content-type": "application/json", authorization: `Bearer ${apiKey}` };
+
+    const receiver = await startControllableReceiver(); // never released until cleanup
+    try {
+      const createRes = await fetch(`${base}/v1/endpoints`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ url: receiver.url, eventTypes: ["test"] }),
+      });
+      expect(createRes.status).toBe(201);
+      const { id } = (await createRes.json()) as { id: string };
+
+      const testP = fetch(`${base}/v1/endpoints/${id}/test`, { method: "POST", headers: auth });
+      // testP may reject once the socket is force-closed; attach a catch now so the
+      // rejection is never unhandled while stop() is in progress.
+      const settled = testP.then(
+        () => ({ ok: true }) as const,
+        () => ({ ok: false }) as const,
+      );
+      await receiver.hit; // the request is in flight, and the receiver will never respond
+
+      // stop() drains for the 40ms grace, then force-closes the still-active socket.
+      // stop() resolving at all proves the cutoff fired — without it, close() would
+      // wait on the never-completing request forever.
+      await gateway.stop();
+      expect((await settled).ok).toBe(false);
+    } finally {
+      await receiver.close();
+    }
   });
 
   it("serves /readyz as 200 ready while the backend is reachable", async () => {

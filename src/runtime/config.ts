@@ -64,6 +64,17 @@ const EPHEMERAL_PORT = 0;
 /** Highest valid TCP port. */
 const MAX_PORT = 65_535;
 
+/**
+ * Default graceful-shutdown drain window: 10s. On `stop()` the gateway stops
+ * accepting new connections and lets in-flight HTTP requests finish, force-closing
+ * any still-active socket only after this window so a slow or stuck request cannot
+ * delay shutdown past the orchestrator's termination grace. `0` disables the cutoff
+ * (the drain is then bounded only by the per-request timeout). Size your
+ * orchestrator's termination grace (Kubernetes `terminationGracePeriodSeconds`,
+ * `docker stop -t`) at or above this value so the drain completes before SIGKILL.
+ */
+export const DEFAULT_HTTP_SHUTDOWN_GRACE_MS = 10_000;
+
 /** Validated worker tunables. Mirrors the {@link DeliveryWorker}/queue option names. */
 export interface WorkerConfig {
   /** Tasks claimed and delivered per tick. */
@@ -149,6 +160,16 @@ export interface GatewayConfig {
    * See `POSTHORN_HTTP_REQUEST_TIMEOUT_MS`.
    */
   readonly httpRequestTimeoutMs: number;
+  /**
+   * Graceful-shutdown drain window in ms. On {@link createGateway}'s `stop()` the
+   * HTTP server stops accepting new connections and lets in-flight requests finish;
+   * any socket still active after this window is force-closed so a slow or stuck
+   * request cannot delay shutdown past the orchestrator's termination grace. Defaults
+   * to {@link DEFAULT_HTTP_SHUTDOWN_GRACE_MS}. `0` disables the cutoff (the drain is
+   * then bounded only by {@link httpRequestTimeoutMs}). Keep it at or below the
+   * orchestrator's termination grace. See `POSTHORN_HTTP_SHUTDOWN_GRACE_MS`.
+   */
+  readonly httpShutdownGraceMs: number;
   /**
    * Canonical public base URL the portal-session links (`POST /v1/portal/sessions`
    * → `portalUrl`) are built from, or `null` to derive them from each request's
@@ -568,6 +589,7 @@ function readHstsConfig(env: Env): HstsPolicy {
  * `POSTHORN_MAX_BODY_BYTES`,
  * `POSTHORN_HTTP_KEEP_ALIVE_TIMEOUT_MS` (idle keep-alive socket timeout; raise above the LB idle timeout; `0` = off),
  * `POSTHORN_HTTP_HEADERS_TIMEOUT_MS` / `POSTHORN_HTTP_REQUEST_TIMEOUT_MS` (Slowloris bounds; `0` = off; headers <= request),
+ * `POSTHORN_HTTP_SHUTDOWN_GRACE_MS` (graceful-shutdown drain window before in-flight sockets are force-closed; `0` = off),
  * `POSTHORN_PUBLIC_BASE_URL` (canonical origin for portal links; unset = derive from the request Host),
  * `POSTHORN_ADMIN_TOKEN` (enables the admin/control-plane API when set),
  * `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` (`0` = off),
@@ -600,6 +622,12 @@ export function loadConfig(env: Env): GatewayConfig {
     httpKeepAliveTimeoutMs: httpTimeouts.keepAliveTimeoutMs,
     httpHeadersTimeoutMs: httpTimeouts.headersTimeoutMs,
     httpRequestTimeoutMs: httpTimeouts.requestTimeoutMs,
+    httpShutdownGraceMs: readInt(
+      env,
+      "POSTHORN_HTTP_SHUTDOWN_GRACE_MS",
+      DEFAULT_HTTP_SHUTDOWN_GRACE_MS,
+      { min: 0 },
+    ),
     publicBaseUrl: readPublicBaseUrl(env),
     adminToken: readAdminToken(env),
     endpointAutoDisableAfterMs: readInt(

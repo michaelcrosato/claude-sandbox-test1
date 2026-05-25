@@ -5,6 +5,7 @@ import {
   ConfigError,
   DEFAULT_DATA_DIR,
   DEFAULT_HOST,
+  DEFAULT_HTTP_SHUTDOWN_GRACE_MS,
   DEFAULT_PORT,
   MEMORY_DATA_DIR,
   MIN_ADMIN_TOKEN_LENGTH,
@@ -48,6 +49,7 @@ describe("loadConfig", () => {
       httpKeepAliveTimeoutMs: DEFAULT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
       httpHeadersTimeoutMs: DEFAULT_HTTP_HEADERS_TIMEOUT_MS,
       httpRequestTimeoutMs: DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+      httpShutdownGraceMs: DEFAULT_HTTP_SHUTDOWN_GRACE_MS,
       publicBaseUrl: null,
       adminToken: null,
       endpointAutoDisableAfterMs: DEFAULT_AUTO_DISABLE_AFTER_MS,
@@ -332,6 +334,32 @@ describe("loadConfig", () => {
       });
       expect(config.httpHeadersTimeoutMs).toBe(90_000);
       expect(config.httpRequestTimeoutMs).toBe(0);
+    });
+  });
+
+  describe("POSTHORN_HTTP_SHUTDOWN_GRACE_MS (graceful-shutdown drain window)", () => {
+    it("defaults to DEFAULT_HTTP_SHUTDOWN_GRACE_MS when unset", () => {
+      expect(loadConfig({}).httpShutdownGraceMs).toBe(DEFAULT_HTTP_SHUTDOWN_GRACE_MS);
+    });
+
+    it("parses an explicit value", () => {
+      expect(loadConfig({ POSTHORN_HTTP_SHUTDOWN_GRACE_MS: "25000" }).httpShutdownGraceMs).toBe(
+        25_000,
+      );
+    });
+
+    it("accepts 0 (disable the force-close cutoff)", () => {
+      expect(loadConfig({ POSTHORN_HTTP_SHUTDOWN_GRACE_MS: "0" }).httpShutdownGraceMs).toBe(0);
+    });
+
+    it("rejects a negative value", () => {
+      expect(() => loadConfig({ POSTHORN_HTTP_SHUTDOWN_GRACE_MS: "-1" })).toThrow(
+        /POSTHORN_HTTP_SHUTDOWN_GRACE_MS/,
+      );
+    });
+
+    it("rejects a non-integer value", () => {
+      expect(() => loadConfig({ POSTHORN_HTTP_SHUTDOWN_GRACE_MS: "1.5" })).toThrow(ConfigError);
     });
   });
 

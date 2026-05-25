@@ -701,8 +701,37 @@ per-pod volume, because the replicas hold no local state.
 - **Rolling deploys and replica loss are safe.** Drain or kill a replica at any time:
   any delivery it held mid-flight loses its lease and is reclaimed by a peer after the
   visibility timeout, so the only observable effect is at-least-once redelivery (which
-  receivers already dedup on `webhook-id`). No draining beyond your load balancer's
-  normal in-flight-request grace is required.
+  receivers already dedup on `webhook-id`). On a clean `SIGTERM`/`SIGINT` the replica
+  also drains its HTTP edge — see [Graceful shutdown](#graceful-shutdown-and-the-drain-window)
+  below — so an in-flight ingest finishes rather than being reset; a hard kill (`SIGKILL`,
+  node failure) is still safe, it just falls back to lease reclaim.
+
+### Graceful shutdown and the drain window
+
+On `SIGTERM` or `SIGINT` the gateway shuts down in order: it stops the delivery worker
+(the current tick finishes, then the loop exits — any task still leased is reclaimed by a
+peer after the visibility timeout), **stops accepting new HTTP connections and lets
+in-flight requests finish**, then releases the storage backend. The HTTP drain is the part
+that matters for a producer: an ingest (`POST /v1/messages`) that is mid-flight when the
+signal arrives completes and returns its `202` instead of seeing a connection reset — which
+a producer *without* an idempotency key would otherwise have to disambiguate (did it land?)
+by retrying, risking a duplicate.
+
+`POSTHORN_HTTP_SHUTDOWN_GRACE_MS` (default `10000`) bounds that drain: after the window,
+any socket still serving a request is force-closed, so one slow or stuck request can't hold
+shutdown open indefinitely. `0` disables the cutoff (the drain is then bounded only by
+`POSTHORN_HTTP_REQUEST_TIMEOUT_MS`). **Set your orchestrator's termination grace at or above
+this value** so the drain completes before a `SIGKILL` lands:
+
+```
+Kubernetes terminationGracePeriodSeconds  ≥  POSTHORN_HTTP_SHUTDOWN_GRACE_MS / 1000  (+ headroom)
+docker stop -t <seconds>                  ≥  POSTHORN_HTTP_SHUTDOWN_GRACE_MS / 1000  (+ headroom)
+```
+
+The Kubernetes default (30 s) comfortably covers the 10 s default; `docker stop`'s default
+is 10 s, so either lower the grace below it or raise `docker stop -t`. In practice almost
+every request drains in well under a second, so the window is only a ceiling for the
+pathological case, not the normal shutdown latency.
 
 ### Load-balancer keep-alive and timeouts
 
