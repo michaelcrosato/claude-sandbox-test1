@@ -56,6 +56,12 @@ import {
 } from "../queue/delivery-queue.js";
 import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
 import { isNonRetryableStatus, type RetryPolicy } from "../delivery/retry-policy.js";
+import {
+  classifyDeliveryFailure,
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
 
 /**
  * Where a task's message should be delivered, and the secret to sign it with.
@@ -164,6 +170,17 @@ export type TaskOutcome =
   | "stale"
   | "rateLimited";
 
+/**
+ * What {@link DeliveryWorker.deliver} reports for one task: its {@link TaskOutcome}
+ * plus, for a non-success attempt, the classified {@link DeliveryFailureReason}.
+ * `failureReason` is `null` for a `succeeded`, `stale`, or `rateLimited` task (no
+ * failure verdict to attribute); `processOnce` only tallies it for `failed`/`deadLettered`.
+ */
+interface DeliverResult {
+  readonly outcome: TaskOutcome;
+  readonly failureReason: DeliveryFailureReason | null;
+}
+
 /** Aggregate result of one {@link DeliveryWorker.processOnce} tick. */
 export interface TickResult {
   /** Tasks claimed from the queue this tick. */
@@ -181,6 +198,15 @@ export interface TickResult {
    * The task is rescheduled (`pending`) without consuming a retry attempt.
    */
   readonly rateLimited: number;
+  /**
+   * Per-{@link DeliveryFailureReason} count of *failed* attempts this tick — every
+   * reason present (zeros included). A failure is tallied here exactly when its
+   * outcome was `failed` or `deadLettered` (a retryable failure and an exhausted one
+   * both stem from a classified failure), so `sum(failureReasons) === failed +
+   * deadLettered`. `stale` (verdict discarded) and `rateLimited` (no attempt made)
+   * contribute nothing. Folded into `posthorn_delivery_failures_total{reason="…"}`.
+   */
+  readonly failureReasons: DeliveryFailureReasonCounts;
 }
 
 /** Default per-attempt HTTP timeout: 10s. */
@@ -584,13 +610,14 @@ export class DeliveryWorker {
       nowMs,
       limit: this.#batchSize,
     });
-    const outcomes = await this.#deliverBatch(tasks, nowMs);
+    const results = await this.#deliverBatch(tasks, nowMs);
     let succeeded = 0;
     let failed = 0;
     let deadLettered = 0;
     let stale = 0;
     let rateLimited = 0;
-    for (const outcome of outcomes) {
+    const failureReasons = emptyDeliveryFailureCounts();
+    for (const { outcome, failureReason } of results) {
       switch (outcome) {
         case "succeeded":
           succeeded += 1;
@@ -608,6 +635,11 @@ export class DeliveryWorker {
           rateLimited += 1;
           break;
       }
+      // Attribute a reason only to a settled failure verdict — not a discarded `stale`
+      // result or a deferred `rateLimited` task (neither of which is a delivery failure).
+      if ((outcome === "failed" || outcome === "deadLettered") && failureReason !== null) {
+        failureReasons[failureReason] += 1;
+      }
     }
     const result: TickResult = {
       claimed: tasks.length,
@@ -616,6 +648,7 @@ export class DeliveryWorker {
       deadLettered,
       stale,
       rateLimited,
+      failureReasons,
     };
     this.#onTick?.(result);
     return result;
@@ -637,8 +670,8 @@ export class DeliveryWorker {
   async #deliverBatch(
     tasks: readonly DeliveryTask[],
     nowMs: number,
-  ): Promise<TaskOutcome[]> {
-    const outcomes = new Array<TaskOutcome>(tasks.length);
+  ): Promise<DeliverResult[]> {
+    const results = new Array<DeliverResult>(tasks.length);
     let cursor = 0;
     let firstError: unknown = undefined;
     let failed = false;
@@ -647,7 +680,7 @@ export class DeliveryWorker {
         const index = cursor;
         cursor += 1;
         try {
-          outcomes[index] = await this.#deliver(tasks[index]!, nowMs);
+          results[index] = await this.#deliver(tasks[index]!, nowMs);
         } catch (error) {
           if (!failed) {
             failed = true;
@@ -666,7 +699,7 @@ export class DeliveryWorker {
     if (failed) {
       throw firstError;
     }
-    return outcomes;
+    return results;
   }
 
   /**
@@ -712,19 +745,26 @@ export class DeliveryWorker {
   /**
    * Deliver one claimed task end-to-end and settle it. Any error from loading,
    * resolving, signing, or transport is captured as a failed attempt — that is a
-   * delivery failure, not a worker fault. Returns the task's outcome.
+   * delivery failure, not a worker fault. Returns the task's outcome plus, for a
+   * non-success attempt, its classified {@link DeliveryFailureReason}.
    */
-  async #deliver(task: DeliveryTask, nowMs: number): Promise<TaskOutcome> {
+  async #deliver(task: DeliveryTask, nowMs: number): Promise<DeliverResult> {
     const leaseToken = task.leaseToken;
     if (leaseToken === null) {
       // A claimed task always holds a lease; defensively skip if not.
-      return "stale";
+      return { outcome: "stale", failureReason: null };
     }
 
     let response: HttpDeliveryResponse | null = null;
     let failure: string | null = null;
     let messageExpired = false;
     let durationMs = 0;
+    // The raw error thrown by the transport (#send), kept as an object so the failure
+    // classifier can read its `.code`/`.name`; null for pre-flight or HTTP failures.
+    let transportError: unknown = null;
+    // A failure determined before any send (message gone, expired, or no endpoint),
+    // fed to the classifier when there is neither a response nor a transport error.
+    let preflight: "expired" | "no_endpoint" | "other" | null = null;
     // The tenant the attempt is made on behalf of, denormalized onto the audit record
     // (the basis for per-tenant delivery-usage metering). Null until the message loads;
     // it stays null for a vanished message, whose attempt belongs to no tenant.
@@ -739,17 +779,20 @@ export class DeliveryWorker {
       const message = await this.#store.get(task.messageId);
       if (message === null) {
         failure = `message "${task.messageId}" not found`;
+        preflight = "other";
       } else {
         appId = message.appId;
         // Dead-letter immediately without retrying when the message has expired.
         if (message.expiresAt !== null && nowMs > message.expiresAt) {
           failure = `message "${message.id}" expired at ${new Date(message.expiresAt).toISOString()}`;
           messageExpired = true;
+          preflight = "expired";
         } else {
           const target = await this.#resolveEndpoint(task, message);
           resolvedTarget = target;
           if (target === null) {
             failure = `no endpoint resolved for task "${task.id}"`;
+            preflight = "no_endpoint";
           } else {
             // Per-endpoint rate limit check. tryConsume does not record the delivery
             // when rate-limited, so a postponed task does not count against the window.
@@ -767,11 +810,11 @@ export class DeliveryWorker {
                     postponeError instanceof StaleLeaseError ||
                     postponeError instanceof UnknownDeliveryTaskError
                   ) {
-                    return "stale";
+                    return { outcome: "stale", failureReason: null };
                   }
                   throw postponeError;
                 }
-                return "rateLimited";
+                return { outcome: "rateLimited", failureReason: null };
               }
             }
             const sentAt = this.#now();
@@ -782,6 +825,12 @@ export class DeliveryWorker {
                   ? signedRequest.body.slice(0, MAX_CAPTURED_BODY_BYTES)
                   : signedRequest.body;
               response = await this.#send(signedRequest);
+            } catch (sendError) {
+              // A transport-level failure (DNS, connect/total timeout, refused/reset,
+              // TLS, SSRF block). Keep the raw object for classification and stringify
+              // it for the audit log — same `failure` text the outer catch would set.
+              transportError = sendError;
+              failure = describeError(sendError);
             } finally {
               // Capture latency even when #send throws — a timeout's duration is the
               // most useful number there is. Math.max guards a non-monotonic clock.
@@ -803,6 +852,17 @@ export class DeliveryWorker {
     const error = succeeded
       ? null
       : failure ?? `endpoint returned HTTP ${String(response?.status)}`;
+
+    // Classify a non-success attempt into one stable reason code (for the
+    // posthorn_delivery_failures_total metric). A non-2xx HTTP response outranks a
+    // transport error outranks the pre-flight discriminant; a 2xx has no reason.
+    const failureReason: DeliveryFailureReason | null = succeeded
+      ? null
+      : classifyDeliveryFailure({
+          transportError,
+          responseStatus: response !== null ? response.status : null,
+          preflight,
+        });
 
     // Extract Retry-After from non-2xx HTTP responses only. Transport errors and
     // unresolvable-endpoint failures carry no response, so retryAfterMs stays null.
@@ -850,7 +910,7 @@ export class DeliveryWorker {
     if (outcome === "deadLettered") {
       await this.#reportDeadLettered(task, nowMs);
     }
-    return outcome;
+    return { outcome, failureReason };
   }
 
   /**

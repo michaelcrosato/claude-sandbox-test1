@@ -28,6 +28,15 @@ export {
 } from "./delivery/retry-policy.js";
 
 export {
+  classifyDeliveryFailure,
+  DELIVERY_FAILURE_REASONS,
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReason,
+  type DeliveryFailureReasonCounts,
+  type DeliveryFailureSignal,
+} from "./delivery/failure-reason.js";
+
+export {
   reduce,
   initialDeliveryState,
   isTerminal,

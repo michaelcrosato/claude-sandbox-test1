@@ -279,6 +279,7 @@ Prometheus model; Prometheus detects resets via the `_created` convention).
 | `posthorn_messages_ingested_total` | — | Messages accepted by `POST /v1/messages`. |
 | `posthorn_messages_deduplicated_total` | — | Messages suppressed because the idempotency key was already seen. |
 | `posthorn_deliveries_total` | `outcome` | Delivery attempt outcomes. Labels: `succeeded`, `failed`, `dead_lettered`, `stale` (lease-lapsed, counted but not retried by this worker). |
+| `posthorn_delivery_failures_total` | `reason` | The **why** behind `failed` + `dead_lettered` (their sum equals the sum of this family). Labels: `connect_timeout` (endpoint unreachable — DNS+connect deadline hit), `request_timeout` (connected but too slow — total deadline hit), `dns_failure`, `connection_refused`, `connection_reset`, `tls_error`, `ssrf_blocked` (resolved to a private/internal address), `http_4xx`, `http_5xx`, `http_other`, `no_endpoint` (subscription gone), `expired` (message TTL elapsed), `other`. |
 
 ### Gauges (point-in-time, read from queue at scrape time)
 
@@ -302,6 +303,12 @@ rate(posthorn_messages_ingested_total[5m]) * 60
 # Delivery success rate (last 10 minutes):
 rate(posthorn_deliveries_total{outcome="succeeded"}[10m])
   / rate(posthorn_deliveries_total[10m])
+
+# Top delivery-failure reasons (last 10 minutes) — is it unreachable, slow, or 5xx?
+topk(5, sum by (reason) (rate(posthorn_delivery_failures_total[10m])))
+
+# Unreachable endpoints specifically (dropped SYN / black-holed IP), apart from slow ones:
+rate(posthorn_delivery_failures_total{reason="connect_timeout"}[10m])
 
 # Dead-letter backlog (the number to keep at zero):
 posthorn_delivery_tasks{status="dead_letter"}

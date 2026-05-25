@@ -6,9 +6,17 @@ import {
   type MetricsSnapshot,
 } from "./metrics.js";
 import type { TickResult } from "../worker/delivery-worker.js";
+import {
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 
 /** Build a TickResult, defaulting the unset tallies to 0. */
-function tick(partial: Partial<TickResult>): TickResult {
+function tick(
+  partial: Partial<Omit<TickResult, "failureReasons">> & {
+    readonly failureReasons?: Partial<Record<DeliveryFailureReason, number>>;
+  } = {},
+): TickResult {
   return {
     claimed: 0,
     succeeded: 0,
@@ -17,6 +25,7 @@ function tick(partial: Partial<TickResult>): TickResult {
     stale: 0,
     rateLimited: 0,
     ...partial,
+    failureReasons: { ...emptyDeliveryFailureCounts(), ...partial.failureReasons },
   };
 }
 
@@ -28,6 +37,7 @@ describe("MetricsRegistry", () => {
       messagesIngested: 0,
       messagesDeduplicated: 0,
       deliveries: { succeeded: 0, failed: 0, deadLettered: 0, stale: 0 },
+      deliveryFailures: emptyDeliveryFailureCounts(),
     });
   });
 
@@ -56,6 +66,26 @@ describe("MetricsRegistry", () => {
       deadLettered: 1,
       stale: 1,
     });
+  });
+
+  it("accumulates per-reason failure counts across ticks", () => {
+    const reg = new MetricsRegistry();
+    reg.recordTick(tick({ failed: 1, failureReasons: { connect_timeout: 1 } }));
+    reg.recordTick(
+      tick({ failed: 1, deadLettered: 1, failureReasons: { connect_timeout: 1, http_5xx: 1 } }),
+    );
+    const failures = reg.counters().deliveryFailures;
+    expect(failures.connect_timeout).toBe(2);
+    expect(failures.http_5xx).toBe(1);
+    expect(failures.request_timeout).toBe(0);
+  });
+
+  it("returns a defensive copy of the failure tally (snapshot cannot mutate the registry)", () => {
+    const reg = new MetricsRegistry();
+    reg.recordTick(tick({ failed: 1, failureReasons: { dns_failure: 1 } }));
+    const first = reg.counters().deliveryFailures as Record<DeliveryFailureReason, number>;
+    first.dns_failure = 999;
+    expect(reg.counters().deliveryFailures.dns_failure).toBe(1);
   });
 
   it("recordTick / recordIngest stay bound when passed as bare callbacks", () => {
@@ -89,6 +119,12 @@ describe("renderPrometheus", () => {
       messagesIngested: 42,
       messagesDeduplicated: 3,
       deliveries: { succeeded: 39, failed: 5, deadLettered: 1, stale: 0 },
+      deliveryFailures: {
+        ...emptyDeliveryFailureCounts(),
+        connect_timeout: 2,
+        request_timeout: 1,
+        http_5xx: 3,
+      },
     },
     deliveryTasksByStatus: {
       pending: 2,
@@ -107,6 +143,7 @@ describe("renderPrometheus", () => {
       "posthorn_messages_ingested_total",
       "posthorn_messages_deduplicated_total",
       "posthorn_deliveries_total",
+      "posthorn_delivery_failures_total",
       "posthorn_delivery_tasks",
     ]) {
       expect(text).toContain(`# HELP ${name} `);
@@ -130,6 +167,16 @@ describe("renderPrometheus", () => {
     expect(text).toContain('posthorn_deliveries_total{outcome="failed"} 5');
     expect(text).toContain('posthorn_deliveries_total{outcome="dead_lettered"} 1');
     expect(text).toContain('posthorn_deliveries_total{outcome="stale"} 0');
+  });
+
+  it("renders the failure-reason counter with one series per reason (zeros included)", () => {
+    const text = renderPrometheus(snapshot);
+    expect(text).toContain("# TYPE posthorn_delivery_failures_total counter");
+    expect(text).toContain('posthorn_delivery_failures_total{reason="connect_timeout"} 2');
+    expect(text).toContain('posthorn_delivery_failures_total{reason="request_timeout"} 1');
+    expect(text).toContain('posthorn_delivery_failures_total{reason="http_5xx"} 3');
+    // A reason with no failures still emits a zero series so the dashboard label exists.
+    expect(text).toContain('posthorn_delivery_failures_total{reason="ssrf_blocked"} 0');
   });
 
   it("renders the backlog gauge with one series per status", () => {

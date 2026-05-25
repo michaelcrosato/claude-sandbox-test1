@@ -41,6 +41,44 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T19:07 · iter-0087 · GREEN · delivery-failure-reason-metric
+
+- **Baseline:** clean main @ `7638450` (iter-0086 connect-vs-total timeout). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1675/1675** (50 files, 6 PG-skipped, no flaky exit), `npm run
+  build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Complete iter-0086's value (its standing Next #1). The transport now *fails unreachable
+  fast* with a distinguishable `connect timeout after <ms>ms` error vs. a slow receiver's total-
+  deadline `AbortError`, but the worker flattened both to a free-text string and metrics tallied
+  only coarse outcomes — so "unreachable" was invisible on the dashboard. Recover the distinction as
+  a queryable metric label.
+- **Changed:**
+  - New pure `src/delivery/failure-reason.ts`: a closed `DeliveryFailureReason` taxonomy (13 codes —
+    `connect_timeout`/`request_timeout`/`dns_failure`/`connection_refused`/`connection_reset`/
+    `tls_error`/`ssrf_blocked`/`http_4xx`/`http_5xx`/`http_other`/`no_endpoint`/`expired`/`other`),
+    ordered `DELIVERY_FAILURE_REASONS`, `emptyDeliveryFailureCounts()`, and a total, I/O-free
+    `classifyDeliveryFailure(signal)`. Classifies by **structured evidence** — Node `.code`/`.syscall`,
+    `AbortError` name, `instanceof BlockedUrlError` (`.reason`) — not brittle text, with the transport's
+    one controlled connect-timeout message the lone exception.
+  - `worker/delivery-worker.ts`: capture the transport error object + a pre-flight discriminant,
+    classify each non-success attempt, and tally per-reason into a new `TickResult.failureReasons`
+    (counted only for `failed`/`deadLettered`, so `sum == failed + deadLettered`). `#deliver` now
+    returns `{outcome, failureReason}`.
+  - `metrics/metrics.ts`: `MetricsRegistry` folds the per-reason tally; new
+    `posthorn_delivery_failures_total{reason="…"}` family (every series, zeros included).
+  - `index.ts` re-exports the classifier; `docs/DEPLOY.md` documents the metric + two PromQL examples
+    (top reasons; `connect_timeout` alone). +39 tests (classifier 29, worker 7, metrics 3).
+- **Decisions:** Surfaced as a metric label (the dashboard goal), not an audit-record column — the
+  latter is a 3-store schema migration deferred to a follow-up. Kept the classifier pure in
+  `delivery/` (alongside `retry-policy`) so the worker stays thin and the taxonomy is unit-tested
+  without a socket. `stale`/`rateLimited` contribute no reason (no settled failure verdict).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1714/1714** (+39; 51 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-logging.mjs` 22/22; `assert-gate-integrity.ps1` 0
+  (zero substrate edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Persist the reason as a column on the audit attempt record (3-store migration) so a
+  single message's failure cause is queryable, not just aggregate; or wire it into the dead-letter
+  system-event payload; or a connect-vs-total split for the one-shot test-send path (`http/api.ts`,
+  still on `fetchTransport`).
+
 ## 2026-05-24T18:51 · iter-0086 · GREEN · connect-vs-total-delivery-timeout
 
 - **Baseline:** clean main @ `21d95b7` (iter-0085 gateway lifecycle logging). Verified green

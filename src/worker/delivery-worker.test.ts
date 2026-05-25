@@ -27,6 +27,10 @@ import { fixedSchedule, type RetryPolicy } from "../delivery/retry-policy.js";
 import { HEADERS, verify } from "../signing/webhook-signature.js";
 import { type Message } from "../storage/message-store.js";
 import { MAX_CAPTURED_BODY_BYTES, type NewDeliveryAttempt } from "../attempts/delivery-attempt.js";
+import {
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
 
 // A fixed, valid base64 secret reused across the suite so signature round-trips
 // against the real verifier are deterministic.
@@ -259,6 +263,7 @@ describe("DeliveryWorker.processOnce", () => {
       deadLettered: 0,
       stale: 0,
       rateLimited: 0,
+      failureReasons: emptyDeliveryFailureCounts(),
     });
     expect(requests).toHaveLength(0);
   });
@@ -1866,6 +1871,106 @@ describe("DeliveryWorker.run", () => {
       const tick = await worker.processOnce();
       expect(tick.rateLimited).toBe(2);
       expect(tick.claimed).toBe(2);
+    });
+  });
+
+  describe("DeliveryWorker — failure-reason classification (TickResult.failureReasons)", () => {
+    /** A transport that throws a fixed error, modelling a transport-level failure. */
+    function throwingTransport(error: unknown): Transport {
+      return async () => {
+        throw error;
+      };
+    }
+
+    function sumReasons(counts: Readonly<Record<DeliveryFailureReason, number>>): number {
+      return Object.values(counts).reduce((a, b) => a + b, 0);
+    }
+
+    async function enqueueOne(env: ReturnType<typeof setup>): Promise<void> {
+      const { message } = await env.store.create({ appId: "app_1", eventType: "e", payload: "{}" });
+      await env.queue.enqueue({ messageId: message.id });
+    }
+
+    it("tallies connect_timeout when the endpoint is unreachable (transport connect-timeout)", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+      await enqueueOne(env);
+      const worker = makeWorker(env, {
+        transport: throwingTransport(new Error("connect timeout after 5000ms")),
+      });
+      const tick = await worker.processOnce();
+      expect(tick).toMatchObject({ failed: 1, deadLettered: 0 });
+      expect(tick.failureReasons.connect_timeout).toBe(1);
+      expect(tick.failureReasons.request_timeout).toBe(0);
+      expect(sumReasons(tick.failureReasons)).toBe(tick.failed + tick.deadLettered);
+    });
+
+    it("tallies request_timeout when the endpoint is slow (total-deadline AbortError)", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+      await enqueueOne(env);
+      const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+      const worker = makeWorker(env, { transport: throwingTransport(abort) });
+      const tick = await worker.processOnce();
+      // The whole point of the connect/total split: "slow" lands in a different bucket.
+      expect(tick.failureReasons.request_timeout).toBe(1);
+      expect(tick.failureReasons.connect_timeout).toBe(0);
+    });
+
+    it("tallies http_5xx for a retryable 5xx response", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+      await enqueueOne(env);
+      const { transport } = recordingTransport(503);
+      const tick = await makeWorker(env, { transport }).processOnce();
+      expect(tick).toMatchObject({ failed: 1 });
+      expect(tick.failureReasons.http_5xx).toBe(1);
+    });
+
+    it("still tallies the reason when the failure dead-letters (exhausted retries)", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([]) }); // no retries → first 4xx dead-letters
+      await enqueueOne(env);
+      const { transport } = recordingTransport(404);
+      const tick = await makeWorker(env, { transport }).processOnce();
+      expect(tick).toMatchObject({ failed: 0, deadLettered: 1 });
+      expect(tick.failureReasons.http_4xx).toBe(1);
+      expect(sumReasons(tick.failureReasons)).toBe(tick.failed + tick.deadLettered);
+    });
+
+    it("tallies no_endpoint when the resolver returns null", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+      await enqueueOne(env);
+      const tick = await makeWorker(env, { resolveEndpoint: () => null }).processOnce();
+      expect(tick.failureReasons.no_endpoint).toBe(1);
+    });
+
+    it("a successful delivery contributes no failure reason", async () => {
+      const env = setup();
+      await enqueueOne(env);
+      const { transport } = recordingTransport(200);
+      const tick = await makeWorker(env, { transport }).processOnce();
+      expect(tick).toMatchObject({ succeeded: 1, failed: 0, deadLettered: 0 });
+      expect(sumReasons(tick.failureReasons)).toBe(0);
+    });
+
+    it("classifies a mixed batch and keeps sum(reasons) === failed + deadLettered", async () => {
+      const env = setup({ retryPolicy: fixedSchedule([60_000]) });
+      await enqueueOne(env);
+      await enqueueOne(env);
+      await enqueueOne(env);
+      // Sequential delivery so the per-call branch is deterministic.
+      let call = 0;
+      const transport: Transport = async () => {
+        call += 1;
+        if (call === 1) throw new Error("connect timeout after 5000ms");
+        if (call === 2) {
+          throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+        }
+        return { status: 500 };
+      };
+      const tick = await makeWorker(env, { transport, concurrency: 1 }).processOnce();
+      expect(tick).toMatchObject({ claimed: 3, failed: 3, deadLettered: 0 });
+      expect(tick.failureReasons.connect_timeout).toBe(1);
+      expect(tick.failureReasons.connection_refused).toBe(1);
+      expect(tick.failureReasons.http_5xx).toBe(1);
+      expect(sumReasons(tick.failureReasons)).toBe(3);
     });
   });
 });

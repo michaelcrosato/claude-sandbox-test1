@@ -33,6 +33,11 @@
 
 import type { TickResult } from "../worker/delivery-worker.js";
 import type { DeliveryCountsByStatus } from "../queue/delivery-queue.js";
+import {
+  DELIVERY_FAILURE_REASONS,
+  emptyDeliveryFailureCounts,
+  type DeliveryFailureReasonCounts,
+} from "../delivery/failure-reason.js";
 
 /** `Content-Type` for Prometheus text exposition format, version 0.0.4. */
 export const PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
@@ -57,6 +62,12 @@ export interface MetricsCounters {
   readonly messagesDeduplicated: number;
   /** Delivery attempts the worker settled, broken down by outcome. */
   readonly deliveries: DeliveryOutcomeCounts;
+  /**
+   * Failed delivery attempts broken down by *reason* — the "why" behind the
+   * `failed`+`dead_lettered` outcomes (unreachable vs. slow vs. 5xx vs. refused …).
+   * Summed across reasons this equals `deliveries.failed + deliveries.deadLettered`.
+   */
+  readonly deliveryFailures: DeliveryFailureReasonCounts;
 }
 
 /** Everything {@link renderPrometheus} needs: counters + live gauges + metadata. */
@@ -100,6 +111,7 @@ export class MetricsRegistry {
   #failed = 0;
   #deadLettered = 0;
   #stale = 0;
+  readonly #deliveryFailures = emptyDeliveryFailureCounts();
 
   constructor(options: MetricsRegistryOptions = {}) {
     this.version = options.version ?? "unknown";
@@ -127,6 +139,9 @@ export class MetricsRegistry {
     this.#failed += result.failed;
     this.#deadLettered += result.deadLettered;
     this.#stale += result.stale;
+    for (const reason of DELIVERY_FAILURE_REASONS) {
+      this.#deliveryFailures[reason] += result.failureReasons[reason];
+    }
   };
 
   /** Seconds since this registry (≈ the process) started; never negative. */
@@ -145,6 +160,8 @@ export class MetricsRegistry {
         deadLettered: this.#deadLettered,
         stale: this.#stale,
       },
+      // A copy so the snapshot can never mutate the registry's live tally.
+      deliveryFailures: { ...this.#deliveryFailures },
     };
   }
 }
@@ -237,6 +254,15 @@ export function renderPrometheus(snapshot: MetricsSnapshot): string {
         { labels: { outcome: "dead_lettered" }, value: counters.deliveries.deadLettered },
         { labels: { outcome: "stale" }, value: counters.deliveries.stale },
       ],
+    ),
+    renderFamily(
+      "posthorn_delivery_failures_total",
+      "counter",
+      "Failed delivery attempts by reason (the why behind failed + dead_lettered).",
+      DELIVERY_FAILURE_REASONS.map((reason) => ({
+        labels: { reason },
+        value: counters.deliveryFailures[reason],
+      })),
     ),
     renderFamily(
       "posthorn_delivery_tasks",
