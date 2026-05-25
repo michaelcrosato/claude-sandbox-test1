@@ -877,6 +877,7 @@ export class DeliveryWorker {
       succeeded,
       responseStatus: response?.status ?? null,
       error,
+      failureReason,
       durationMs,
       requestBody,
       responseBody,
@@ -980,6 +981,7 @@ export class DeliveryWorker {
       readonly succeeded: boolean;
       readonly responseStatus: number | null;
       readonly error: string | null;
+      readonly failureReason: DeliveryFailureReason | null;
       readonly durationMs: number;
       readonly requestBody: string | null;
       readonly responseBody: string | null;
@@ -999,6 +1001,7 @@ export class DeliveryWorker {
         outcome: detail.succeeded ? "succeeded" : "failed",
         responseStatus: detail.responseStatus,
         error: detail.error,
+        failureReason: detail.failureReason,
         requestBody: detail.requestBody,
         responseBody: detail.responseBody,
         durationMs: detail.durationMs,

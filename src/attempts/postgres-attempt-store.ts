@@ -24,6 +24,7 @@ import {
   type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
+import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
 import {
   resolveUsageRange,
   type UsageRange,
@@ -43,6 +44,7 @@ interface AttemptRow {
   readonly outcome: string;
   readonly response_status: string | null; // BIGINT as string
   readonly error: string | null;
+  readonly failure_reason: string | null;
   readonly request_body: string | null;
   readonly response_body: string | null;
   readonly duration_ms: string; // BIGINT as string
@@ -60,6 +62,7 @@ function rowToAttempt(row: AttemptRow): DeliveryAttempt {
     outcome: row.outcome as DeliveryAttemptOutcome,
     responseStatus: row.response_status === null ? null : Number(row.response_status),
     error: row.error,
+    failureReason: row.failure_reason as DeliveryFailureReason | null,
     requestBody: row.request_body,
     responseBody: row.response_body,
     durationMs: Number(row.duration_ms),
@@ -96,11 +99,12 @@ export class PostgresDeliveryAttemptStore implements DeliveryAttemptStore {
     await this.#pool.query(
       "INSERT INTO delivery_attempts" +
         " (id, task_id, message_id, app_id, endpoint_id, attempt_number, outcome," +
-        "  response_status, error, request_body, response_body, duration_ms, attempted_at)" +
-        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+        "  response_status, error, failure_reason, request_body, response_body," +
+        "  duration_ms, attempted_at)" +
+        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
       [
         id, n.taskId, n.messageId, n.appId, n.endpointId,
-        n.attemptNumber, n.outcome, n.responseStatus, n.error,
+        n.attemptNumber, n.outcome, n.responseStatus, n.error, n.failureReason,
         n.requestBody, n.responseBody, n.durationMs, n.attemptedAt,
       ],
     );
@@ -268,6 +272,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   outcome         TEXT   NOT NULL,
   response_status BIGINT,
   error           TEXT,
+  failure_reason  TEXT,
   request_body    TEXT,
   response_body   TEXT,
   duration_ms     BIGINT NOT NULL,

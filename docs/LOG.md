@@ -41,6 +41,45 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T19:25 · iter-0088 · GREEN · delivery-failure-reason-on-attempt-record
+
+- **Baseline:** clean main @ `1ef5e5b` (iter-0087 per-reason failure metric). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1714/1714** (51 files, 6 PG-skipped, no flaky exit), `npm run
+  build` 0, `assert-gate-integrity.ps1` 0.
+- **Move:** Complete iter-0087's value (its standing Next #1). iter-87 classified every failed
+  delivery into a stable `DeliveryFailureReason`, but only as an *aggregate* metric label — the
+  per-message audit attempt (`GET /v1/messages/:id/attempts`), the view a developer actually debugs a
+  flaky receiver from, still carried only free-text `error`. So "why did *this* webhook keep failing?"
+  could not be filtered or grouped. Land the structured cause on the attempt record itself.
+- **Changed:**
+  - `attempts/delivery-attempt.ts`: `DeliveryAttempt` + `NewDeliveryAttempt` (optional) +
+    `NormalizedNewAttempt` gain `failureReason: DeliveryFailureReason | null`; `normalizeNewAttempt`
+    validates it against the canonical `DELIVERY_FAILURE_REASONS` set and rejects a reason on a 2xx
+    (`succeeded ⇒ null`).
+  - Persisted in all three backends: SQLite adds a `failure_reason TEXT` column + a seamless
+    `#migrateFailureReasonColumn()` `ALTER TABLE` (old rows read `null` — the cause was never
+    classified, like the body columns); in-memory spreads it; Postgres column added (parity).
+  - `worker/delivery-worker.ts`: the `failureReason` it already computed for the tick metric is now
+    threaded into `recordAttempt` (no new classification — one source).
+  - Surfaced on `attemptView` (HTTP), the SDK `DeliveryAttemptView`, and the OpenAPI `DeliveryAttempt`
+    schema (nullable enum built from `DELIVERY_FAILURE_REASONS`, so it can't drift).
+  - +tests: conformance round-trip + validation (×2 backends), a SQLite legacy-DB migration test,
+    worker classification across http_5xx/connection_refused/no_endpoint, pure normalize, HTTP + SDK
+    surfacing; new `scripts/smoke-failure-reason.mjs`.
+- **Decisions:** Surfaced on the existing append-only attempt record (no new store/table); the iter-87
+  classifier is reused verbatim, so the metric and the audit field can never disagree. Enforced
+  `succeeded ⇒ failureReason === null` in normalize (a cross-field rule the free-text `error` lacks)
+  because a queryable cause is only trustworthy if non-null always means failure.
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1720/1720** (+6; 51 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `node scripts/smoke-failure-reason.mjs` **10/10** (http_5xx +
+  connection_refused classified through production ESM on a real `node:sqlite` file, surviving a
+  restart); `node scripts/smoke-logging.mjs` 22/22; `assert-gate-integrity.ps1` 0 (zero substrate
+  edits); `validate-log-compliance.py` `[PASS]`.
+- **Next:** Surface `failureReason` as a badge in the tenant dashboard per-attempt log (the debugging
+  UI that motivated the field); or add a `?failureReason=` filter to `GET /v1/deliveries` for app-wide
+  triage; or persist the connect-vs-total split on the one-shot test-send path (`http/api.ts`, still
+  on `fetchTransport`).
+
 ## 2026-05-24T19:07 · iter-0087 · GREEN · delivery-failure-reason-metric
 
 - **Baseline:** clean main @ `7638450` (iter-0086 connect-vs-total timeout). Verified green first:

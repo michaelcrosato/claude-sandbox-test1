@@ -38,6 +38,7 @@ describe("normalizeNewAttempt", () => {
       outcome: "succeeded",
       responseStatus: null,
       error: null,
+      failureReason: null,
       requestBody: null,
       responseBody: null,
       durationMs: 5,
@@ -92,6 +93,22 @@ describe("normalizeNewAttempt", () => {
     // @ts-expect-error — error must be a string or null
     expect(() => normalizeNewAttempt(input({ error: 5 }))).toThrow(TypeError);
     expect(normalizeNewAttempt(input({ error: null })).error).toBeNull();
+  });
+
+  it("validates failureReason: defaults null, accepts a known reason, rejects unknown / success-with-reason", () => {
+    expect(normalizeNewAttempt(input()).failureReason).toBeNull();
+    expect(
+      normalizeNewAttempt(input({ outcome: "failed", responseStatus: 500, failureReason: "http_5xx" }))
+        .failureReason,
+    ).toBe("http_5xx");
+    expect(() =>
+      // @ts-expect-error — failureReason must be a known literal
+      normalizeNewAttempt(input({ outcome: "failed", failureReason: "nope" })),
+    ).toThrow(TypeError);
+    // A 2xx attempt carries no failure cause.
+    expect(() =>
+      normalizeNewAttempt(input({ outcome: "succeeded", failureReason: "http_5xx" })),
+    ).toThrow(TypeError);
   });
 
   it("rejects a negative or non-integer durationMs", () => {

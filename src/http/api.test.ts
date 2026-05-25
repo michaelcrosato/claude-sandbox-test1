@@ -1558,6 +1558,7 @@ describe("createApi — GET /v1/messages/:id/attempts (audit log)", () => {
       outcome: "succeeded",
       responseStatus: 200,
       error: null,
+      failureReason: null,
     });
     expect(attempt).toHaveProperty("taskId");
     expect(attempt).toHaveProperty("durationMs");
@@ -1593,7 +1594,11 @@ describe("createApi — GET /v1/messages/:id/attempts (audit log)", () => {
       }),
     );
     expect(body(res).data).toHaveLength(1);
-    expect(body(res).data[0]).toMatchObject({ outcome: "failed", responseStatus: 503 });
+    expect(body(res).data[0]).toMatchObject({
+      outcome: "failed",
+      responseStatus: 503,
+      failureReason: "http_5xx",
+    });
     expect(body(res).data[0].error).toContain("HTTP 503");
   });
 

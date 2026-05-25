@@ -34,6 +34,7 @@ import {
   type ListAttemptsOptions,
   type NewDeliveryAttempt,
 } from "./delivery-attempt.js";
+import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
 import {
   resolveUsageRange,
   type UsageRange,
@@ -69,6 +70,7 @@ interface AttemptRow {
   readonly outcome: string;
   readonly response_status: number | null;
   readonly error: string | null;
+  readonly failure_reason: string | null;
   readonly request_body: string | null;
   readonly response_body: string | null;
   readonly duration_ms: number;
@@ -86,6 +88,7 @@ function rowToAttempt(row: AttemptRow): DeliveryAttempt {
     outcome: row.outcome as DeliveryAttemptOutcome,
     responseStatus: row.response_status === null ? null : Number(row.response_status),
     error: row.error,
+    failureReason: row.failure_reason as DeliveryFailureReason | null,
     requestBody: row.request_body,
     responseBody: row.response_body,
     durationMs: Number(row.duration_ms),
@@ -127,6 +130,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#db.exec(SCHEMA);
     this.#migrateAppIdColumn();
     this.#migrateBodyColumns();
+    this.#migrateFailureReasonColumn();
     // Composite covering index for paginated per-message reads; idempotent (IF NOT
     // EXISTS). Added after migrations so the column is guaranteed to exist.
     this.#db.exec(
@@ -148,8 +152,9 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     this.#insert = this.#db.prepare(
       `INSERT INTO delivery_attempts
          (id, task_id, message_id, app_id, endpoint_id, attempt_number, outcome,
-          response_status, error, request_body, response_body, duration_ms, attempted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          response_status, error, failure_reason, request_body, response_body,
+          duration_ms, attempted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // First page — no cursor. Ordered by (attempted_at ASC, id ASC) for stable
     // oldest-first pagination; backed by idx_delivery_attempts_message_paged.
@@ -259,6 +264,22 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
     }
   }
 
+  /**
+   * Ensure the `failure_reason` column exists. A database created before structured
+   * failure classification shipped has it missing; add it nullable so the upgrade is
+   * seamless. Existing rows keep `failure_reason = NULL` — honest: the cause was never
+   * classified for those attempts, exactly like the body columns. For a fresh database
+   * the column is already in {@link SCHEMA} and the ALTER is skipped.
+   */
+  #migrateFailureReasonColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(delivery_attempts)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "failure_reason")) {
+      this.#db.exec("ALTER TABLE delivery_attempts ADD COLUMN failure_reason TEXT");
+    }
+  }
+
   /** Number of attempts recorded (append-only — never decreases). */
   get size(): number {
     return Number((this.#countAll.get() as { n: number }).n);
@@ -278,6 +299,7 @@ export class SqliteDeliveryAttemptStore implements DeliveryAttemptStore {
       n.outcome,
       n.responseStatus,
       n.error,
+      n.failureReason,
       n.requestBody,
       n.responseBody,
       n.durationMs,
@@ -431,6 +453,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   outcome         TEXT    NOT NULL,
   response_status INTEGER,
   error           TEXT,
+  failure_reason  TEXT,
   request_body    TEXT,
   response_body   TEXT,
   duration_ms     INTEGER NOT NULL,

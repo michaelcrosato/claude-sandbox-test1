@@ -115,6 +115,7 @@ export function describeDeliveryAttemptStoreContract(
         expect(attempt.endpointId).toBeNull();
         expect(attempt.responseStatus).toBeNull();
         expect(attempt.error).toBeNull();
+        expect(attempt.failureReason).toBeNull();
       });
 
       it("records a failed attempt with its status and error", async () => {
@@ -128,6 +129,35 @@ export function describeDeliveryAttemptStoreContract(
         expect(attempt.outcome).toBe("failed");
         expect(attempt.responseStatus).toBe(503);
         expect(attempt.error).toBe("endpoint returned HTTP 503");
+      });
+
+      it("round-trips a failed attempt's structured failureReason", async () => {
+        const attempt = await store.record(
+          attemptInput({
+            outcome: "failed",
+            responseStatus: 503,
+            error: "endpoint returned HTTP 503",
+            failureReason: "http_5xx",
+          }),
+        );
+        expect(attempt.failureReason).toBe("http_5xx");
+        // It survives a read-back too (the durable path maps the column, not just `record`).
+        const page = await store.listByMessage(attempt.messageId);
+        expect(page.data[0]!.failureReason).toBe("http_5xx");
+      });
+
+      it("defaults failureReason to null and rejects an unknown reason or one on a success", async () => {
+        // Omitted → null.
+        expect((await store.record(attemptInput())).failureReason).toBeNull();
+        // A non-member code is rejected.
+        await expect(
+          // @ts-expect-error — failureReason must be a known literal
+          store.record(attemptInput({ outcome: "failed", responseStatus: 500, failureReason: "kaboom" })),
+        ).rejects.toThrow(TypeError);
+        // A 2xx attempt may not carry a failure cause.
+        await expect(
+          store.record(attemptInput({ outcome: "succeeded", failureReason: "http_5xx" })),
+        ).rejects.toThrow(TypeError);
       });
 
       it("records a transport failure with a null status", async () => {

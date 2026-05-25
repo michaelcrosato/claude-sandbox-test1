@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,10 @@ import {
   describeDeliveryAttemptStoreContract,
   makeAttemptConformanceIds,
 } from "./conformance.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)(
+  "node:sqlite",
+) as typeof import("node:sqlite");
 
 // The SQLite backend must satisfy the exact same contract as the reference
 // in-memory store. Conformance runs against an ephemeral `:memory:` database.
@@ -43,6 +48,7 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
       outcome: "failed",
       responseStatus: 500,
       error: "boom",
+      failureReason: "http_5xx",
       durationMs: 9,
       attemptedAt: 1_700_000_000_000,
     });
@@ -65,6 +71,7 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
         outcome: "failed",
         responseStatus: 500,
         error: "boom",
+        failureReason: "http_5xx",
         requestBody: null,
         responseBody: null,
         durationMs: 9,
@@ -79,6 +86,64 @@ describe("SqliteDeliveryAttemptStore — durability", () => {
       expect(usage.failed).toBe(1);
     } finally {
       after.close();
+    }
+  });
+
+  it("seamlessly migrates a pre-failure_reason database (adds the column, old rows read null)", async () => {
+    // Hand-build a database at the schema *just before* failure_reason shipped: every
+    // column the store needs except failure_reason. Insert one legacy row directly.
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE delivery_attempts (
+        id              TEXT    PRIMARY KEY,
+        task_id         TEXT    NOT NULL,
+        message_id      TEXT    NOT NULL,
+        app_id          TEXT,
+        endpoint_id     TEXT,
+        attempt_number  INTEGER NOT NULL,
+        outcome         TEXT    NOT NULL,
+        response_status INTEGER,
+        error           TEXT,
+        request_body    TEXT,
+        response_body   TEXT,
+        duration_ms     INTEGER NOT NULL,
+        attempted_at    INTEGER NOT NULL
+      ) STRICT;
+    `);
+    legacy
+      .prepare(
+        "INSERT INTO delivery_attempts" +
+          " (id, task_id, message_id, app_id, endpoint_id, attempt_number, outcome," +
+          "  response_status, error, request_body, response_body, duration_ms, attempted_at)" +
+          " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("datt_legacy", "t_old", "m_old", "app_old", "ep_old", 1, "failed", 502, "old boom", null, null, 7, 1_600_000_000_000);
+    legacy.close();
+
+    // Opening the store runs the ALTER migration; the legacy row reads back with a
+    // null cause (never classified), and a new attempt can carry one.
+    const store = new SqliteDeliveryAttemptStore({ location: dbPath });
+    try {
+      const legacyPage = await store.listByMessage("m_old");
+      expect(legacyPage.data).toHaveLength(1);
+      expect(legacyPage.data[0]!.failureReason).toBeNull();
+      expect(legacyPage.data[0]!.error).toBe("old boom");
+
+      const recorded = await store.record({
+        taskId: "t_new",
+        messageId: "m_new",
+        attemptNumber: 1,
+        outcome: "failed",
+        responseStatus: null,
+        error: "refused",
+        failureReason: "connection_refused",
+        durationMs: 0,
+        attemptedAt: 1_700_000_000_000,
+      });
+      expect(recorded.failureReason).toBe("connection_refused");
+      expect((await store.listByMessage("m_new")).data[0]!.failureReason).toBe("connection_refused");
+    } finally {
+      store.close();
     }
   });
 

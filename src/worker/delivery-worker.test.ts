@@ -845,6 +845,7 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
       outcome: "succeeded",
       responseStatus: 200,
       error: null,
+      failureReason: null,
       attemptedAt: 1_700_000_000_000,
     });
     expect(attempts[0]!.durationMs).toBeGreaterThanOrEqual(0);
@@ -900,25 +901,35 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
     expect(attempts[0]).toMatchObject({
       outcome: "failed",
       responseStatus: 503,
+      // The worker classifies the non-2xx into its structured reason for the audit log.
+      failureReason: "http_5xx",
     });
     expect(attempts[0]!.error).toContain("HTTP 503");
   });
 
-  it("records a transport throw as a failed attempt with a null status", async () => {
+  it("records a transport throw as a failed attempt with a null status and classified reason", async () => {
     const env = setup({ retryPolicy: fixedSchedule([60_000]) });
     await enqueueOne(env);
     const { recordAttempt, attempts } = collector();
 
+    // A realistic Node connection error carries a `.code`; the worker captures the raw
+    // object and classifies it by that code (not by brittle message text).
     const transport: Transport = async () => {
-      throw new Error("ECONNREFUSED");
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      });
     };
     await makeWorker(env, { transport, recordAttempt }).processOnce();
 
-    expect(attempts[0]).toMatchObject({ outcome: "failed", responseStatus: null });
+    expect(attempts[0]).toMatchObject({
+      outcome: "failed",
+      responseStatus: null,
+      failureReason: "connection_refused",
+    });
     expect(attempts[0]!.error).toContain("ECONNREFUSED");
   });
 
-  it("records a pre-flight failure (no endpoint resolved) with no send and zero duration", async () => {
+  it("records a pre-flight failure (no endpoint resolved) with no send, zero duration, and reason", async () => {
     const env = setup({ retryPolicy: fixedSchedule([60_000]) });
     await enqueueOne(env);
     const { recordAttempt, attempts } = collector();
@@ -933,6 +944,7 @@ describe("DeliveryWorker — recordAttempt (audit log)", () => {
       outcome: "failed",
       responseStatus: null,
       durationMs: 0,
+      failureReason: "no_endpoint",
     });
     expect(attempts[0]!.error).toContain("no endpoint");
   });

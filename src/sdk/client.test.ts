@@ -760,6 +760,7 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
       outcome: "failed",
       responseStatus: 503,
       error: "endpoint returned HTTP 503",
+      failureReason: "http_5xx",
       requestBody: '{"eventType":"test"}',
       responseBody: "Service Unavailable",
       durationMs: 120,
@@ -773,6 +774,7 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     const page = await client.listMessageAttempts("msg_1");
     expect(page.data[0]!.requestBody).toBe('{"eventType":"test"}');
     expect(page.data[0]!.responseBody).toBe("Service Unavailable");
+    expect(page.data[0]!.failureReason).toBe("http_5xx");
   });
 
   it("omits query string from listDeliveries when no params given", async () => {
@@ -985,6 +987,7 @@ describe("PosthornClient end-to-end via a running gateway", () => {
         attemptNumber: 1,
         outcome: "succeeded",
         error: null,
+        failureReason: null,
       });
       expect(attemptsPage.data[0]!.responseStatus).toBeGreaterThanOrEqual(200);
       expect(attemptsPage.data[0]!.responseStatus).toBeLessThan(300);

@@ -30,6 +30,7 @@ import {
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import { MAX_REPLAY_LIMIT } from "../queue/replay-endpoint.js";
+import { DELIVERY_FAILURE_REASONS } from "../delivery/failure-reason.js";
 import {
   MAX_FILTER_DEPTH,
   MAX_FILTER_NODES,
@@ -1397,6 +1398,7 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "outcome",
             "responseStatus",
             "error",
+            "failureReason",
             "requestBody",
             "responseBody",
             "durationMs",
@@ -1423,6 +1425,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "failure such as DNS/refused/timeout, or a pre-flight failure).",
             },
             error: { type: ["string", "null"], description: "Failure detail when `outcome` is `failed`; null on success." },
+            failureReason: {
+              type: ["string", "null"],
+              enum: [...DELIVERY_FAILURE_REASONS, null],
+              description:
+                "The structured, machine-readable cause of a failed attempt — one stable code " +
+                "you can group or filter by (the queryable companion to the free-text `error`). " +
+                "Null on a succeeded attempt, and on attempts recorded before this field shipped.",
+            },
             requestBody: {
               type: ["string", "null"],
               maxLength: MAX_CAPTURED_BODY_BYTES,

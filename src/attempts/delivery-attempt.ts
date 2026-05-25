@@ -27,6 +27,13 @@
 
 import { randomBytes } from "node:crypto";
 import type { UsageRange } from "../storage/message-store.js";
+import {
+  DELIVERY_FAILURE_REASONS,
+  type DeliveryFailureReason,
+} from "../delivery/failure-reason.js";
+
+/** O(1) membership set for validating a {@link DeliveryFailureReason} on intake. */
+const FAILURE_REASON_SET: ReadonlySet<string> = new Set(DELIVERY_FAILURE_REASONS);
 
 /**
  * Maximum bytes captured per body field ({@link DeliveryAttempt.requestBody} and
@@ -90,6 +97,18 @@ export interface DeliveryAttempt {
   /** Failure detail when `outcome` is `failed`; `null` on success. */
   readonly error: string | null;
   /**
+   * The structured, machine-readable cause of a `failed` attempt — one stable
+   * {@link DeliveryFailureReason} code (`connect_timeout`, `http_5xx`, `dns_failure`,
+   * …) classified by the worker from the same structured evidence the
+   * `posthorn_delivery_failures_total{reason}` metric uses. `null` on a `succeeded`
+   * attempt (a 2xx has no failure cause). Where {@link error} is free-text detail for
+   * a human to read, this is the queryable companion a dashboard groups or filters a
+   * single message's attempts by — "why did *this* webhook keep failing?" — without
+   * parsing prose. Older attempts recorded before this field shipped read back `null`
+   * (the cause was never captured), exactly like the body columns.
+   */
+  readonly failureReason: DeliveryFailureReason | null;
+  /**
    * The request body (signed message payload) sent to the receiver, truncated to
    * {@link MAX_CAPTURED_BODY_BYTES} bytes. `null` when no send was attempted — a
    * pre-flight failure (message vanished, endpoint unresolvable) or a transport error
@@ -128,6 +147,13 @@ export interface NewDeliveryAttempt {
   readonly outcome: DeliveryAttemptOutcome;
   readonly responseStatus?: number | null;
   readonly error?: string | null;
+  /**
+   * The classified failure cause. Defaults to `null` when omitted — the worker passes
+   * the {@link DeliveryFailureReason} it classified for a failed attempt, and `null`
+   * for a `succeeded` one. Must be `null` or a known reason; a `succeeded` attempt may
+   * not carry a reason.
+   */
+  readonly failureReason?: DeliveryFailureReason | null;
   /** The request body sent to the receiver. Defaults to `null` when omitted. */
   readonly requestBody?: string | null;
   /** The response body received from the receiver. Defaults to `null` when omitted. */
@@ -443,6 +469,7 @@ export interface NormalizedNewAttempt {
   readonly outcome: DeliveryAttemptOutcome;
   readonly responseStatus: number | null;
   readonly error: string | null;
+  readonly failureReason: DeliveryFailureReason | null;
   readonly requestBody: string | null;
   readonly responseBody: string | null;
   readonly durationMs: number;
@@ -487,6 +514,15 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
   if (error !== null && typeof error !== "string") {
     throw new TypeError("error must be a string or null");
   }
+  const failureReason = input.failureReason ?? null;
+  if (failureReason !== null && !FAILURE_REASON_SET.has(failureReason)) {
+    throw new TypeError("failureReason must be a known DeliveryFailureReason or null");
+  }
+  // A 2xx attempt has no failure cause: keep the data honest so a reader can trust
+  // that `failureReason != null` always means the attempt failed.
+  if (input.outcome === "succeeded" && failureReason !== null) {
+    throw new TypeError("a succeeded attempt must not carry a failureReason");
+  }
   const requestBody = input.requestBody ?? null;
   if (requestBody !== null && typeof requestBody !== "string") {
     throw new TypeError("requestBody must be a string or null");
@@ -510,6 +546,7 @@ export function normalizeNewAttempt(input: NewDeliveryAttempt): NormalizedNewAtt
     outcome: input.outcome,
     responseStatus,
     error,
+    failureReason,
     requestBody,
     responseBody,
     durationMs: input.durationMs,

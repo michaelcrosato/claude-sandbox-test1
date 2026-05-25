@@ -20,6 +20,7 @@
  */
 
 import type { DeliveryStatus } from "../delivery/delivery-state.js";
+import type { DeliveryFailureReason } from "../delivery/failure-reason.js";
 import { DEFAULT_TIMEOUT_MS, HttpTransport, type PosthornFetch } from "./http.js";
 
 // The transport mechanics (the `fetch` contract, the error model, the request/timeout
@@ -202,6 +203,13 @@ export interface DeliveryAttemptView {
   readonly responseStatus: number | null;
   /** Failure detail when `outcome` is `failed`; `null` on success. */
   readonly error: string | null;
+  /**
+   * The structured, machine-readable cause of a `failed` attempt — one stable code
+   * (`connect_timeout`, `http_5xx`, `dns_failure`, …) you can group or filter by, the
+   * queryable companion to the free-text `error`. `null` on a `succeeded` attempt, and
+   * on attempts recorded before this field shipped.
+   */
+  readonly failureReason: DeliveryFailureReason | null;
   /** The signed payload sent to the receiver, truncated to 4096 bytes; null on pre-flight failure. */
   readonly requestBody: string | null;
   /** The HTTP response body, truncated to 4096 bytes; null when no response arrived. */

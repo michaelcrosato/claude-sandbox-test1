@@ -666,7 +666,8 @@ function endpointDeliveryView(task: DeliveryTask): Record<string, unknown> {
  * log behind `GET /v1/messages/:id/attempts`. An attempt carries no secrets, so the
  * view is the full record: which task/endpoint, the 1-based attempt number, the
  * outcome, the HTTP status (or `null` on a transport/pre-flight failure), the error,
- * the latency, and when it ran. It is mapped explicitly (rather than echoed) so a
+ * the structured `failureReason` code, the latency, and when it ran. It is mapped
+ * explicitly (rather than echoed) so a
  * future internal field is never leaked by accident — the same discipline as
  * {@link deliveryView} and {@link endpointView}.
  */
@@ -679,6 +680,7 @@ function attemptView(attempt: DeliveryAttempt): Record<string, unknown> {
     outcome: attempt.outcome,
     responseStatus: attempt.responseStatus,
     error: attempt.error,
+    failureReason: attempt.failureReason,
     requestBody: attempt.requestBody,
     responseBody: attempt.responseBody,
     durationMs: attempt.durationMs,
