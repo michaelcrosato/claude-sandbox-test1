@@ -281,3 +281,69 @@ describe("createHttpServer — structured request logging", () => {
     expect(line.fields).toMatchObject({ method: "POST", path: "/v1/messages", status: 413 });
   });
 });
+
+describe("createHttpServer — security response headers", () => {
+  // A minimal HTML handler standing in for the dashboard/portal, so the adapter's
+  // per-surface header stamping can be exercised over a real socket.
+  const htmlOk: ApiHandler = async () => ({
+    status: 200,
+    body: "<!doctype html><title>ok</title>",
+    contentType: "text/html; charset=utf-8",
+  });
+
+  it("stamps nosniff + no-referrer on a plain API response, with no CSP/framing", async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/healthz`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    // JSON/text carries no markup — no Content-Security-Policy, no frame controls.
+    expect(res.headers.get("content-security-policy")).toBeNull();
+    expect(res.headers.get("x-frame-options")).toBeNull();
+  });
+
+  it("locks the dashboard down and forbids framing", async () => {
+    const { base } = await startServer({ dashboardHandler: htmlOk });
+    const res = await fetch(`${base}/dashboard`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("locks the portal's resources down but leaves it embeddable (no frame controls)", async () => {
+    const { base } = await startServer({ portalHandler: htmlOk });
+    const res = await fetch(`${base}/portal`);
+    expect(res.status).toBe(200);
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'none'");
+    // Embeddability is the portal's whole point — it must NOT block framing.
+    expect(csp).not.toContain("frame-ancestors");
+    expect(res.headers.get("x-frame-options")).toBeNull();
+  });
+
+  it("classifies by URL space even when the dashboard handler is disabled (404 still anti-framed)", async () => {
+    const { base } = await startServer(); // no dashboardHandler wired
+    const res = await fetch(`${base}/dashboard/apps`);
+    expect(res.status).toBe(404); // falls through to the API handler
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  });
+
+  it("stamps the headers on an early body-overflow (413) rejection too", async () => {
+    const { base, secret } = await startServer({ maxBodyBytes: 8 });
+    const res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+      body: "x".repeat(64),
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("connection")).toBe("close"); // preserved alongside
+  });
+});

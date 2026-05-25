@@ -20,6 +20,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApi, type ApiDeps, type ApiHandler, type ApiResponse } from "./api.js";
+import { securityHeadersForPath } from "./security-headers.js";
 import { SILENT_LOGGER, type Logger } from "../logging/logger.js";
 
 /** Default request-body cap: 1 MiB. Generous for webhook payloads, bounded against abuse. */
@@ -191,6 +192,10 @@ async function serve(
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
+  // Defense-in-depth response headers, keyed purely off the URL surface (API vs
+  // dashboard vs the embeddable portal). Computed once here so every exit path
+  // below — including the early body-read failures — stamps them.
+  const securityHeaders = securityHeadersForPath(path);
 
   let rawBody: string;
   try {
@@ -210,14 +215,18 @@ async function serve(
             },
           },
         },
-        { connection: "close" },
+        { ...securityHeaders, connection: "close" },
       );
       logAccess(logger, method, path, 413, startedAt);
     } else {
-      writeResponse(res, {
-        status: 400,
-        body: { error: { code: "invalid_request", message: "could not read request body" } },
-      });
+      writeResponse(
+        res,
+        {
+          status: 400,
+          body: { error: { code: "invalid_request", message: "could not read request body" } },
+        },
+        securityHeaders,
+      );
       logAccess(logger, method, path, 400, startedAt);
     }
     req.destroy();
@@ -261,7 +270,7 @@ async function serve(
       body: { error: { code: "internal_error", message: "internal server error" } },
     };
   }
-  writeResponse(res, response);
+  writeResponse(res, response, securityHeaders);
   logAccess(logger, method, path, response.status, startedAt);
 }
 

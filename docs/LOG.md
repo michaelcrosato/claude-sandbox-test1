@@ -41,6 +41,38 @@ The `STATUS` token in the header line **MUST** be exactly one of:
 ---
 == LOG-ANCHOR ==
 
+## 2026-05-24T19:45 · iter-0090 · GREEN · per-surface-security-response-headers
+
+- **Baseline:** clean main @ `82be719` (iter-0089 portal reflected-XSS fix). Verified green first:
+  `tsc --noEmit` 0, `vitest run` **1721/1721** (51 files, 6 PG-skipped, no flaky exit), `npm run
+  build` 0.
+- **Move:** Land iter-0089's standing Next #1 — defense-in-depth security *response* headers with a
+  per-surface policy. The service had **zero** security headers on any surface, so the iter-0089 XSS
+  fix (encode-on-output) had no second layer, and the operator dashboards were freely iframe-able
+  (clickjacking). The hard constraint: the consumer portal is *designed* to be embedded, so a blanket
+  anti-framing policy can't apply — the policy must vary by surface.
+- **Changed:**
+  - new `http/security-headers.ts`: pure `surfaceForPath` + `securityHeadersForPath`. Universal on
+    every response: `X-Content-Type-Options: nosniff` + `Referrer-Policy: no-referrer`. **Dashboards**
+    add CSP `default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; form-action 'self';
+    base-uri 'none'; frame-ancestors 'none'` + `X-Frame-Options: DENY`. **Portal** adds the same CSP
+    *minus* `frame-ancestors` (stays embeddable; no `X-Frame-Options`).
+  - `http/server.ts`: `serve()` computes `securityHeadersForPath(path)` once and threads it through
+    **every** `writeResponse` exit — the 413/400 early body-read failures and the main path.
+  - +15 tests: `security-headers.test.ts` (10 pure, incl. prefix-lookalike + tenant-subtree parity) +
+    `server.test.ts` (5 socket-level: api/dashboard/portal + disabled-handler URL-space + 413).
+- **Decisions:** Classify by URL **prefix**, not handler wiring — the URL space owns the posture, so a
+  disabled-dashboard 404 still anti-frames and a `/portal/*` 404 stays frameable. CSP can lock this
+  hard because every view is `<script>`-free with same-origin `<form action>` and inline styles only,
+  so `default-src 'none'` + `style-src 'unsafe-inline'` renders intact while making any XSS payload
+  non-executable by construction. API JSON/text gets `nosniff`+referrer only (no markup to police).
+- **Validation:** `tsc --noEmit` 0; `vitest run` **1736/1736** (+15; 52 files, 6 PG-skipped, no flaky
+  exit); `npm run build` 0; `assert-gate-integrity.ps1` 0 (zero substrate edits);
+  `validate-log-compliance.py` `[PASS]`.
+- **Next:** `Cache-Control: no-store` on authenticated dashboard/portal HTML (stop back-button session
+  leakage); document TLS-termination assumptions and add `Strict-Transport-Security` (HSTS) behind it;
+  or the long-standing `?failureReason=` triage filter on `GET /v1/deliveries`.
+
 ## 2026-05-24T19:35 · iter-0089 · GREEN · portal-reflected-xss-on-create-error
 
 - **Baseline:** clean main @ `b61902b` (iter-0088 per-attempt failure reason). Verified green first:
