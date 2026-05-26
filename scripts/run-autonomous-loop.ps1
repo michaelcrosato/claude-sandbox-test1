@@ -1,61 +1,96 @@
-# File Name: template/scripts/run-autonomous-loop.ps1
-<#
-.SYNOPSIS
-    The Continuous Autonomous Power Loop Substrate.
-.DESCRIPTION
-    Runs indefinitely, executing a human-specified LLM engine command string, 
-    enforcing BIOS security checks, and running local validation gates.
-.PARAMETER ExecuteCommand
-    The exact command line execution string used to invoke the LLM agent engine.
-#>
-param (
+﻿param (
     [Parameter(Mandatory=$true, Position=0)]
-    [string]$ExecuteCommand
+    [string]$ExecuteCommand,
+    [int]$MaxRetries = 3
 )
 
-Write-Host "[POWER] Power Grid Active. Starting autonomous loop..." -ForegroundColor Green
-Write-Host "[POWER] Command payload locked: $ExecuteCommand" -ForegroundColor Yellow
+function Write-TS([string]$msg, [string]$Color="White", [switch]$LogToFile) {
+    $ts = Get-Date -Format "HH:mm:ss"
+    $FormattedLine = "[$ts] $msg"
+    Write-Host $FormattedLine -ForegroundColor $Color
+    if ($LogToFile -and (Test-Path "docs/LOG.md")) {
+        $LogPath = "docs/LOG.md"
+        $Content = Get-Content $LogPath -Raw
+        $NewContent = $Content -replace "(== LOG-ANCHOR ==\r?\n)", "`$1$FormattedLine`n"
+        [IO.File]::WriteAllText("$PWD\$LogPath", $NewContent)
+    }
+}
 
+$RunId = Get-Date -Format "yyyyMMdd-HHmmss"
+Write-TS "Autonomous Substrate initialized — run $RunId" "Cyan"
+Write-TS "maxRetries=$MaxRetries  dryRun=False" "DarkGray"
+
+$Attempt = 1
 while ($true) {
-    Write-Host "`n--- [New Iteration Loop Tick] ---" -ForegroundColor Cyan
+    $CurrentTicket = "SYSTEM"
+    $QueueStr = "EMPTY"
 
-    # 1. Run the BIOS Check via an isolated file engine wrapper
-    powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/assert-gate-integrity.ps1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Execution halted due to integrity failure."
-        break
-    }
-
-    # 2. Fire up the LLM Operating System using the dynamic command string via cmd /c
-    Write-Host "[ENGINE] Awakening LLM Runtime Engine..." -ForegroundColor Magenta
-    
-    # Executing via cmd /c preserves nested double quotes flawlessly on Windows
-    cmd.exe /c $ExecuteCommand
-    
-    # Capture the engine's exit status immediately
-    $EngineExitCode = $LASTEXITCODE
-    Write-Host "[ENGINE] Execution cycle complete. Exit Code: $EngineExitCode" -ForegroundColor Gray
-    
-    # 3. Force the validation gate to run inside an isolated wrapper
-    powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-gate.ps1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] Validation failed. Forcing state rollback to protect main..." -ForegroundColor Red
-        git reset --hard HEAD
-        git clean -fd
-    } else {
-        Write-Host "[VERIFIED] Iteration verified clean." -ForegroundColor Green
-    }
-
-    # 4. Handle Lifecycle State Machine Pauses
-    if (Test-Path "docs/GOAL.md") {
-        $GoalState = Select-String -Path "docs/GOAL.md" -Pattern "CURRENT_STATE:\s*BOOTSTRAP"
-        if ($GoalState) {
-            Write-Host "`n[PAUSED] Discovery Interview blueprint generated successfully inside docs/GOAL.md." -ForegroundColor Yellow
-            Write-Host "[PAUSED] Please review the file, answer the 5 questions, switch CURRENT_STATE to ACTIVE_SPECIFICATION, and re-run this loop script to begin automated development." -ForegroundColor Cyan
-            break
+    if (Test-Path "docs/TICKETS.md") {
+        $Lines = Get-Content "docs/TICKETS.md" -ErrorAction SilentlyContinue
+        $Pending = $Lines | Where-Object { $_ -match "^###\s+T-\w+" } | ForEach-Object { ($_ -replace "^###\s+", "").Trim() }
+        if ($Pending) {
+            $CurrentTicket = ($Pending[0] -split ' ')[0]
+            $QueueStr = ($Pending | ForEach-Object { ($_ -split ' ')[0] }) -join ", "
         }
     }
 
-    # Rest the processor briefly before the next machine cycle
+    if ($Attempt -eq 1) { 
+        Write-TS "Queue: $QueueStr" "DarkGray" 
+        Write-TS "==== $CurrentTicket ====" "Magenta"
+    }
+
+    Write-TS "attempt $Attempt/$MaxRetries — invoking agent ..." "Yellow"
+
+    # Silence integrity checker unless it encounters an actual structural block
+    powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/assert-gate-integrity.ps1 *> integrity-runtime.log
+    if ($LASTEXITCODE -ne 0) { 
+        Get-Content integrity-runtime.log -ErrorAction SilentlyContinue | Write-Host -ForegroundColor Red
+        Write-TS "Execution halted due to substrate integrity failure." "Red" -LogToFile
+        break 
+    }
+
+    $StartTime = Get-Date
+    
+    # ─── SILENCE AGENT LOGS ──────────────────────────────────────────────────
+    # Redirects all noise from the frontier LLM engine execution into a log file
+    cmd.exe /c $ExecuteCommand *> agent-runtime.log
+    $EngineExitCode = $LASTEXITCODE
+    $Duration = [math]::Round(((Get-Date) - $StartTime).TotalSeconds)
+    
+    if ($EngineExitCode -eq 0) { $Reason = "completed" } else { $Reason = "error" }
+    Write-TS "agent done: duration=${Duration}s isError=$($EngineExitCode -ne 0) reason=$Reason" "DarkGray"
+
+    Write-TS "running verify gate (source of truth) ..." "DarkGray"
+    
+    # ─── SILENCE VERIFICATION GATE ───────────────────────────────────────────
+    # Redirects the sprawling test suites/linter outputs out of your screen
+    powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-gate.ps1 *> gate-runtime.log
+    $GateExitCode = $LASTEXITCODE
+    
+    if ($GateExitCode -ne 0) {
+        Write-TS "$CurrentTicket — verify RED on attempt $Attempt." "Red" -LogToFile
+        
+        # NOTE: If you ever want failing test summaries to dump to the screen 
+        # on a failure, you can uncomment the line below:
+        # Get-Content gate-runtime.log -ErrorAction SilentlyContinue | Write-Host -ForegroundColor DarkRed
+        
+        git reset --hard HEAD 2>&1 | Out-Null
+        git clean -fd 2>&1 | Out-Null
+        $Attempt++
+        if ($Attempt -gt $MaxRetries) {
+            Write-TS "Max retries ($MaxRetries) reached for $CurrentTicket. Halting system." "Red" -LogToFile
+            break
+        }
+    } else {
+        Write-TS "$CurrentTicket — verify GREEN on attempt $Attempt." "Green" -LogToFile
+        $Attempt = 1
+    }
+
+    if (Test-Path "docs/GOAL.md") {
+        if ((Get-Content "docs/GOAL.md" -Raw) -match "CURRENT_STATE:\s*BOOTSTRAP") {
+            Write-TS "[PAUSED] Blueprint generated. Switch GOAL.md to ACTIVE_SPECIFICATION to resume." "Cyan"
+            break
+        }
+    }
     Start-Sleep -Seconds 2
 }
