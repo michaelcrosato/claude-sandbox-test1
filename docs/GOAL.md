@@ -10,6 +10,63 @@ The original open prompt was: "Find a software project to build." That decision 
 resolved by `docs/PROJECT.md` and the current repository implementation. This file is
 now the lifecycle gate and compact strategic brief for autonomous maintenance work.
 
+## Active Human Directive — Commercial-Ready v1.0 (accepted 2026-05-28)
+
+A human operator has issued a larger directive that supersedes the conservative
+maintenance-only posture for the duration of this program: **take Posthorn to
+commercial-ready v1.0**, keeping the name "Posthorn". Work the ordered backlog below;
+each item is one or more bounded, validated loop iterations.
+
+### Per-item definition of done (non-negotiable)
+
+- `tsc -p tsconfig.json --noEmit` clean, `npx vitest run` green, `npm run build` succeeds.
+- When a store changes, extend the shared dual-backend conformance suite.
+- When an HTTP route changes, pass the bidirectional OpenAPI drift + orphan-schema tests.
+- When a new `POSTHORN_*` var is added, document it in BOTH `.env.example` and `docs/DEPLOY.md`.
+- Add a compiled-`dist` smoke for any new end-to-end path.
+- Keep main green; never modify the hash-protected substrate files listed in
+  `scripts/manifest.txt`; never hand-edit `docs/LOG.md`.
+
+### Backlog (in order)
+
+1. **v1.0 release engineering** — bump `0.0.1`→`1.0.0`; `CHANGELOG.md` (Keep a Changelog,
+   reconstructed from git history); an `npm pack` readiness test asserting the tarball ships
+   the dist entrypoints + bin + `.d.ts` and excludes tests; `CONTRIBUTING.md`, `SECURITY.md`
+   (vuln disclosure + the zero-dep/SSRF posture), `CODE_OF_CONDUCT.md`, `.github` issue/PR templates.
+2. **CI hardening** — add a `docker build` job, an `npm pack --dry-run` publish-readiness job,
+   and a dependency/audit check to `ci.yml`; add OCI image labels to the Dockerfile.
+3. **Plan catalog + entitlements** — generalize `App.monthlyMessageQuota` into a small Plan
+   entity (free/pro/scale) carrying quota + retention + rate-limit entitlements, admin-settable
+   via the existing `/v1/admin/apps` routes, enforced where quota already is.
+4. **Billing behind flags (no live keys)** — `src/billing/` with a pluggable `BillingProvider`
+   interface, a default `NoopBillingProvider`, and a `StripeBillingProvider` over an INJECTED
+   transport tested against a mock; push metered usage from `summarizeUsageByApp` +
+   `summarizeAttemptsByApp`; add a Stripe-signed `POST /v1/billing/webhook` verified with the
+   same HMAC discipline as the signer.
+5. **Self-serve signup seam** — an opt-in, disabled-by-default, rate-limited `POST /v1/signup`
+   that creates an app + first key + assigns the free plan, hidden as 404 until enabled.
+6. **Kubernetes** — a Helm chart at `deploy/helm/posthorn` (Deployment, Service, ConfigMap,
+   Secret, PVC or PG via values, `/healthz` + `/readyz` probes, optional `/metrics` ServiceMonitor),
+   validated by `helm lint` + `helm template` if present, else a template-render + schema test.
+7. **Python SDK + CLI** — generate a typed Python client from the OpenAPI and round-trip it
+   against a booted gateway; add an expanded end-user CLI (`posthorn send`/`endpoints`/`tail`)
+   on the TS SDK.
+8. **Static docs + landing site** — a Redoc HTML site from `GET /openapi.json` + a
+   getting-started page, and a single-file landing page carrying the wedge/pricing table from
+   the README, output under `site/` via a gate-clean build script.
+9. **Throughput benchmark** — a `bench/` harness (in-process fake receiver) measuring ingest
+   and delivery ops/sec over a bounded run; write `BENCHMARKS.md`, assert non-flaky in the gate.
+10. **Backup/restore** — a `posthorn admin backup`/`restore` subcommand using SQLite's online
+    backup API (and a documented `pg_dump` path), with a backup→restore test; add a DEPLOY.md runbook.
+11. **Final incumbent-parity sweep** — a structured feature matrix vs Svix/Convoy/Hookdeck,
+    then close any genuinely codeable gaps found, one validated iteration each.
+
+### Exclusions (log to the iteration's `Next`/`Decisions`; never attempt — credential-gated, not codeable)
+
+Real `npm publish`, pushing Docker images to a registry, a live Stripe account + live API keys,
+purchasing a domain, deploying a hosted/cloud demo, trademark registration. Build / lint /
+dry-run / mock-validate everything; leave the credential-gated final push to the human.
+
 ## State Basis
 
 - `docs/PROJECT.md` records Posthorn as **DECIDED** on 2026-05-22.
@@ -97,8 +154,14 @@ webhooks without introducing Redis, a broker, or a separate operations surface.
 
 ### Execution posture
 
-Because `CURRENT_STATE` is `ACTIVE_SPECIFICATION`, unattended agents may perform only
-bounded maintenance unless a human gives a larger directive:
+`CURRENT_STATE` remains `ACTIVE_SPECIFICATION` so the substrate keeps looping, but a human
+has now given the larger directive recorded above (**Active Human Directive — Commercial-Ready
+v1.0**). That directive authorizes the backlog's product-code work — new modules, a Plan
+entity, billing, a signup route, deployment artifacts — as bounded, validated iterations, each
+held to the per-item definition of done.
+
+Outside that backlog, the conservative defaults still hold. Bounded maintenance remains always
+in scope:
 
 - lint fixes;
 - formatting normalization;
@@ -106,9 +169,10 @@ bounded maintenance unless a human gives a larger directive:
 - comment/docstring cleanup;
 - small localized bug fixes with an obvious validation path.
 
-Do not change schemas, public interfaces, dependencies, storage formats, deployment
-behavior, or core architecture during unattended maintenance. Larger opportunities go
-to `docs/LOG.md` under `Decisions` or `Next`, not directly into code.
+Do not change schemas, public interfaces, dependencies, storage formats, deployment behavior,
+or core architecture except where an explicit backlog item requires it. Anything beyond the
+backlog or the bounded-maintenance set is a human-supervised decision — record it under
+`Decisions`/`Next`, do not free-style it into code.
 
 ### Highest-leverage next themes
 
