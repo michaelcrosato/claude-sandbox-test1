@@ -35,6 +35,7 @@ import {
   type ListMessagesOptions,
   type ListPendingFanoutOptions,
   type Message,
+  type MessageCursor,
   type MessagePage,
   type MessageStore,
   type NewMessage,
@@ -283,12 +284,18 @@ export class PostgresMessageStore implements MessageStore {
   }
 
   async listByApp(appId: string, options?: ListMessagesOptions): Promise<MessagePage> {
-    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel, after, before } =
+      resolveListMessagesQuery(options);
     const fetchLimit = limit + 1;
     const sel = "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at FROM messages";
     let rows: MessageRow[];
 
-    if (channel !== undefined) {
+    if (after !== undefined || before !== undefined) {
+      // Range-filtered listing (inspection query): compose the predicate
+      // dynamically rather than enumerate every channel×eventType×cursor×range
+      // combination. Same predicate columns → same index usage.
+      rows = await this.#listByAppRanged({ appId, eventType, channel, cursor, after, before, fetchLimit });
+    } else if (channel !== undefined) {
       // Channel filter: use IS NOT DISTINCT FROM to match both NULL and string values
       if (eventType === null) {
         if (cursor === null) {
@@ -358,6 +365,54 @@ export class PostgresMessageStore implements MessageStore {
     const nextCursor =
       hasMore && last !== undefined ? encodeMessageCursor(last) : null;
     return { messages, nextCursor };
+  }
+
+  /**
+   * Dynamic-predicate variant of {@link listByApp}, used only when a `createdAt`
+   * range bound (`after`/`before`) is present. Mirrors the SQLite store's ranged
+   * path: composes `event_type = $n`, `channel IS NOT DISTINCT FROM $n`, the keyset
+   * cursor clause, and the half-open `[after, before)` range, allocating `$n`
+   * placeholders as it goes.
+   */
+  async #listByAppRanged(q: {
+    appId: string;
+    eventType: string | null;
+    channel: string | null | undefined;
+    cursor: MessageCursor | null;
+    after: number | undefined;
+    before: number | undefined;
+    fetchLimit: number;
+  }): Promise<MessageRow[]> {
+    const params: (string | number | null)[] = [];
+    const ph = (value: string | number | null): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const where: string[] = [`app_id = ${ph(q.appId)}`];
+    if (q.channel !== undefined) {
+      where.push(`channel IS NOT DISTINCT FROM ${ph(q.channel)}`);
+    }
+    if (q.eventType !== null) {
+      where.push(`event_type = ${ph(q.eventType)}`);
+    }
+    if (q.after !== undefined) {
+      where.push(`created_at >= ${ph(q.after)}`);
+    }
+    if (q.before !== undefined) {
+      where.push(`created_at < ${ph(q.before)}`);
+    }
+    if (q.cursor !== null) {
+      where.push(
+        `(created_at < ${ph(q.cursor.createdAt)} OR (created_at = ${ph(q.cursor.createdAt)} AND id < ${ph(q.cursor.id)}))`,
+      );
+    }
+    const limitPh = ph(q.fetchLimit);
+    const sql =
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at FROM messages WHERE " +
+      where.join(" AND ") +
+      ` ORDER BY created_at DESC, id DESC LIMIT ${limitPh}`;
+    const { rows } = await this.#pool.query<MessageRow>(sql, params);
+    return rows;
   }
 
   async summarizeUsageByApp(appId: string, range: UsageRange): Promise<UsageSummary> {

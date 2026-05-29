@@ -544,6 +544,31 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
     expect(seenUrl.endsWith("/v1/messages")).toBe(true);
   });
 
+  it("includes after and before created-at bounds in the list query string", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages({ after: 1000, before: 2000 });
+    expect(seenUrl).toContain("after=1000");
+    expect(seenUrl).toContain("before=2000");
+  });
+
+  it("omits after and before from the query string when null or absent", async () => {
+    let seenUrl = "";
+    const client = fakeClient((url) => {
+      seenUrl = url;
+      return Promise.resolve(
+        fakeResponse(200, JSON.stringify({ data: [], nextCursor: null })),
+      );
+    });
+    await client.listMessages({ after: null, before: null });
+    expect(seenUrl.endsWith("/v1/messages")).toBe(true);
+  });
+
   it("omits the query string when listMessages gets no params", async () => {
     let seenUrl = "";
     const client = fakeClient((url) => {

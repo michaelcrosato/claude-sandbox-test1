@@ -188,7 +188,8 @@ export class InMemoryMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel, after, before } =
+      resolveListMessagesQuery(options);
     // Sort by the shared newest-first comparator (not insertion order) so this
     // matches the SQLite backend exactly, including the id tiebreak when several
     // messages share a createdAt. #messages is never pruned, so this is total.
@@ -196,16 +197,18 @@ export class InMemoryMessageStore implements MessageStore {
       .filter((m) =>
         m.appId === appId &&
         (eventType === null || m.eventType === eventType) &&
-        (channel === undefined || m.channel === channel)
+        (channel === undefined || m.channel === channel) &&
+        (after === undefined || m.createdAt >= after) &&
+        (before === undefined || m.createdAt < before)
       )
       .sort(compareMessagesNewestFirst);
-    const after =
+    const afterCursor =
       cursor === null
         ? ordered
         : ordered.filter((m) => isMessageAfterCursor(m, cursor));
     // One extra beyond `limit` would remain ⇒ there is a further page.
-    const hasMore = after.length > limit;
-    const messages = after.slice(0, limit);
+    const hasMore = afterCursor.length > limit;
+    const messages = afterCursor.slice(0, limit);
     const last = messages[messages.length - 1];
     const nextCursor =
       hasMore && last !== undefined ? encodeMessageCursor(last) : null;

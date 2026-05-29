@@ -180,16 +180,26 @@ class PosthornClient:
         cursor: Any = _UNSET,
         event_type: Any = _UNSET,
         channel: Any = _UNSET,
+        after: Any = _UNSET,
+        before: Any = _UNSET,
     ) -> Any:
         """List the tenant's messages, newest-first — ``GET /v1/messages``.
 
         Keyset-paginated: pass the returned ``nextCursor`` back as ``cursor`` to page
         forward (it is ``None`` on the last page). Optionally filter by ``event_type`` /
-        ``channel``.
+        ``channel`` and a half-open ``[after, before)`` ``createdAt`` window (epoch ms):
+        ``after`` is an inclusive lower bound, ``before`` an exclusive upper bound.
         """
         path = _path(
             "/v1/messages",
-            [("limit", limit), ("cursor", cursor), ("eventType", event_type), ("channel", channel)],
+            [
+                ("limit", limit),
+                ("cursor", cursor),
+                ("eventType", event_type),
+                ("channel", channel),
+                ("after", after),
+                ("before", before),
+            ],
         )
         return self._transport.request("GET", path)
 

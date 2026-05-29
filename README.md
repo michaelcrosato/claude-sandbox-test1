@@ -78,7 +78,7 @@ Key capabilities:
 | GET | `/openapi.json` | none | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | Accept an event and fan it out (`202`). |
 | POST | `/v1/messages/batch` | Bearer | Accept up to 100 events in one call; per-item results (`200`). |
-| GET | `/v1/messages` | Bearer | List messages, newest-first (keyset-paginated, filterable by `?eventType=`). |
+| GET | `/v1/messages` | Bearer | List messages, newest-first (keyset-paginated; filter by `?eventType=`, `?channel=`, and a `?after=`/`?before=` created-at window). |
 | GET | `/v1/messages/:id` | Bearer | Read a message + per-endpoint delivery statuses. |
 | POST | `/v1/messages/:id/retry` | Bearer | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | Per-attempt audit log (paginated). |

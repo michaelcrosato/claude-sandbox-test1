@@ -393,10 +393,28 @@ export function buildOpenApiDocument(): OpenApiDocument {
                 "Filter to messages whose `channel` exactly matches this value. " +
                 "Omit to return messages across all channels.",
             },
+            {
+              name: "after",
+              in: "query",
+              required: false,
+              schema: { type: "integer", format: "int64", minimum: 0 },
+              description:
+                "Inclusive `createdAt` lower bound (epoch ms): only messages created at " +
+                "or after this time. Combine with `before` for a half-open `[after, before)` window.",
+            },
+            {
+              name: "before",
+              in: "query",
+              required: false,
+              schema: { type: "integer", format: "int64", minimum: 0 },
+              description:
+                "Exclusive `createdAt` upper bound (epoch ms): only messages created " +
+                "strictly before this time.",
+            },
           ],
           responses: {
             "200": jsonResponse("A page of messages.", ref("MessageList")),
-            "400": errorResponse("Invalid `limit` or `cursor`."),
+            "400": errorResponse("Invalid `limit`, `cursor`, `after`, or `before`."),
             "401": errorResponse("Missing or invalid API key."),
           },
         },

@@ -413,6 +413,17 @@ export interface ListMessagesParams {
    * pass `null`) to return messages from all channels.
    */
   readonly channel?: string | null;
+  /**
+   * Inclusive epoch-ms lower bound on `createdAt`. Only messages created at or
+   * after this timestamp are returned. Omit (or pass `null`) for no lower bound.
+   * Combine with {@link before} for a half-open `[after, before)` window.
+   */
+  readonly after?: number | null;
+  /**
+   * Exclusive epoch-ms upper bound on `createdAt`. Only messages created strictly
+   * before this timestamp are returned. Omit (or pass `null`) for no upper bound.
+   */
+  readonly before?: number | null;
 }
 
 /**
@@ -927,6 +938,12 @@ export class PosthornClient {
     }
     if (params.channel !== undefined && params.channel !== null) {
       query.set("channel", params.channel);
+    }
+    if (params.after !== undefined && params.after !== null) {
+      query.set("after", String(params.after));
+    }
+    if (params.before !== undefined && params.before !== null) {
+      query.set("before", String(params.before));
     }
     const qs = query.toString();
     return this.#transport.request<MessageListPage>(

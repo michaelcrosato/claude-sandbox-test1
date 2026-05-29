@@ -491,7 +491,14 @@ function requireParam(params: RouteParams, name: string): string {
 function parseListMessagesParams(
   query: Readonly<Record<string, string | undefined>>,
 ): ListMessagesOptions {
-  const options: { limit?: number; cursor?: string; eventType?: string; channel?: string } = {};
+  const options: {
+    limit?: number;
+    cursor?: string;
+    eventType?: string;
+    channel?: string;
+    after?: number;
+    before?: number;
+  } = {};
   const rawLimit = query["limit"];
   if (rawLimit !== undefined) {
     const limit = Number(rawLimit);
@@ -516,7 +523,38 @@ function parseListMessagesParams(
   if (rawChannel !== undefined && rawChannel.length > 0) {
     options.channel = rawChannel;
   }
+  const after = parseCreatedAtBoundParam(query["after"], "after");
+  if (after !== undefined) {
+    options.after = after;
+  }
+  const before = parseCreatedAtBoundParam(query["before"], "before");
+  if (before !== undefined) {
+    options.before = before;
+  }
   return options;
+}
+
+/**
+ * Parse an `?after=`/`?before=` created-at bound: an epoch-ms non-negative integer,
+ * or `undefined` when the param is absent/empty. A present-but-invalid value is a
+ * client error → `400` (mirrors the `limit` rule).
+ */
+function parseCreatedAtBoundParam(
+  raw: string | undefined,
+  name: "after" | "before",
+): number | undefined {
+  if (raw === undefined || raw.length === 0) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `${name} must be a non-negative integer (epoch ms)`,
+    );
+  }
+  return value;
 }
 
 /**

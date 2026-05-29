@@ -37,6 +37,7 @@ import {
   type ListMessagesOptions,
   type ListPendingFanoutOptions,
   type Message,
+  type MessageCursor,
   type MessagePage,
   type MessageStore,
   type NewMessage,
@@ -491,43 +492,50 @@ export class SqliteMessageStore implements MessageStore {
     appId: string,
     options?: ListMessagesOptions,
   ): Promise<MessagePage> {
-    const { limit, cursor, eventType, channel } = resolveListMessagesQuery(options);
+    const { limit, cursor, eventType, channel, after, before } =
+      resolveListMessagesQuery(options);
     // Fetch one extra row: its presence is exactly the signal that a further page
     // exists, without a second COUNT query.
     const fetchLimit = limit + 1;
     const rows = (
-      channel !== undefined
-        // Channel-filtered: use IS ? predicate (handles null correctly in SQLite)
-        ? cursor === null
-          ? this.#listByAppChannel.all(appId, channel, fetchLimit)
-          : this.#listByAppAfterChannel.all(
-              appId,
-              channel,
-              cursor.createdAt,
-              cursor.createdAt,
-              cursor.id,
-              fetchLimit,
-            )
-        : eventType === null
+      after !== undefined || before !== undefined
+        // Range-filtered listing is an inspection query, not the delivery hot path:
+        // compose the predicate dynamically rather than pre-prepare every
+        // channel×eventType×cursor×range combination. It rides the same
+        // (app_id, …, created_at, id) indexes the prepared statements use.
+        ? this.#listByAppRanged({ appId, eventType, channel, cursor, after, before, fetchLimit })
+        : channel !== undefined
+          // Channel-filtered: use IS ? predicate (handles null correctly in SQLite)
           ? cursor === null
-            ? this.#listByApp.all(appId, fetchLimit)
-            : this.#listByAppAfter.all(
+            ? this.#listByAppChannel.all(appId, channel, fetchLimit)
+            : this.#listByAppAfterChannel.all(
                 appId,
+                channel,
                 cursor.createdAt,
                 cursor.createdAt,
                 cursor.id,
                 fetchLimit,
               )
-          : cursor === null
-            ? this.#listByAppFiltered.all(appId, eventType, fetchLimit)
-            : this.#listByAppAfterFiltered.all(
-                appId,
-                eventType,
-                cursor.createdAt,
-                cursor.createdAt,
-                cursor.id,
-                fetchLimit,
-              )
+          : eventType === null
+            ? cursor === null
+              ? this.#listByApp.all(appId, fetchLimit)
+              : this.#listByAppAfter.all(
+                  appId,
+                  cursor.createdAt,
+                  cursor.createdAt,
+                  cursor.id,
+                  fetchLimit,
+                )
+            : cursor === null
+              ? this.#listByAppFiltered.all(appId, eventType, fetchLimit)
+              : this.#listByAppAfterFiltered.all(
+                  appId,
+                  eventType,
+                  cursor.createdAt,
+                  cursor.createdAt,
+                  cursor.id,
+                  fetchLimit,
+                )
     ) as unknown as MessageRow[];
     const hasMore = rows.length > limit;
     const messages = (hasMore ? rows.slice(0, limit) : rows).map(rowToMessage);
@@ -535,6 +543,54 @@ export class SqliteMessageStore implements MessageStore {
     const nextCursor =
       hasMore && last !== undefined ? encodeMessageCursor(last) : null;
     return { messages, nextCursor };
+  }
+
+  /**
+   * Dynamic-predicate variant of {@link listByApp}, used only when a `createdAt`
+   * range bound (`after`/`before`) is present. Composes the same predicates the
+   * prepared statements use — `event_type = ?`, `channel IS ?`, and the keyset
+   * cursor clause — plus the half-open `[after, before)` range, then prepares the
+   * statement per call. The predicate columns are unchanged, so the planner still
+   * uses the existing app/created_at indexes.
+   */
+  #listByAppRanged(q: {
+    appId: string;
+    eventType: string | null;
+    channel: string | null | undefined;
+    cursor: MessageCursor | null;
+    after: number | undefined;
+    before: number | undefined;
+    fetchLimit: number;
+  }): unknown[] {
+    const where: string[] = ["app_id = ?"];
+    const params: (string | number | null)[] = [q.appId];
+    if (q.channel !== undefined) {
+      where.push("channel IS ?");
+      params.push(q.channel);
+    }
+    if (q.eventType !== null) {
+      where.push("event_type = ?");
+      params.push(q.eventType);
+    }
+    if (q.after !== undefined) {
+      where.push("created_at >= ?");
+      params.push(q.after);
+    }
+    if (q.before !== undefined) {
+      where.push("created_at < ?");
+      params.push(q.before);
+    }
+    if (q.cursor !== null) {
+      where.push("(created_at < ? OR (created_at = ? AND id < ?))");
+      params.push(q.cursor.createdAt, q.cursor.createdAt, q.cursor.id);
+    }
+    params.push(q.fetchLimit);
+    const sql =
+      "SELECT id, app_id, idempotency_key, event_type, payload, channel, deliver_at, expires_at, priority, created_at, fanned_out_at" +
+      " FROM messages WHERE " +
+      where.join(" AND ") +
+      " ORDER BY created_at DESC, id DESC LIMIT ?";
+    return this.#db.prepare(sql).all(...params);
   }
 
   async summarizeUsageByApp(

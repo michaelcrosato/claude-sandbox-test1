@@ -696,6 +696,89 @@ export function describeMessageStoreContract(
         expect(pageNull.messages.map((m) => m.id)).toEqual([b.message.id, a.message.id]);
       });
 
+      it("filters by an inclusive `after` lower bound (createdAt >= after)", async () => {
+        const t0 = clock.now();
+        const ids = await seed(5); // createdAt t0 .. t0+4
+        const page = await store.listByApp(APP, { after: t0 + 2 });
+        expect(page.messages.map((m) => m.id)).toEqual([ids[4], ids[3], ids[2]]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("filters by an exclusive `before` upper bound (createdAt < before)", async () => {
+        const t0 = clock.now();
+        const ids = await seed(5); // createdAt t0 .. t0+4
+        const page = await store.listByApp(APP, { before: t0 + 2 });
+        expect(page.messages.map((m) => m.id)).toEqual([ids[1], ids[0]]);
+        expect(page.nextCursor).toBeNull();
+      });
+
+      it("filters by a half-open [after, before) window", async () => {
+        const t0 = clock.now();
+        const ids = await seed(5); // createdAt t0 .. t0+4
+        const page = await store.listByApp(APP, { after: t0 + 1, before: t0 + 4 });
+        expect(page.messages.map((m) => m.id)).toEqual([ids[3], ids[2], ids[1]]);
+      });
+
+      it("returns an empty page when the range matches nothing", async () => {
+        const t0 = clock.now();
+        await seed(3);
+        expect(await store.listByApp(APP, { after: t0 + 100 })).toEqual({
+          messages: [],
+          nextCursor: null,
+        });
+        // An inverted window (after >= before) is simply empty, not an error.
+        expect(await store.listByApp(APP, { after: t0 + 2, before: t0 + 1 })).toEqual({
+          messages: [],
+          nextCursor: null,
+        });
+      });
+
+      it("composes the createdAt range with an eventType filter", async () => {
+        const t0 = clock.now();
+        const a = await store.create({ appId: APP, eventType: "user.created", payload: "{}" }); // t0
+        clock.advance(1);
+        await store.create({ appId: APP, eventType: "order.placed", payload: "{}" }); // t0+1
+        clock.advance(1);
+        const b = await store.create({ appId: APP, eventType: "user.created", payload: "{}" }); // t0+2
+        clock.advance(1);
+        await store.create({ appId: APP, eventType: "order.placed", payload: "{}" }); // t0+3
+        clock.advance(1);
+        await store.create({ appId: APP, eventType: "user.created", payload: "{}" }); // t0+4 (excluded)
+        const page = await store.listByApp(APP, {
+          eventType: "user.created",
+          after: t0,
+          before: t0 + 4,
+        });
+        expect(page.messages.map((m) => m.id)).toEqual([b.message.id, a.message.id]);
+      });
+
+      it("pages through a range-filtered result with a cursor", async () => {
+        const t0 = clock.now();
+        const ids = await seed(6); // createdAt t0 .. t0+5
+        // Window [t0+1, t0+5) → createdAt t0+1..t0+4 → ids[1..4], newest-first.
+        const expected = [ids[4], ids[3], ids[2], ids[1]];
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        do {
+          const page = await store.listByApp(APP, {
+            after: t0 + 1,
+            before: t0 + 5,
+            limit: 2,
+            ...(cursor !== null ? { cursor } : {}),
+          });
+          seen.push(...page.messages.map((m) => m.id));
+          cursor = page.nextCursor;
+        } while (cursor !== null);
+        expect(seen).toEqual(expected);
+      });
+
+      it("rejects a non-integer or negative createdAt range bound", async () => {
+        await expect(store.listByApp(APP, { after: 1.5 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { after: -1 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { before: 1.5 })).rejects.toThrow(RangeError);
+        await expect(store.listByApp(APP, { before: -1 })).rejects.toThrow(RangeError);
+      });
+
       it("stores and retrieves the channel field on a message", async () => {
         const { message } = await store.create({
           appId: APP,

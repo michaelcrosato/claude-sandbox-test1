@@ -71,21 +71,21 @@ implements each.
 | Online backup / restore | managed | managed | managed | **✓** `posthorn admin backup`/`restore` (SQLite `VACUUM INTO`) |
 | Self-serve signup seam | ✓ | — | ✓ | **✓** opt-in `POST /v1/signup` |
 | Usage metering + quota enforcement | ✓ | partial | ✓ | **✓** per-tenant, monthly caps, `429` on breach |
-| Message list filtering | by type, **time range, status** | by type, time range | **full-text + filters** | **partial — by `eventType`/`channel` only** (see gaps) |
+| Message list filtering | by type, **time range, status** | by type, time range | **full-text + filters** | **✓ by `eventType`, `channel`, + `after`/`before` created-at window** (`src/http/api.ts`) |
 | Catalog-driven test events | ✓ | partial | ✓ | **partial — `/v1/endpoints/:id/test` is not catalog-driven** (see gaps) |
 | Per-event-type payload examples in docs | ✓ | partial | ✓ | **partial — catalog has `schemaExample`, not surfaced in OpenAPI** (see gaps) |
 
 ## Codeable gaps
 
-The matrix surfaces three places where Posthorn is genuinely behind and the gap is
+The matrix surfaced three places where Posthorn was genuinely behind and the gap was
 *codeable in this repo* (as opposed to differences in hosting model or ecosystem size).
-Each becomes one focused, gate-green iteration:
+Each becomes one focused, gate-green iteration. The first is now closed; two remain:
 
-1. **Message list time-range filtering.** `GET /v1/messages` filters only by `eventType`
-   and `channel` (`src/http/api.ts` `parseListMessagesParams`); there is no `before`/`after`
-   (created-at) window. The store already keysets on `(createdAt, id)`, so a bounded range
-   predicate is a small, well-contained addition to `listByApp` and the query resolver.
-   *Closes the "time range" half of the message-filtering row.*
+1. ~~**Message list time-range filtering.**~~ **Closed.** `GET /v1/messages` now accepts a
+   half-open `after`/`before` created-at window (`after` inclusive, `before` exclusive),
+   composing with the existing `eventType`/`channel` filters and keyset pagination across
+   all three store backends (`src/http/api.ts` `parseListMessagesParams`, the `listByApp`
+   resolver + in-memory/SQLite/Postgres stores, the SDKs, and the OpenAPI contract).
 
 2. **Catalog-driven test events.** `POST /v1/endpoints/:id/test` sends a hardcoded
    `{"test":true}` payload (or a caller-supplied one). It does not draw from the event-type

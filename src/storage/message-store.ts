@@ -431,6 +431,18 @@ export interface ListMessagesOptions {
    * Omitting the field entirely means no channel filter — all channels are included.
    */
   readonly channel?: string | null;
+  /**
+   * Inclusive `createdAt` lower bound (epoch ms): only messages with
+   * `createdAt >= after` are returned. `null` or omitted means no lower bound.
+   * Together with {@link before} this is a half-open `[after, before)` window,
+   * matching the `[from, to)` convention used elsewhere (usage ranges, replay).
+   */
+  readonly after?: number | null;
+  /**
+   * Exclusive `createdAt` upper bound (epoch ms): only messages with
+   * `createdAt < before` are returned. `null` or omitted means no upper bound.
+   */
+  readonly before?: number | null;
 }
 
 /** One page of {@link MessageStore.listByApp}, newest-first, plus the next cursor. */
@@ -493,7 +505,14 @@ export function decodeMessageCursor(cursor: string): MessageCursor {
  */
 export function resolveListMessagesQuery(
   options: ListMessagesOptions = {},
-): { limit: number; cursor: MessageCursor | null; eventType: string | null; channel: string | null | undefined } {
+): {
+  limit: number;
+  cursor: MessageCursor | null;
+  eventType: string | null;
+  channel: string | null | undefined;
+  after: number | undefined;
+  before: number | undefined;
+} {
   const limit = options.limit ?? DEFAULT_LIST_MESSAGES_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_MESSAGES_LIMIT) {
     throw new RangeError(
@@ -510,7 +529,29 @@ export function resolveListMessagesQuery(
       : options.eventType;
   // channel: undefined means "no filter"; null means "only null-channel messages"; string = exact match
   const channel = "channel" in options ? options.channel ?? null : undefined;
-  return { limit, cursor, eventType, channel };
+  // after/before: undefined means "no bound". A present value must be a non-negative
+  // integer epoch-ms; the half-open window is [after, before).
+  const after = resolveCreatedAtBound(options.after, "after");
+  const before = resolveCreatedAtBound(options.before, "before");
+  return { limit, cursor, eventType, channel, after, before };
+}
+
+/**
+ * Normalize a `createdAt` range bound: `null`/omitted → `undefined` (no bound);
+ * otherwise it must be a non-negative integer epoch-ms, or this throws
+ * {@link RangeError} (mirroring the `limit` contract).
+ */
+function resolveCreatedAtBound(
+  value: number | null | undefined,
+  name: "after" | "before",
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative integer (epoch ms)`);
+  }
+  return value;
 }
 
 /**

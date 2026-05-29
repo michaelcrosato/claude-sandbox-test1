@@ -2047,6 +2047,45 @@ describe("createApi — GET /v1/messages (list)", () => {
     expect(res.status).toBe(200);
     expect(body(res)).toEqual({ data: [], nextCursor: null });
   });
+
+  it("filters by ?after= and ?before= created-at bounds", async () => {
+    const { api, secret } = await setup();
+    const refs = await send(api, secret, 3);
+    const times = refs.map((r) => r.createdAt);
+    const min = Math.min(...times);
+    const max = Math.max(...times);
+
+    // `after` is an inclusive lower bound: one past the newest matches nothing.
+    const none = await authedGet(api, secret, { after: String(max + 1) });
+    expect(none.status).toBe(200);
+    expect(body(none).data).toEqual([]);
+
+    // `before` is an exclusive upper bound: the oldest's own time matches nothing.
+    const noneBefore = await authedGet(api, secret, { before: String(min) });
+    expect(noneBefore.status).toBe(200);
+    expect(body(noneBefore).data).toEqual([]);
+
+    // The half-open window [min, max+1) covers every message sent.
+    const all = await authedGet(api, secret, {
+      after: String(min),
+      before: String(max + 1),
+    });
+    expect(all.status).toBe(200);
+    expect(body(all).data.map((m: any) => m.id).sort()).toEqual(
+      refs.map((r) => r.id).sort(),
+    );
+  });
+
+  it("rejects an invalid ?after= or ?before= with 400", async () => {
+    const { api, secret } = await setup();
+    for (const param of ["after", "before"]) {
+      for (const value of ["-1", "abc", "1.5"]) {
+        const res = await authedGet(api, secret, { [param]: value });
+        expect(res.status).toBe(400);
+        expect(body(res).error.code).toBe("invalid_request");
+      }
+    }
+  });
 });
 
 describe("createApi — end-to-end with the delivery worker", () => {
