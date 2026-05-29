@@ -281,3 +281,62 @@ describe("patternToOpenApiPath", () => {
     expect(patternToOpenApiPath("/v1/messages/:id/retry")).toBe("/v1/messages/{id}/retry");
   });
 });
+
+describe("buildOpenApiDocument — per-event-type payload examples (catalog parity)", () => {
+  it("attaches representative per-event-type examples to POST /v1/messages", () => {
+    const doc = buildOpenApiDocument();
+    const byKey = new Map(eachOperation(doc).map(({ key, op }) => [key, op]));
+    const op = byKey.get("POST /v1/messages");
+    expect(op, "POST /v1/messages should be documented").toBeDefined();
+    const examples = (
+      op!.requestBody as {
+        content: {
+          "application/json": {
+            examples?: Record<string, { value: { eventType?: unknown; payload?: unknown } }>;
+          };
+        };
+      }
+    ).content["application/json"].examples;
+    expect(examples, "POST /v1/messages should carry request examples").toBeDefined();
+    const keys = Object.keys(examples!);
+    expect(keys).toContain("user_created");
+    expect(keys).toContain("invoice_paid");
+    expect(keys.length).toBeGreaterThanOrEqual(2);
+    // Each named example is a usable NewMessage: a string eventType and a payload.
+    for (const [name, ex] of Object.entries(examples!)) {
+      expect(typeof ex.value.eventType, `${name}.eventType`).toBe("string");
+      expect(ex.value.payload, `${name}.payload`).toBeDefined();
+    }
+  });
+
+  it("documents the catalog as the per-type payload source on the message payload schemas", () => {
+    const doc = buildOpenApiDocument();
+    const newMessage = doc.components.schemas["NewMessage"] as {
+      properties: { payload: { description: string } };
+    };
+    const message = doc.components.schemas["Message"] as {
+      properties: { payload: { description: string } };
+    };
+    for (const desc of [
+      newMessage.properties.payload.description,
+      message.properties.payload.description,
+    ]) {
+      expect(desc).toContain("/v1/event-types");
+    }
+    expect(newMessage.properties.payload.description).toContain("schemaExample");
+  });
+
+  it("gives EventType.schemaExample (and the create input) a concrete JSON example", () => {
+    const doc = buildOpenApiDocument();
+    for (const name of ["EventType", "NewEventType"]) {
+      const schema = doc.components.schemas[name] as {
+        properties: { schemaExample: { examples?: unknown[]; description: string } };
+      };
+      const ex = schema.properties.schemaExample.examples;
+      expect(Array.isArray(ex) && ex.length > 0, `${name}.schemaExample.examples`).toBe(true);
+      // The example is a JSON string (parses without throwing).
+      expect(typeof ex![0], `${name}.schemaExample example type`).toBe("string");
+      expect(() => JSON.parse(ex![0] as string), `${name}.schemaExample is valid JSON`).not.toThrow();
+    }
+  });
+});

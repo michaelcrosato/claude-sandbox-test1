@@ -343,7 +343,43 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "`GET /v1/messages/{id}` for status). When an `idempotencyKey` is supplied, a " +
             "repeat send with the same key returns the original message (`deduplicated: true`) " +
             "instead of fanning out again; reusing a key with a different payload is a `409`.",
-          requestBody: jsonBody(ref("NewMessage")),
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: ref("NewMessage"),
+                // Representative per-event-type bodies. These mirror what a tenant
+                // registers as each event type's `schemaExample` in the catalog —
+                // the authoritative, per-tenant source is `GET /v1/event-types`.
+                examples: {
+                  user_created: {
+                    summary: "A user.created event",
+                    value: {
+                      eventType: "user.created",
+                      payload: { id: "usr_123", email: "ada@example.com", name: "Ada Lovelace" },
+                    },
+                  },
+                  invoice_paid: {
+                    summary: "An invoice.paid event — deduplicated and routed to one customer channel",
+                    value: {
+                      eventType: "invoice.paid",
+                      payload: { invoiceId: "in_456", amountCents: 4200, currency: "usd" },
+                      idempotencyKey: "in_456:paid",
+                      channel: "customer/usr_123",
+                    },
+                  },
+                  subscription_canceled: {
+                    summary: "A subscription.canceled event scheduled for a future send",
+                    value: {
+                      eventType: "subscription.canceled",
+                      payload: { subscriptionId: "sub_789", reason: "nonpayment" },
+                      sendAt: "2026-06-01T09:00:00Z",
+                    },
+                  },
+                },
+              },
+            },
+          },
           responses: {
             "202": jsonResponse("Accepted; includes the fan-out summary.", ref("IngestResult")),
             "400": errorResponse("Malformed or missing request body."),
@@ -1385,7 +1421,14 @@ export function buildOpenApiDocument(): OpenApiDocument {
             appId: { type: "string" },
             name: { type: "string", description: "Human-readable label.", examples: ["User Created"] },
             description: { type: ["string", "null"], description: "Optional longer description." },
-            schemaExample: { type: ["string", "null"], description: "Optional JSON example of the event payload." },
+            schemaExample: {
+              type: ["string", "null"],
+              description:
+                "Optional canonical JSON example (as a string) of this event type's payload. It is the " +
+                "per-event-type example for the API: `POST /v1/endpoints/{id}/test` sends it when a test " +
+                "references this type, and it illustrates the `payload` shape for `POST /v1/messages`.",
+              examples: ['{"id":"usr_123","email":"ada@example.com","name":"Ada Lovelace"}'],
+            },
             archived: { type: "boolean", description: "Whether this event type is archived (soft-deleted)." },
             createdAt: epochMs("Creation time, epoch ms."),
             updatedAt: epochMs("Last mutation time, epoch ms."),
@@ -1405,7 +1448,13 @@ export function buildOpenApiDocument(): OpenApiDocument {
             },
             name: { type: "string", description: "Human-readable label. Max 200 characters.", examples: ["User Created"] },
             description: { type: ["string", "null"], description: "Optional longer description. Max 1000 characters." },
-            schemaExample: { type: ["string", "null"], description: "Optional JSON string example of the event payload." },
+            schemaExample: {
+              type: ["string", "null"],
+              description:
+                "Optional canonical JSON example (as a string) of this event type's payload. Becomes the " +
+                "payload that `POST /v1/endpoints/{id}/test` sends when a test references this type.",
+              examples: ['{"id":"usr_123","email":"ada@example.com","name":"Ada Lovelace"}'],
+            },
           },
         },
         UpdateEventType: {
@@ -1530,7 +1579,10 @@ export function buildOpenApiDocument(): OpenApiDocument {
             },
             payload: {
               type: "string",
-              description: "The exact serialized JSON body that was signed and delivered, byte-for-byte.",
+              description:
+                "The exact serialized JSON body that was signed and delivered, byte-for-byte. Its shape " +
+                "follows the message's event type — see that type's `schemaExample` in the catalog " +
+                "(`GET /v1/event-types`).",
             },
             createdAt: epochMs("Creation time, epoch ms."),
             deliveries: { type: "array", items: ref("Delivery") },
@@ -1839,7 +1891,11 @@ export function buildOpenApiDocument(): OpenApiDocument {
           properties: {
             eventType: { type: "string", examples: ["user.created"] },
             payload: {
-              description: "Any JSON value. Delivered (and signed) as its exact JSON serialization.",
+              description:
+                "Any JSON value. Delivered (and signed) as its exact JSON serialization. The shape is " +
+                "defined per event type in your catalog: register a `schemaExample` for each type via " +
+                "`POST /v1/event-types` and retrieve them with `GET /v1/event-types`. See the request " +
+                "`examples` on this operation for representative per-event-type bodies.",
             },
             idempotencyKey: {
               type: ["string", "null"],

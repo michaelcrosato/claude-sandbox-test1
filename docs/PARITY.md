@@ -73,13 +73,13 @@ implements each.
 | Usage metering + quota enforcement | ✓ | partial | ✓ | **✓** per-tenant, monthly caps, `429` on breach |
 | Message list filtering | by type, **time range, status** | by type, time range | **full-text + filters** | **✓ by `eventType`, `channel`, + `after`/`before` created-at window** (`src/http/api.ts`) |
 | Catalog-driven test events | ✓ | partial | ✓ | **✓** `/v1/endpoints/:id/test` sends a registered event type's `schemaExample` (`payloadSource` reports the source) |
-| Per-event-type payload examples in docs | ✓ | partial | ✓ | **partial — catalog has `schemaExample`, not surfaced in OpenAPI** (see gaps) |
+| Per-event-type payload examples in docs | ✓ | partial | ✓ | **✓** per-event-type request examples on `POST /v1/messages` + catalog-sourced `schemaExample`s (`src/http/openapi.ts`) |
 
 ## Codeable gaps
 
 The matrix surfaced three places where Posthorn was genuinely behind and the gap was
 *codeable in this repo* (as opposed to differences in hosting model or ecosystem size).
-Each becomes one focused, gate-green iteration. Two are now closed; one remains:
+Each becomes one focused, gate-green iteration. All three are now closed:
 
 1. ~~**Message list time-range filtering.**~~ **Closed.** `GET /v1/messages` now accepts a
    half-open `after`/`before` created-at window (`after` inclusive, `before` exclusive),
@@ -96,11 +96,13 @@ Each becomes one focused, gate-green iteration. Two are now closed; one remains:
    the caller knows which path was taken (`src/http/api.ts`, the OpenAPI contract, the
    TypeScript + Python SDKs).
 
-3. **Per-event-type examples in the OpenAPI document.** Event types and their
-   `schemaExample`s are not reflected in `GET /openapi.json`, so generated clients and the
-   Redoc site show only generic message schemas. Surfacing registered examples (or at least
-   documenting the catalog as the source of per-type payloads) improves the developer
-   experience parity. *Closes the "per-event-type payload examples" row.*
+3. ~~**Per-event-type examples in the OpenAPI document.**~~ **Closed.** `GET /openapi.json`
+   is a static, unauthenticated document, so it cannot carry a tenant's live catalog; instead
+   it now ships representative per-event-type request `examples` on `POST /v1/messages`
+   (`user.created`, `invoice.paid`, `subscription.canceled`), the message `payload` schemas
+   point to the catalog (`GET /v1/event-types`) as the authoritative per-type source, and the
+   `schemaExample` fields carry a concrete JSON example — so generated clients and the Redoc
+   site show real per-event-type payloads rather than a bare generic schema (`src/http/openapi.ts`).
 
 Free-text / payload search (Svix and Hookdeck offer it) is **deliberately deferred**: it
 implies a full-text index over message bodies, which is a materially larger change than the
