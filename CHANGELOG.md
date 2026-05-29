@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Corrected the declared Node.js engine range to `>=22.13.0` (was `>=20`). The default SQLite
+  datastore uses `node:sqlite`, which is flag-free only from Node 22.13, so the previous range
+  advertised Node versions the default mode cannot run on.
+
 ## [1.0.0] - 2026-05-28
 
 First public release. Posthorn is open-core, Standard Webhooks-compliant, reliable
