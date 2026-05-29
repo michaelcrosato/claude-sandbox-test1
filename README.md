@@ -362,6 +362,12 @@ npm run typecheck
 npm run build
 ```
 
+**Supported Node:** Posthorn requires **Node ≥ 22.13** (the `engines` floor). Its default
+datastore is the built-in `node:sqlite`, which is flag-free from 22.13 but still pre-stable — a
+release candidate on Node 24 and in active development on Node 22. The API is unlikely to change
+under a running deployment; if you want a stable-API datastore, run the
+[PostgreSQL backend](docs/DEPLOY.md#postgresql-backend) instead.
+
 ## Contributing & automation
 
 Working on Posthorn (human or AI agent)? Start here:

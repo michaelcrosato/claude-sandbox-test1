@@ -43,6 +43,12 @@ embedded SQLite store — no Redis, and no external database by default. A
 [PostgreSQL backend](#postgresql-backend) is available as an opt-in for
 horizontally-scaled / active-active deployments (still no Redis).
 
+**`node:sqlite` is pre-stable.** The default datastore is Node's built-in `node:sqlite` —
+flag-free from Node 22.13, but still pre-stable: a release candidate (stability 1.2) on Node 24
+and in active development (stability 1.1) on Node 22. Its API is unlikely to change under a
+running deployment, but if you want a stable-API datastore — or you need horizontal scaling —
+use the [PostgreSQL backend](#postgresql-backend) instead.
+
 ---
 
 ## Quick start with Docker Compose
