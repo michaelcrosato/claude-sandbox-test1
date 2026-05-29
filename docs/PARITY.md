@@ -72,14 +72,14 @@ implements each.
 | Self-serve signup seam | ✓ | — | ✓ | **✓** opt-in `POST /v1/signup` |
 | Usage metering + quota enforcement | ✓ | partial | ✓ | **✓** per-tenant, monthly caps, `429` on breach |
 | Message list filtering | by type, **time range, status** | by type, time range | **full-text + filters** | **✓ by `eventType`, `channel`, + `after`/`before` created-at window** (`src/http/api.ts`) |
-| Catalog-driven test events | ✓ | partial | ✓ | **partial — `/v1/endpoints/:id/test` is not catalog-driven** (see gaps) |
+| Catalog-driven test events | ✓ | partial | ✓ | **✓** `/v1/endpoints/:id/test` sends a registered event type's `schemaExample` (`payloadSource` reports the source) |
 | Per-event-type payload examples in docs | ✓ | partial | ✓ | **partial — catalog has `schemaExample`, not surfaced in OpenAPI** (see gaps) |
 
 ## Codeable gaps
 
 The matrix surfaced three places where Posthorn was genuinely behind and the gap was
 *codeable in this repo* (as opposed to differences in hosting model or ecosystem size).
-Each becomes one focused, gate-green iteration. The first is now closed; two remain:
+Each becomes one focused, gate-green iteration. Two are now closed; one remains:
 
 1. ~~**Message list time-range filtering.**~~ **Closed.** `GET /v1/messages` now accepts a
    half-open `after`/`before` created-at window (`after` inclusive, `before` exclusive),
@@ -87,11 +87,14 @@ Each becomes one focused, gate-green iteration. The first is now closed; two rem
    all three store backends (`src/http/api.ts` `parseListMessagesParams`, the `listByApp`
    resolver + in-memory/SQLite/Postgres stores, the SDKs, and the OpenAPI contract).
 
-2. **Catalog-driven test events.** `POST /v1/endpoints/:id/test` sends a hardcoded
-   `{"test":true}` payload (or a caller-supplied one). It does not draw from the event-type
-   catalog, even though each event type can carry a `schemaExample`. Letting the test-send
-   reference an event type and use its registered sample payload turns the catalog into a
-   living fixture set. *Closes the "catalog-driven test events" row.*
+2. ~~**Catalog-driven test events.**~~ **Closed.** `POST /v1/endpoints/:id/test` now draws
+   its payload from the event-type catalog: when the caller supplies an `eventType` that is
+   registered (and omits an explicit `payload`), the type's stored `schemaExample` is sent,
+   turning the catalog into a living fixture set. A caller-supplied `payload` still wins, and
+   an unknown type or one without an example falls back to the generic `{"test":true}`. The
+   synchronous result now carries a `payloadSource` field (`request`/`catalog`/`default`) so
+   the caller knows which path was taken (`src/http/api.ts`, the OpenAPI contract, the
+   TypeScript + Python SDKs).
 
 3. **Per-event-type examples in the OpenAPI document.** Event types and their
    `schemaExample`s are not reflected in `GET /openapi.json`, so generated clients and the

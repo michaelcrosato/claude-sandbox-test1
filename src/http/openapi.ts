@@ -1991,25 +1991,36 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description:
             "The (optional) body of `POST /v1/endpoints/{id}/test`. Omit it entirely to send a " +
-            "generic test event (`eventType: \"test\"`, `payload: {\"test\":true}`).",
+            "generic test event (`eventType: \"test\"`, `payload: {\"test\":true}`). If you supply an " +
+            "`eventType` registered in the event-type catalog (and omit `payload`), the catalog " +
+            "entry's `schemaExample` is sent as the payload — see `payloadSource` in the result.",
           properties: {
             eventType: {
               type: "string",
               description: "The event type to send (e.g. `\"user.created\"`). Defaults to `\"test\"`.",
             },
             payload: {
-              description: "The event body — any JSON value. Defaults to `{\"test\":true}`.",
+              description:
+                "The event body — any JSON value. When omitted, the payload is drawn from the " +
+                "matching catalog event type's `schemaExample` if present, else `{\"test\":true}`.",
             },
           },
         },
         TestEndpointResult: {
           type: "object",
           description: "Synchronous result of a one-shot test delivery.",
-          required: ["success", "durationMs"],
+          required: ["success", "durationMs", "payloadSource"],
           properties: {
             success: {
               type: "boolean",
               description: "Whether the endpoint responded with a 2xx status.",
+            },
+            payloadSource: {
+              type: "string",
+              enum: ["request", "catalog", "default"],
+              description:
+                "Where the sent payload came from: `request` (caller-supplied), `catalog` " +
+                "(the event type's registered `schemaExample`), or `default` (`{\"test\":true}`).",
             },
             httpStatus: {
               type: "integer",

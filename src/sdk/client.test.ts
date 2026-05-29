@@ -1175,7 +1175,7 @@ describe("PosthornClient — testEndpoint", () => {
   it("sends POST to /v1/endpoints/:id/test with the provided body", async () => {
     let capturedUrl: string | null = null;
     let capturedBody: string | null = null;
-    const result = { success: true, httpStatus: 200, durationMs: 42 };
+    const result = { success: true, httpStatus: 200, durationMs: 42, payloadSource: "catalog" };
     const client = fakeClient(async (url, init) => {
       capturedUrl = url;
       capturedBody = init?.body as string ?? null;
@@ -1185,6 +1185,7 @@ describe("PosthornClient — testEndpoint", () => {
     expect(res.success).toBe(true);
     expect(res.httpStatus).toBe(200);
     expect(res.durationMs).toBe(42);
+    expect(res.payloadSource).toBe("catalog");
     expect(capturedUrl).not.toBeNull();
     expect(capturedUrl!).toContain("/v1/endpoints/ep_1/test");
     const parsed = JSON.parse(capturedBody!);

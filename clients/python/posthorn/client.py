@@ -347,7 +347,9 @@ class PosthornClient:
     ) -> Any:
         """Send a one-shot synchronous test delivery — ``POST /v1/endpoints/:id/test``.
         Not stored, not queued, not billed. Defaults to ``event_type="test"`` /
-        ``payload={"test": true}`` when omitted."""
+        ``payload={"test": true}`` when omitted. Supplying an ``event_type`` that
+        exists in the catalog (without ``payload``) sends that type's registered
+        ``schemaExample``; the result's ``payloadSource`` reports which was used."""
         body: dict[str, Any] = {}
         if event_type is not _UNSET:
             body["eventType"] = event_type

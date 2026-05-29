@@ -697,6 +697,12 @@ export interface TestEndpointResult {
   readonly error?: string;
   /** Round-trip latency in milliseconds. */
   readonly durationMs: number;
+  /**
+   * Where the sent payload came from: `"request"` (caller-supplied `payload`),
+   * `"catalog"` (the event type's registered `schemaExample`), or `"default"`
+   * (the generic `{"test":true}`).
+   */
+  readonly payloadSource: "request" | "catalog" | "default";
 }
 
 /** Options for {@link PosthornClient.rotateEndpointSecret}; all fields optional. */
@@ -1145,7 +1151,10 @@ export class PosthornClient {
    * not queued, and does not count against the tenant's monthly quota.
    * Useful to verify that an endpoint is reachable and configured correctly
    * after creation or a configuration change. Omit `input` for a generic test
-   * event (`eventType: "test"`, `payload: {"test":true}`).
+   * event (`eventType: "test"`, `payload: {"test":true}`). Supply an `eventType`
+   * that exists in the event-type catalog (and omit `payload`) to send that
+   * type's registered `schemaExample`; the result's `payloadSource` reports
+   * which payload was used.
    */
   async testEndpoint(id: string, input: TestEndpointInput = {}): Promise<TestEndpointResult> {
     const body: Record<string, unknown> = {};

@@ -4051,6 +4051,117 @@ describe("createApi — POST /v1/endpoints/:id/test", () => {
     const res = await api(request({ method: "POST", path: "/v1/endpoints/ep_x/test" }));
     expect(res.status).toBe(401);
   });
+
+  /**
+   * Build an api wired to a fresh, empty event-type catalog. Returns the app id
+   * (so callers can register types on the same store the api reads) plus a
+   * `lastBody()` that yields the JSON string the transport was handed.
+   */
+  async function setupWithCatalog(): Promise<{
+    api: ApiHandler;
+    key: string;
+    appId: string;
+    endpointId: string;
+    eventTypes: InMemoryEventTypeStore;
+    lastBody: () => string;
+  }> {
+    const apps2 = new InMemoryAppStore();
+    const endpoints2 = new InMemoryEndpointStore();
+    const eventTypes = new InMemoryEventTypeStore();
+    const app2 = await apps2.create({ name: "T" });
+    const { secret: key } = await apps2.createApiKey(app2.id);
+    await endpoints2.create({ appId: app2.id, url: "https://recv.example", secret: "whsec_testsecret" });
+    const ep2 = (await endpoints2.listByApp(app2.id))[0]!;
+    let captured = "";
+    const transport = vi.fn().mockImplementation(async (req: HttpDeliveryRequest) => {
+      captured = req.body;
+      return { status: 200 };
+    });
+    const api = createApi({
+      apps: apps2,
+      endpoints: endpoints2,
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes,
+      transport,
+    });
+    return { api, key, appId: app2.id, endpointId: ep2.id, eventTypes, lastBody: () => captured };
+  }
+
+  it("draws the test payload from the catalog event type's schemaExample", async () => {
+    const { api, key, appId, endpointId, eventTypes, lastBody } = await setupWithCatalog();
+    await eventTypes.create({
+      appId,
+      id: "user.created",
+      name: "User Created",
+      schemaExample: '{"id":"usr_123","email":"a@b.example"}',
+    });
+    const res = await api(
+      jsonRequest("POST", `/v1/endpoints/${endpointId}/test`, { eventType: "user.created" }, key),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("catalog");
+    expect(lastBody()).toBe('{"id":"usr_123","email":"a@b.example"}');
+  });
+
+  it("lets a caller-supplied payload override the catalog example", async () => {
+    const { api, key, appId, endpointId, eventTypes, lastBody } = await setupWithCatalog();
+    await eventTypes.create({ appId, id: "user.created", name: "User Created", schemaExample: '{"id":"usr_123"}' });
+    const res = await api(
+      jsonRequest(
+        "POST",
+        `/v1/endpoints/${endpointId}/test`,
+        { eventType: "user.created", payload: { hello: "world" } },
+        key,
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("request");
+    expect(lastBody()).toBe('{"hello":"world"}');
+  });
+
+  it("falls back to the generic event when the event type is not in the catalog", async () => {
+    const { api, key, endpointId, lastBody } = await setupWithCatalog();
+    const res = await api(
+      jsonRequest("POST", `/v1/endpoints/${endpointId}/test`, { eventType: "nope.unknown" }, key),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("default");
+    expect(lastBody()).toBe('{"test":true}');
+  });
+
+  it("falls back to the generic event when the catalog entry has no schemaExample", async () => {
+    const { api, key, appId, endpointId, eventTypes, lastBody } = await setupWithCatalog();
+    await eventTypes.create({ appId, id: "bare.type", name: "Bare" });
+    const res = await api(
+      jsonRequest("POST", `/v1/endpoints/${endpointId}/test`, { eventType: "bare.type" }, key),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("default");
+    expect(lastBody()).toBe('{"test":true}');
+  });
+
+  it("reports payloadSource 'default' for an empty body with no matching catalog type", async () => {
+    const { api, key, endpointId, lastBody } = await setupWithCatalog();
+    const res = await api(
+      request({ method: "POST", path: `/v1/endpoints/${endpointId}/test`, headers: { authorization: `Bearer ${key}` } }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("default");
+    expect(lastBody()).toBe('{"test":true}');
+  });
+
+  it("draws from the catalog for the default event type when 'test' is registered", async () => {
+    const { api, key, appId, endpointId, eventTypes, lastBody } = await setupWithCatalog();
+    await eventTypes.create({ appId, id: "test", name: "Generic Test", schemaExample: '{"sample":42}' });
+    const res = await api(
+      request({ method: "POST", path: `/v1/endpoints/${endpointId}/test`, headers: { authorization: `Bearer ${key}` } }),
+    );
+    expect(res.status).toBe(200);
+    expect(body(res).payloadSource).toBe("catalog");
+    expect(lastBody()).toBe('{"sample":42}');
+  });
 });
 
 describe("createApi — POST /v1/messages/batch", () => {

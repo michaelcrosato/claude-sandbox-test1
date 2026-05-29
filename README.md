@@ -88,7 +88,7 @@ Key capabilities:
 | PATCH | `/v1/endpoints/:id` | Bearer | Update an endpoint. |
 | DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`). |
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | Rotate signing secret, zero-downtime. |
-| POST | `/v1/endpoints/:id/test` | Bearer | Send a one-shot test delivery; returns result synchronously. |
+| POST | `/v1/endpoints/:id/test` | Bearer | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
 | GET | `/v1/endpoints/:id/deliveries` | Bearer | Endpoint delivery history (paginated). |
 | GET | `/v1/endpoints/:id/stats` | Bearer | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
 | GET | `/v1/deliveries` | Bearer | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |

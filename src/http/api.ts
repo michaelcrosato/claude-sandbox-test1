@@ -1574,9 +1574,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
     if (endpoint.disabled) {
       throw new HttpError(400, "endpoint_disabled", "cannot test a disabled endpoint");
     }
-    // Body is entirely optional. Default: a generic test event.
+    // Body is entirely optional. Payload precedence: a caller-supplied `payload`
+    // always wins; otherwise, if the (possibly-defaulted) event type is in the
+    // catalog and carries a `schemaExample`, that registered sample is sent —
+    // turning the catalog into a living fixture set; otherwise a generic event.
     let eventType = "test";
-    let payload = JSON.stringify({ test: true });
+    let payload: string | undefined;
     if (ctx.req.rawBody.length > 0) {
       const parsed = parseJsonObject(ctx.req);
       if ("eventType" in parsed && typeof parsed["eventType"] === "string") {
@@ -1584,6 +1587,19 @@ export function createApi(deps: ApiDeps): ApiHandler {
       }
       if ("payload" in parsed && parsed["payload"] !== undefined) {
         payload = JSON.stringify(parsed["payload"]);
+      }
+    }
+    let payloadSource: "request" | "catalog" | "default";
+    if (payload !== undefined) {
+      payloadSource = "request";
+    } else {
+      const catalogType = await deps.eventTypes.get(ctx.app.id, eventType);
+      if (catalogType !== null && catalogType.schemaExample !== null) {
+        payload = catalogType.schemaExample;
+        payloadSource = "catalog";
+      } else {
+        payload = JSON.stringify({ test: true });
+        payloadSource = "default";
       }
     }
     // Synthetic message — not stored, not queued, not counted against quota.
@@ -1626,6 +1642,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
       ...(httpStatus !== undefined ? { httpStatus } : {}),
       ...(error !== undefined ? { error } : {}),
       durationMs,
+      payloadSource,
     });
   };
 
