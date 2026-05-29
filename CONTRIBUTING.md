@@ -6,7 +6,7 @@ honest.
 
 ## Project shape
 
-- TypeScript on Node.js (`>=20`), ES modules.
+- TypeScript on Node.js (`>=22.13`), ES modules.
 - **Zero required runtime dependencies** — the core runs on Node built-ins (`node:sqlite`,
   `node:crypto`, `node:http`). PostgreSQL (`pg`) is an *optional* dependency for
   multi-replica deployments only.

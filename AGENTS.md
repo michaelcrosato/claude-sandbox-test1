@@ -5,7 +5,7 @@ Canonical instructions for autonomous coding agents working in this repo. Humans
 
 **What this is.** Posthorn — reliable outbound webhook-delivery infrastructure: a single
 Node process, SQLite by default (no Redis), Standard Webhooks-compliant, MIT. TypeScript/ESM,
-Node >= 20, tested with Vitest.
+Node >= 22.13, tested with Vitest.
 
 ## Canonical sources & precedence
 

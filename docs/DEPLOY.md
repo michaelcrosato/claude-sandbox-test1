@@ -33,7 +33,7 @@ procedures.
 | Component | Minimum | Notes |
 |-----------|---------|-------|
 | Docker    | 20+     | Or any OCI runtime. |
-| Node.js   | 20+     | Only if running outside Docker. `node:sqlite` requires Node 22.5+. |
+| Node.js   | 22.13+  | Only if running outside Docker. The default datastore uses `node:sqlite`, which is flag-free from Node 22.13. |
 | Disk      | 1 GB    | For the SQLite data directory. Size depends on message volume and retention. |
 | Memory    | 128 MB  | Comfortable for moderate workloads; bump for very high concurrency. |
 | Network   | Outbound HTTPS | The delivery worker POSTs to your tenants' webhook endpoints. |

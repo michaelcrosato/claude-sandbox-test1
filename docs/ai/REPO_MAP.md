@@ -1,7 +1,7 @@
 # Repo map
 
 Where things live and what to skip. Pair with [AGENTS.md](../../AGENTS.md) (rules + loop).
-Language: TypeScript/ESM, Node >= 20. Tests: Vitest, colocated `*.test.ts`.
+Language: TypeScript/ESM, Node >= 22.13. Tests: Vitest, colocated `*.test.ts`.
 
 ## Entry points
 
