@@ -53,6 +53,8 @@ Usage:
   posthorn admin list-apps            List all apps (oldest first)
   posthorn admin list-keys <appId>    List an app's API keys (metadata only — never the secret)
   posthorn admin revoke-key <keyId>   Revoke an API key
+  posthorn admin backup <dir>         Snapshot the data directory into <dir> (online, consistent)
+  posthorn admin restore <dir>        Restore a backup from <dir> (--force to overwrite live data)
   posthorn admin help                 Show this help
 
 The data location follows POSTHORN_DATA_DIR (default ./posthorn-data) — the same store

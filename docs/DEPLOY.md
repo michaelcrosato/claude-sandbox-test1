@@ -1047,9 +1047,45 @@ back to the previous image if needed — the new columns will simply be ignored 
 the older binary (SQLite's strict-table mode does not reject unknown columns
 on read; Posthorn's schema is additive).
 
-### Backup
+### Backup & restore
 
-Back up the data directory before any upgrade:
+Back up before any upgrade. Posthorn ships first-class backup/restore for the default
+SQLite backend:
+
+```bash
+# Snapshot the live data directory into a FRESH directory (safe while the server runs):
+posthorn admin backup /backups/posthorn-$(date +%Y%m%d-%H%M%S)
+
+# Restore a snapshot back into the data directory (stop the server first; --force
+# is required to overwrite an existing data directory):
+posthorn admin restore /backups/posthorn-20260101-000000 --force
+```
+
+`backup` uses SQLite's online `VACUUM INTO`: it writes a consistent, defragmented
+single-file snapshot of each store plus a `manifest.json` describing the set — there is
+no `-wal`/`-shm` sidecar to copy, and it does not stop the running worker. Each store
+opens with a 5-second busy-timeout, so a momentary lock overlap with a live gateway waits
+rather than failing with `database is locked`. The destination must be empty, so point
+each run at a new (e.g. timestamped) directory. `restore` validates the manifest, then
+atomically replaces each store file and clears any stale journal sidecars; it refuses a
+non-empty data directory unless you pass `--force` — stop the gateway before restoring
+over live data.
+
+In Docker, run the command in a one-shot container sharing the data volume (same pattern
+as bootstrapping a tenant), plus a host directory for the backups:
+
+```bash
+# Back up into ./backups on the host:
+docker run --rm -v posthorn-data:/data -v "$(pwd)/backups:/backups" \
+  posthorn admin backup /backups/$(date +%Y%m%d-%H%M%S)
+
+# Restore (stop the server container first):
+docker run --rm -v posthorn-data:/data -v "$(pwd)/backups:/backups" \
+  posthorn admin restore /backups/20260101-000000 --force
+```
+
+You can still snapshot the whole directory with `tar`/`cp` if you prefer — just copy each
+`.db` file together with its `-wal`/`-shm` siblings atomically:
 
 ```bash
 # For a named Docker volume:
@@ -1060,13 +1096,17 @@ docker run --rm -v posthorn-data:/data -v $(pwd):/backup alpine \
 cp -r /srv/posthorn-data /srv/posthorn-data.bak
 ```
 
-SQLite files can also be backed up online (the WAL journal makes this safe with
-a running server) using the SQLite `.backup` command or any file-copy method
-that copies both the `.sqlite` file and its `-wal` / `-shm` siblings atomically.
-Each store opens its database with a 5-second SQLite busy-timeout, so concurrent
-access from another process — an online `.backup`, the `posthorn admin` CLI, or
-the brief file overlap while a rolling deploy hands off — waits for the write
-lock to free instead of failing immediately with `database is locked`.
+**PostgreSQL backend.** When `POSTHORN_DATABASE_URL` is set the data directory is unused,
+so `posthorn admin backup`/`restore` decline (and point back here). Use your database's
+native tooling instead:
+
+```bash
+# Snapshot (custom format, compressed):
+pg_dump --format=custom --no-owner "$POSTHORN_DATABASE_URL" > posthorn.dump
+
+# Restore into the configured database:
+pg_restore --clean --if-exists --no-owner --dbname "$POSTHORN_DATABASE_URL" posthorn.dump
+```
 
 ---
 

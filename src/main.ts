@@ -20,9 +20,11 @@ import { createPostgresPool } from "./db/postgres.js";
 import { loadConfig } from "./runtime/config.js";
 import { createGateway, resolveLocations } from "./runtime/gateway.js";
 import { runAdminCommand } from "./runtime/admin.js";
+import { runBackupCommand } from "./runtime/backup.js";
 import { runClientCommand } from "./runtime/client-cli.js";
 import { PosthornClient } from "./sdk/client.js";
 import { createLogger } from "./logging/logger.js";
+import { POSTHORN_VERSION } from "./version.js";
 
 /**
  * Run a one-shot `posthorn admin` command against the configured data store, then
@@ -36,6 +38,18 @@ async function runAdmin(args: readonly string[]): Promise<number> {
   const config = loadConfig(process.env);
   const out = (line: string): void => console.log(line);
   const err = (line: string): void => console.error(line);
+
+  // backup/restore snapshot the data directory itself (or, for Postgres, print the
+  // pg_dump runbook and decline) — they don't open the app store, so route them first.
+  if (args[0] === "backup" || args[0] === "restore") {
+    return runBackupCommand(args, {
+      dataDir: config.dataDir,
+      databaseUrl: config.databaseUrl,
+      version: POSTHORN_VERSION,
+      out,
+      err,
+    });
+  }
 
   if (config.databaseUrl) {
     // Postgres backend: provision against the same shared database the gateway reads.
