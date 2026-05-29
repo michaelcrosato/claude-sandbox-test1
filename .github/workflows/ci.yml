@@ -55,6 +55,47 @@ jobs:
           test "$got_version" = "${{ steps.ver.outputs.version }}"
           test "$got_license" = "MIT"
 
+  helm:
+    name: Helm chart lint + render
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: helm lint deploy/helm/posthorn
+
+      - name: Render — default (SQLite, single replica)
+        run: helm template rel deploy/helm/posthorn
+
+      - name: Render — Postgres with every optional template enabled
+        run: |
+          helm template rel deploy/helm/posthorn \
+            --set backend.type=postgres \
+            --set backend.postgres.url=postgres://u:p@db:5432/posthorn \
+            --set replicaCount=3 \
+            --set admin.enabled=true --set admin.token=0123456789abcdefX \
+            --set signup.enabled=true \
+            --set billing.provider=stripe \
+            --set billing.stripe.secretKey=sk_test_x \
+            --set billing.stripe.webhookSecret=whsec_x \
+            --set ingress.enabled=true --set ingress.className=nginx \
+            --set podDisruptionBudget.enabled=true \
+            --set serviceMonitor.enabled=true
+
+      - name: Guard — SQLite is single-writer and must refuse to scale
+        run: |
+          if helm template rel deploy/helm/posthorn --set replicaCount=2 >/dev/null 2>&1; then
+            echo "BUG: chart rendered a multi-replica SQLite deployment"; exit 1
+          fi
+          if helm template rel deploy/helm/posthorn --set backend.type=postgres >/dev/null 2>&1; then
+            echo "BUG: chart rendered a Postgres deployment with no connection string"; exit 1
+          fi
+          echo "validation guards fire as expected"
+
   package:
     name: Publish readiness (npm pack)
     runs-on: ubuntu-latest

@@ -20,10 +20,11 @@ procedures.
 10. [Billing](#billing)
 11. [PostgreSQL backend](#postgresql-backend)
 12. [Running multiple replicas (active/active)](#running-multiple-replicas-activeactive)
-13. [Upgrading](#upgrading)
-14. [Standalone binary (without Docker)](#standalone-binary-without-docker)
-15. [Embedding as a library](#embedding-as-a-library)
-16. [Tuning for throughput](#tuning-for-throughput)
+13. [Deploying on Kubernetes with Helm](#deploying-on-kubernetes-with-helm)
+14. [Upgrading](#upgrading)
+15. [Standalone binary (without Docker)](#standalone-binary-without-docker)
+16. [Embedding as a library](#embedding-as-a-library)
+17. [Tuning for throughput](#tuning-for-throughput)
 
 ---
 
@@ -925,6 +926,80 @@ Posthorn's schema migrations are **forward-only and additive**
 *during* a rolling deploy is safe: a new replica adds any missing columns on boot, and
 older replicas ignore columns they do not know about. Upgrade one replica at a time
 behind the load balancer; no maintenance window or separate migration step is required.
+
+---
+
+## Deploying on Kubernetes with Helm
+
+A Helm chart lives in [`deploy/helm/posthorn`](../deploy/helm/posthorn). It renders the
+`Deployment` + `Service` shape described above — `livenessProbe` on `GET /healthz`,
+`readinessProbe` on `GET /readyz`, a derived `terminationGracePeriodSeconds`, a
+locked-down non-root pod, and the full `POSTHORN_*` surface as values — for both storage
+backends.
+
+### Install (embedded SQLite — the single-container default)
+
+```bash
+helm install posthorn ./deploy/helm/posthorn \
+  --set image.repository=<your-registry>/posthorn \
+  --set image.tag=1.0.0
+```
+
+This is the zero-dependency path: one replica, a `ReadWriteOnce`
+`PersistentVolumeClaim` mounted at `/data`, and an `update` strategy of
+`Recreate` (one SQLite writer can't overlap with its successor on the volume). SQLite is
+**single-writer**, so the chart *refuses to render* a multi-replica or autoscaled SQLite
+deployment — `replicaCount > 1` or `autoscaling.enabled=true` aborts `helm install` with an
+explanatory error rather than producing a deployment that corrupts on the second pod.
+
+### Install (shared Postgres — horizontally scalable)
+
+For the [active/active](#running-multiple-replicas-activeactive) path, point the chart at a
+Postgres database and scale out. Keep the connection string in a `Secret` (either let the
+chart create one from `backend.postgres.url`, or reference your own with
+`backend.postgres.existingSecret`):
+
+```bash
+helm install posthorn ./deploy/helm/posthorn \
+  --set image.repository=<your-registry>/posthorn --set image.tag=1.0.0 \
+  --set backend.type=postgres \
+  --set backend.postgres.existingSecret=posthorn-db \
+  --set replicaCount=3 \
+  --set backend.postgres.poolMax=10            # 3 × 10 = 30 ≤ server max_connections
+```
+
+In Postgres mode the pods are **stateless** — no PVC is mounted — so a `HorizontalPodAutoscaler`
+(`autoscaling.enabled=true`), a `PodDisruptionBudget`, and a rolling update strategy all apply.
+
+### What the values control
+
+| Value | Maps to | Notes |
+|-------|---------|-------|
+| `backend.type` | storage backend | `sqlite` (default, needs `persistence`) or `postgres`. |
+| `backend.postgres.url` / `.existingSecret` | `POSTHORN_DATABASE_URL` | Injected via `Secret`, never a plain env value. |
+| `admin.enabled` + `admin.token` / `.existingSecret` | `POSTHORN_ADMIN_TOKEN` | Off by default — the admin API stays `404` until set. |
+| `signup.enabled` / `signup.ratePerMinute` | `POSTHORN_SIGNUP_ENABLED` / `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` | Self-serve onboarding, off by default. |
+| `billing.provider` + `billing.stripe.*` | `POSTHORN_BILLING_PROVIDER`, `POSTHORN_STRIPE_*` | Stripe keys land in a `Secret`. |
+| `config.*` | the remaining `POSTHORN_*` knobs | HTTP timeouts, worker/fan-out tuning, HSTS, retention, SSRF policy — see the [Configuration reference](#configuration-reference). |
+| `terminationGracePeriodSeconds` | pod grace | Empty = derived as `config.http.shutdownGraceMs / 1000 + 5s`, satisfying the [graceful-shutdown rule](#graceful-shutdown-and-the-drain-window). |
+| `serviceMonitor.enabled` | Prometheus Operator | Scrapes `/metrics`; requires the Operator CRDs. |
+
+Secrets (`POSTHORN_ADMIN_TOKEN`, `POSTHORN_DATABASE_URL`, the Stripe keys) are always wired
+through a Kubernetes `Secret` — either chart-managed from an inline value, or your own via the
+matching `existingSecret` field — never as a plain-text `ConfigMap`/env entry. A
+`checksum/config` (and `checksum/secret`) pod annotation rolls the pods automatically when
+config changes.
+
+### Verify the release
+
+```bash
+helm test posthorn        # runs an in-cluster probe of GET /readyz
+helm lint ./deploy/helm/posthorn
+helm template posthorn ./deploy/helm/posthorn   # render manifests without installing
+```
+
+`helm lint` and a render of both backends run in CI, so a chart change that breaks templating
+fails the build.
 
 ---
 
