@@ -34,3 +34,6 @@ docs/log/
 # VCS internals / OS cruft
 .git/
 .DS_Store
+
+# Parallel-work git worktrees (agent-local; never committed or scanned)
+.claude/worktrees/

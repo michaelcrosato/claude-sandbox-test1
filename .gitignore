@@ -13,6 +13,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 posthorn-data/
+.claude/worktrees/
 .env
 .env.*
 !.env.example

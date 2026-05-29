@@ -101,6 +101,24 @@ commit (and the loop's `Decisions`/`Next`), and continue.
 - Anything destructive or hard to reverse; **pushing or merging to `main`**.
 - Editing a hash-protected file (`scripts/manifest.txt`) or hand-editing `docs/LOG.md`.
 
+## Parallel work / worktrees
+
+Optional — the single-tree loop is the default. For a **risky or throwaway change** (a big
+refactor, a spike you may discard) or to run **independent ticks in parallel** without their
+trees clobbering each other, use a git worktree so each line of work is an isolated checkout
+sharing one `.git`:
+
+```
+git worktree add .claude/worktrees/<slug> -b <branch>          # isolated tree on a new branch
+cd .claude/worktrees/<slug> && bash scripts/agent/bootstrap.sh # npm ci (node_modules isn't shared)
+# …change + gate (bash scripts/agent/check.sh) as usual…
+git worktree remove .claude/worktrees/<slug>                   # after the work has landed
+```
+
+`.claude/worktrees/` is gitignored and `.aiignore`d, so those checkouts are never committed or
+scanned. All the hard rules still apply inside a worktree — never push or merge to `main`
+without an explicit human ask.
+
 ## Token efficiency
 
 - Respect [.aiignore](.aiignore): never scan `node_modules/`, `dist/`, `site/`, `coverage/`,
