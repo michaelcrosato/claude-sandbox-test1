@@ -1,6 +1,6 @@
 # SPEC-H1 — npm publish readiness (HUMAN-GATED; agent may prep only)
 
-- **Owner:** human (publish) + agent (prep/dry-run only) · **Phase:** D · **Status:** not started
+- **Owner:** human (publish) + agent (prep/dry-run only) · **Phase:** D · **Status:** OIDC `publish.yml` added (dormant); npm-side trusted-publisher activation pending (no npm auth in env — `ENEEDAUTH`)
 - **EXCLUSION:** real `npm publish` is credential-gated — never run it autonomously.
 
 ## Description

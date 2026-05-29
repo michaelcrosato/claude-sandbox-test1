@@ -71,11 +71,11 @@ remainder is prepped to the maximum and blocked on a human. Ground truth this ru
 | Spec | Lane | Status | Note |
 | --- | --- | --- | --- |
 | SPEC-M1 steady-state maintenance | agent | ✅ **complete** (steady state) | gate green on **both** backends (SQLite 2068/2068; Postgres 2358/2358) · audit 0 · 0 TODO · contract drift tests green — no open maintenance need |
-| SPEC-H1 npm-publish readiness | human + agent-prep | ✅ prep done · ⛔ blocked | tarball verified; `npm publish` (trusted-publishing + provenance) needs human creds |
+| SPEC-H1 npm-publish readiness | human + agent-prep | ✅ prep + **OIDC `publish.yml` added** · ⛔ publish blocked | tarball verified, secret-less trusted-publishing workflow committed (dormant); needs npm-side trusted-publisher + a release tag (env has no npm auth — `ENEEDAUTH`) |
 | SPEC-H2 docker → registry | human + agent-prep | ✅ prep done · ⛔ blocked | image builds + labels correct; registry **push** needs human creds |
 | SPEC-H3 live Stripe | human + agent-prep | ✅ prep done · ⛔ blocked | flag-gated provider + mock tests green; **live keys** needed |
 | SPEC-H4 hosted demo + domain | human | ✅ artifacts build · ⛔ blocked | site builds, helm renders in CI; infra/domain/trademark are human |
-| SPEC-H5 5 discovery questions | human | ⛔ blocked | strategy; must not be answered in code |
+| SPEC-H5 5 discovery questions | human → **delegated** | ✅ **DECIDED 2026-05-29** | recorded in `docs/GOAL.md` › "Discovery Decisions" (name=Posthorn · self-host-first · meter messages · Docker-first · npm+image+landing); reversible |
 | SPEC-WONTDO non-goals | — | n/a | not implemented, by design |
 
 **Completion statement.** The autonomous lane (SPEC-M1) is at steady state — verified on **both**

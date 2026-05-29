@@ -190,3 +190,31 @@ backlog or the bounded-maintenance set is a human-supervised decision — record
 3. Should the free/paid plan meter accepted messages, delivery attempts, active endpoints, or a blended unit?
 4. Which deployment target must be polished first: Docker Compose, Kubernetes, npm library embedding, or managed cloud?
 5. What is the minimum public-launch bar: npm package, Docker image, hosted demo, landing page, or all four together?
+
+## Discovery Decisions — delegated to the agent (2026-05-29)
+
+A human operator delegated these five decisions to the agent ("make those decisions, document it,
+and proceed"). They are decided below, aligned with the strategic brief above; **all are reversible** —
+a human can override any by editing this section.
+
+1. **Public name → keep "Posthorn".** Established across the code, package, docs, and image labels;
+   the 2026-05-25 owner check found no conflicting public repo. Renaming now is pure churn. (A formal
+   trademark search/registration remains a separate human/legal step — not a code action.)
+2. **First commercial path → open-core self-host now, hosted-cloud tier later.** The MIT core stays
+   free and self-hostable (the wedge); monetize via a hosted/managed tier and paid support once there
+   is demand. Matches "simple self-host path first, hosted/cloud monetization later."
+3. **Metering unit → accepted messages (per-tenant, monthly).** Already implemented
+   (`monthlyMessageQuota`, `429` on breach); simplest unit to explain and bill; mirrors the incumbent
+   per-message model. Delivery attempts/active endpoints stay observable but are not the billed unit.
+4. **First deploy target to polish → Docker (single container).** The headline artifact and the
+   operational wedge; Helm and library-embedding remain supported secondary paths.
+5. **Minimum public-launch bar → npm package + Docker image + landing page.** All three are already
+   buildable and gate-clean (`npm pack`, `docker build`, `npm run build:site`). A hosted live demo is
+   deferred (ongoing infra cost/ops) and can follow launch.
+
+These decisions unblock the *codeable* parts of launch (e.g. the OIDC publish workflow at
+`.github/workflows/publish.yml`). The remaining steps are **credential-gated and cannot be performed
+without real accounts/tokens/payment** — verified absent in the build environment on 2026-05-29 (npm
+`ENEEDAUTH`; no registry login; `STRIPE_*`/`NPM_TOKEN`/`DOCKER_*` unset): publishing to npm, pushing
+the image to a registry, enabling live Stripe, buying a domain, and trademark registration. See
+`plan/specs/SPEC-H1…H4`.

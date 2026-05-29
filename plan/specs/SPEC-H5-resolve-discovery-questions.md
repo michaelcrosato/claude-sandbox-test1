@@ -1,6 +1,6 @@
 # SPEC-H5 — Resolve the 5 discovery questions (HUMAN STRATEGY)
 
-- **Owner:** human · **Phase:** gates D · **Status:** open
+- **Owner:** human → **delegated to agent** · **Phase:** gates D · **Status:** ✅ DECIDED 2026-05-29 (see [`docs/GOAL.md`](../../docs/GOAL.md) › "Discovery Decisions"; reversible)
 - These are the open strategy questions in [`docs/GOAL.md`](../../docs/GOAL.md) "Non-Blocking
   Discovery Questions". **Must not be answered in code by an agent.**
 
