@@ -45,6 +45,7 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:json": "vitest run --reporter=json --outputFile=test-results.json",
     "agent:check": "npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {

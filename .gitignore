@@ -2,6 +2,7 @@ node_modules/
 dist/
 site/
 coverage/
+test-results.json
 __pycache__/
 *.pyc
 *.log

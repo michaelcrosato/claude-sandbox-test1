@@ -54,6 +54,7 @@ hand-edit the log.
 | **Definition-of-done gate** | `bash scripts/agent/check.sh` · or `npm run agent:check` (any shell) · or canonical `pwsh scripts/local-gate.ps1` |
 | Type-check | `npm run typecheck` |
 | Test (all / one) | `npm test` · `bash scripts/agent/test.sh src/http/api.test.ts` |
+| Test → machine-readable | `npm run test:json` → writes JSON results to `test-results.json` (gitignored; opt-in, leaves default `npm test` unchanged) |
 | Build | `npm run build` |
 | Lint / format | none — deliberate (see Conventions › Code style); `scripts/agent/{lint,format}.sh` report "skipped" and exit 0 |
 | Docs site | `npm run build:site` |
