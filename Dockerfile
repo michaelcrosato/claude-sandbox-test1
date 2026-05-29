@@ -42,6 +42,18 @@ RUN npm run build \
 # ---------------------------------------------------------------------------
 FROM node:24-alpine AS runtime
 
+# OCI image metadata (https://github.com/opencontainers/image-spec). VERSION is
+# supplied at build time — CI passes the package.json version; it defaults to
+# "dev" for a bare `docker build`.
+ARG POSTHORN_VERSION=dev
+LABEL org.opencontainers.image.title="Posthorn" \
+      org.opencontainers.image.description="Standard Webhooks-compliant reliable outbound webhook delivery — single container, embedded SQLite, no Redis." \
+      org.opencontainers.image.source="https://github.com/michaelcrosato/claude-sandbox-test1" \
+      org.opencontainers.image.documentation="https://github.com/michaelcrosato/claude-sandbox-test1#readme" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Michael Crosato" \
+      org.opencontainers.image.version="${POSTHORN_VERSION}"
+
 ENV NODE_ENV=production \
     POSTHORN_HOST=0.0.0.0 \
     POSTHORN_PORT=3000 \

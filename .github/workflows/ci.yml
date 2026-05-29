@@ -31,3 +31,71 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from package.json
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: docker build --build-arg POSTHORN_VERSION=${{ steps.ver.outputs.version }} -t posthorn:ci .
+
+      - name: Verify OCI labels
+        run: |
+          set -euo pipefail
+          got_version=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' posthorn:ci)
+          got_license=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' posthorn:ci)
+          echo "version label: $got_version | license label: $got_license"
+          test "$got_version" = "${{ steps.ver.outputs.version }}"
+          test "$got_license" = "MIT"
+
+  package:
+    name: Publish readiness (npm pack)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Assert tarball contents (entrypoints in, tests/maps out)
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "const d=JSON.parse(require('fs').readFileSync('pack.json','utf8'));const f=d[0].files.map(x=>x.path);const bad=f.filter(p=>/[.]test[.]|[.]map$/.test(p));if(bad.length){console.error('forbidden files in tarball:',bad);process.exit(1);}for(const need of ['dist/index.js','dist/index.d.ts','dist/main.js']){if(!f.includes(need)){console.error('missing required entrypoint:',need);process.exit(1);}}console.log('pack OK:',d[0].name+'@'+d[0].version,f.length,'files');"
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Posthorn ships zero required runtime dependencies (the core is Node
+      # built-ins; pg is optional), so the production tree should audit clean.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
