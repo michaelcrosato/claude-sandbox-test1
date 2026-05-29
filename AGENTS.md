@@ -39,8 +39,9 @@ are listed in `scripts/manifest.txt`. **Never modify them. Never hand-edit `docs
 Summarizes [docs/AGENT-LOOP.md](docs/AGENT-LOOP.md) (authoritative). Repeat unprompted:
 
 `status` → read GOAL + ROADMAP + REPO_MAP + top ticket → pick one unblocked, small ticket →
-mark it in-progress → make the change → **targeted checks then the full gate** → update docs +
-the ticket → file follow-up tickets → summarize. Inside the harness the iteration is logged to
+mark it in-progress → make the change → **targeted checks then the full gate** → self-review the
+diff (optionally via the `code-reviewer` subagent in `.claude/agents/`) → update docs + the
+ticket → file follow-up tickets → summarize. Inside the harness the iteration is logged to
 `docs/LOG.md` automatically; outside it, record rationale in the ticket + commit message — never
 hand-edit the log.
 
