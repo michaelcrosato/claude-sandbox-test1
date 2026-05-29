@@ -320,7 +320,7 @@ All settings are environment variables. See `.env.example` for a template.
 | `POSTHORN_PORT` | `3000` | HTTP port. |
 | `POSTHORN_DATA_DIR` | `./posthorn-data` | SQLite data directory, or `:memory:` for ephemeral. |
 | `POSTHORN_MAX_BODY_BYTES` | `1000000` | Request-body size cap (`413` beyond it). |
-| `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API + dashboard. Minimum 32 chars. |
+| `POSTHORN_ADMIN_TOKEN` | _(unset)_ | Enables the admin API + dashboard. Minimum 16 chars (use a long random value). |
 | `POSTHORN_WORKER_BATCH_SIZE` | `16` | Deliveries claimed per worker tick. |
 | `POSTHORN_WORKER_CONCURRENCY` | `8` | Max deliveries in flight per tick. |
 | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout. |
@@ -339,7 +339,7 @@ posthorn_deliveries_total{outcome="dead_lettered"} 3
 posthorn_delivery_tasks{status="dead_letter"} 3   ← the gauge to alert on
 posthorn_dead_letter_tasks{reason="connection_refused"} 3   ← why they died
 posthorn_uptime_seconds 86400
-posthorn_build_info{version="0.0.1"} 1
+posthorn_build_info{version="1.0.0"} 1
 ```
 
 For a production Prometheus + Alertmanager setup with ready-made alerting rules, see
@@ -357,10 +357,20 @@ Set `POSTHORN_ADMIN_TOKEN` to unlock a browser UI at `/dashboard`:
 
 ```bash
 npm install
-npm test            # vitest (~1890 tests, ~22s)
+npm test            # vitest (~2060 tests)
 npm run typecheck
 npm run build
 ```
+
+## Contributing & automation
+
+Working on Posthorn (human or AI agent)? Start here:
+
+- **[GOAL.md](GOAL.md)** — what this project is and its current state (canonical: [docs/GOAL.md](docs/GOAL.md)).
+- **[ROADMAP.md](ROADMAP.md)** — phased plan and the open worklist.
+- **[AGENTS.md](AGENTS.md)** — rules, conventions, and the maintenance loop for autonomous agents.
+- **[tickets/](tickets/)** — atomic, executable units of work.
+- **[docs/ai/REPO_MAP.md](docs/ai/REPO_MAP.md)** — where everything lives in `src/`.
 
 ## License
 

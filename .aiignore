@@ -1,0 +1,36 @@
+# Paths autonomous coding agents should skip when reading/searching this repo.
+# Mirrors .gitignore's generated/vendor noise plus large auto-managed artifacts.
+# Orient with docs/ai/REPO_MAP.md instead of scanning these trees.
+
+# Dependencies / vendored
+node_modules/
+**/__pycache__/
+**/*.pyc
+
+# Build output (generated; dist/ mirrors src/ and is gitignored, site/ is built)
+dist/
+site/
+coverage/
+
+# Local data / SQLite databases (one file per store, + WAL/SHM)
+posthorn-data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+
+# Secrets / local env — never read these; .env.example is the template
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Auto-managed append-only log archives — read the docs/LOG.md tail, not the full archive
+docs/log/
+
+# VCS internals / OS cruft
+.git/
+.DS_Store
