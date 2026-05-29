@@ -7,6 +7,7 @@ import {
 } from "./metrics.js";
 import type { TickResult } from "../worker/delivery-worker.js";
 import {
+  DELIVERY_FAILURE_REASONS,
   emptyDeliveryFailureCounts,
   type DeliveryFailureReason,
 } from "../delivery/failure-reason.js";
@@ -27,6 +28,16 @@ function tick(
     ...partial,
     failureReasons: { ...emptyDeliveryFailureCounts(), ...partial.failureReasons },
   };
+}
+
+/** Capture-group-1 matches of `re` in `text`, de-duplicated. */
+function captures(text: string, re: RegExp): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(re)) {
+    const group = m[1];
+    if (group !== undefined) out.add(group);
+  }
+  return out;
 }
 
 describe("MetricsRegistry", () => {
@@ -256,5 +267,32 @@ describe("renderPrometheus", () => {
 
   it("advertises the v0.0.4 text exposition content type", () => {
     expect(PROMETHEUS_CONTENT_TYPE).toBe("text/plain; version=0.0.4; charset=utf-8");
+  });
+
+  it("exposes only a closed, bounded set of label keys (high-cardinality guard)", () => {
+    // Cardinality guard: every label must be a bounded enum (or the single-value
+    // build_info), never a per-request/per-entity value. An endpoint id, destination URL,
+    // message id, or tenant id as a label would grow the series count without bound — the
+    // classic way to melt a Prometheus server. Per-endpoint breakdowns live in the API
+    // (GET /v1/endpoints/:id/stats), deliberately not here.
+    const text = renderPrometheus(snapshot);
+
+    // The complete set of label keys across all families is closed; adding e.g.
+    // `endpoint_id="…"` to any series would grow this set and fail the test.
+    expect(captures(text, /([a-zA-Z_]\w*)="/g)).toEqual(
+      new Set(["version", "outcome", "reason", "status"]),
+    );
+
+    // …and each enum label's value domain is exactly the bounded set it is meant to be.
+    expect(captures(text, /posthorn_deliveries_total\{outcome="([^"]+)"\}/g)).toEqual(
+      new Set(["succeeded", "failed", "dead_lettered", "stale"]),
+    );
+    expect(captures(text, /posthorn_delivery_tasks\{status="([^"]+)"\}/g)).toEqual(
+      new Set(["pending", "delivering", "succeeded", "dead_letter"]),
+    );
+    // Both reason-labeled families draw only from the closed DELIVERY_FAILURE_REASONS set.
+    expect(captures(text, /\{reason="([^"]+)"\}/g)).toEqual(
+      new Set<string>(DELIVERY_FAILURE_REASONS),
+    );
   });
 });
