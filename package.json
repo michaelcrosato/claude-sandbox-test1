@@ -39,6 +39,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:site": "node scripts/build-site.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
     "test": "vitest run",
