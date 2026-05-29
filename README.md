@@ -304,7 +304,7 @@ Set `POSTHORN_ADMIN_TOKEN` to unlock a browser UI at `/dashboard`:
 
 ```bash
 npm install
-npm test            # vitest (~1020 tests, ~2s)
+npm test            # vitest (~1890 tests, ~22s)
 npm run typecheck
 npm run build
 ```
