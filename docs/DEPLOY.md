@@ -108,6 +108,29 @@ posthorn admin revoke-key <keyId>
 posthorn admin help
 ```
 
+### Tenant CLI (`posthorn client`)
+
+`posthorn admin` is the **operator** path: it opens the local data store and needs
+filesystem access to the data directory. For tenant-side work — sending events and
+managing endpoints — there is also `posthorn client`, an ordinary API consumer that
+talks to the gateway over HTTP with a normal API key (no store access, no special
+privilege). It is handy for smoke-testing a fresh deployment from any host:
+
+```bash
+export POSTHORN_URL=http://localhost:3000        # the gateway base URL
+export POSTHORN_API_KEY=phk_...                   # a key from `posthorn admin create-key`
+
+posthorn client health                            # liveness probe
+posthorn client create-endpoint https://acme.example/hook user.created
+posthorn client send user.created '{"id":42}'
+posthorn client help                              # full command list
+```
+
+Read commands print JSON to stdout; a non-2xx response becomes an `API error …`
+line on stderr and a non-zero exit. `POSTHORN_URL` and `POSTHORN_API_KEY` are read
+**only** by this client command — they are not gateway/server configuration. See the
+[README](../README.md#command-line-client) for the complete verb list.
+
 ### Admin HTTP API (for hosted / remote provisioning)
 
 When `POSTHORN_ADMIN_TOKEN` is set, the operator control-plane API is also

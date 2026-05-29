@@ -204,6 +204,29 @@ try {
 }
 ```
 
+### Command-line client
+
+The same tenant surface, from your shell or a CI job — no code. `posthorn client`
+talks to a (possibly remote) gateway over HTTP using a normal API key; it is the
+no-code counterpart to the SDK above (and the consumer-side mirror of the operator
+`posthorn admin` CLI). Point it at the gateway with two environment variables:
+
+```bash
+export POSTHORN_URL=https://posthorn.acme.example   # the gateway base URL
+export POSTHORN_API_KEY=phk_...                      # a key from `posthorn admin create-key`
+
+posthorn client create-endpoint https://acme.example/hook user.created  # secret printed ONCE
+posthorn client send user.created '{"id":42}'        # publish an event
+posthorn client list-endpoints | jq '.[].url'        # read commands print JSON → pipe to jq
+posthorn client get-message msg_...                  # delivery status for a message
+posthorn client usage                                # quota for the current period
+posthorn client help                                 # full command list
+```
+
+Read commands print JSON to stdout; mutating commands print a one-line confirmation.
+A non-2xx from the gateway becomes a single `API error <status> (<code>): …` line on
+stderr and a non-zero exit, so it composes in scripts.
+
 ## Admin / Control-Plane SDK
 
 Provision tenants, manage quotas, and read billing usage programmatically:
