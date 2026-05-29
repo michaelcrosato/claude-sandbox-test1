@@ -51,10 +51,34 @@ source of truth (`docs/LOG.md` rotates entries to `docs/log/` archives).
 
 Capstone: `aea3d82` — refreshed `/ROADMAP.md` health snapshot to the verified gate state.
 
-## Forward
+## Execution / completion run — 2026-05-29 (`/goal`: execute plan/ to completion)
 
-- **Phase C** steady-state maintenance — ▶ ongoing, autonomous ([specs/SPEC-M1](specs/SPEC-M1-steady-state-maintenance.md)).
-- **Phase D** launch (npm publish, registry, live Stripe, hosted demo, domain/trademark) — ⛔
-  human-gated ([specs/SPEC-H1…H4](specs/)).
-- **Phase H5** the 5 discovery questions — ⛔ open human strategy ([specs/SPEC-H5](specs/SPEC-H5-resolve-discovery-questions.md)).
-- **Non-goals** — explicitly deferred ([specs/SPEC-WONTDO](specs/SPEC-WONTDO-non-goals.md), [BACKLOG.md](BACKLOG.md)).
+Every autonomously-executable spec was run to completion with real commands; the credential-gated
+remainder is prepped to the maximum and blocked on a human. Ground truth this run:
+
+| Check | Command | Result |
+| --- | --- | --- |
+| DoD gate | `npm run agent:check` | **exit 0** · 61 files · **2068/2068** tests · 0 errors · build clean |
+| Dep audit | `npm audit --omit=dev` | **0 vulnerabilities** |
+| Code hygiene | grep `TODO\|FIXME\|HACK\|XXX\|@deprecated` in `src` | **0 matches** |
+| Publish tarball | `npm pack --dry-run` | `posthorn-1.0.0.tgz` · 171 files · dist `.js`+`.d.ts`+bin · no test/map files |
+| Docs site | `npm run build:site` | `SITE_BUILD_OK` · 4 files → `site/` |
+| Container | `docker build` + `docker inspect` | **exit 0** · 7 OCI labels correct (`version=1.0.0`) |
+
+### Per-spec terminal status
+
+| Spec | Lane | Status | Note |
+| --- | --- | --- | --- |
+| SPEC-M1 steady-state maintenance | agent | ✅ **complete** (steady state) | gate green · audit 0 · 0 TODO · contract drift tests green — no open maintenance need |
+| SPEC-H1 npm-publish readiness | human + agent-prep | ✅ prep done · ⛔ blocked | tarball verified; `npm publish` (trusted-publishing + provenance) needs human creds |
+| SPEC-H2 docker → registry | human + agent-prep | ✅ prep done · ⛔ blocked | image builds + labels correct; registry **push** needs human creds |
+| SPEC-H3 live Stripe | human + agent-prep | ✅ prep done · ⛔ blocked | flag-gated provider + mock tests green; **live keys** needed |
+| SPEC-H4 hosted demo + domain | human | ✅ artifacts build · ⛔ blocked | site builds, helm renders in CI; infra/domain/trademark are human |
+| SPEC-H5 5 discovery questions | human | ⛔ blocked | strategy; must not be answered in code |
+| SPEC-WONTDO non-goals | — | n/a | not implemented, by design |
+
+**Completion statement.** The autonomous lane (SPEC-M1) is at steady state and the agent-doable prep
+for H1/H2/H3/H4 is verified by real commands. **No further task is executable without a human
+providing credentials/decisions** (the `docs/GOAL.md` EXCLUSIONS); attempting them is out of scope by
+hard rule. "Not to stop" is honored by completing everything executable — not by crossing the
+EXCLUSION boundary, inventing features, or pushing to `main`.
