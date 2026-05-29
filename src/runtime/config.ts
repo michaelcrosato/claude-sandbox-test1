@@ -40,6 +40,7 @@ import {
   type LogThreshold,
 } from "../logging/logger.js";
 import type { HstsPolicy } from "../http/security-headers.js";
+import { DEFAULT_STRIPE_TOLERANCE_SECONDS } from "../billing/index.js";
 import type { BillingConfig, BillingProviderKind } from "../billing/index.js";
 
 /**
@@ -650,6 +651,12 @@ function readBillingConfig(env: Env): BillingConfig {
     "POSTHORN_STRIPE_METER_EVENT_NAME",
     DEFAULT_STRIPE_METER_EVENT_NAME,
   );
+  const stripeWebhookToleranceSeconds = readInt(
+    env,
+    "POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS",
+    DEFAULT_STRIPE_TOLERANCE_SECONDS,
+    { min: 0 },
+  );
 
   if (provider === "stripe" && stripeSecretKey === null) {
     throw new ConfigError(
@@ -662,6 +669,7 @@ function readBillingConfig(env: Env): BillingConfig {
     stripeSecretKey,
     stripeWebhookSecret,
     stripeMeterEventName,
+    stripeWebhookToleranceSeconds,
   });
 }
 
@@ -719,6 +727,7 @@ function readSignupConfig(env: Env): SignupConfig {
  * `POSTHORN_STRIPE_SECRET_KEY` (Stripe `sk_…`; required when the provider is `stripe`),
  * `POSTHORN_STRIPE_WEBHOOK_SECRET` (Stripe `whsec_…`; optional — when unset the `POST /v1/billing/webhook` route stays `404`),
  * `POSTHORN_STRIPE_METER_EVENT_NAME` (Stripe meter `event_name` for usage pushes; default `posthorn_messages`),
+ * `POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS` (allowed inbound Stripe-webhook signature clock skew in seconds; default `300`),
  * `POSTHORN_SIGNUP_ENABLED` (`false` (default) keeps `POST /v1/signup` hidden as `404`; `true` exposes self-serve signup),
  * `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` (gateway-wide signups/min cap when enabled; default `10`).
  */

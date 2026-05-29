@@ -37,6 +37,7 @@ import { DEFAULT_AUTO_DISABLE_AFTER_MS } from "../endpoints/endpoint.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS } from "../net/guarded-transport.js";
 import { DEFAULT_PG_POOL_MAX } from "../db/postgres.js";
 import { DEFAULT_LOG_LEVEL } from "../logging/logger.js";
+import { DEFAULT_STRIPE_TOLERANCE_SECONDS } from "../billing/index.js";
 
 describe("loadConfig", () => {
   it("applies defaults for an empty environment", () => {
@@ -78,6 +79,7 @@ describe("loadConfig", () => {
         stripeSecretKey: null,
         stripeWebhookSecret: null,
         stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+        stripeWebhookToleranceSeconds: DEFAULT_STRIPE_TOLERANCE_SECONDS,
       },
       signup: {
         enabled: false,
@@ -653,6 +655,7 @@ describe("loadConfig", () => {
         stripeSecretKey: null,
         stripeWebhookSecret: null,
         stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+        stripeWebhookToleranceSeconds: DEFAULT_STRIPE_TOLERANCE_SECONDS,
       });
     });
 
@@ -714,8 +717,32 @@ describe("loadConfig", () => {
       ).toBe("custom_meter");
     });
 
+    it("defaults the webhook tolerance to 300s and reads an integer override", () => {
+      expect(loadConfig({}).billing.stripeWebhookToleranceSeconds).toBe(
+        DEFAULT_STRIPE_TOLERANCE_SECONDS,
+      );
+      expect(
+        loadConfig({ POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS: "600" }).billing
+          .stripeWebhookToleranceSeconds,
+      ).toBe(600);
+      // Blank is treated as unset → the default.
+      expect(
+        loadConfig({ POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS: "   " }).billing
+          .stripeWebhookToleranceSeconds,
+      ).toBe(DEFAULT_STRIPE_TOLERANCE_SECONDS);
+    });
+
+    it("rejects a non-integer or negative webhook tolerance with a ConfigError", () => {
+      expect(() =>
+        loadConfig({ POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS: "abc" }),
+      ).toThrow(/POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS must be an integer/);
+      expect(() =>
+        loadConfig({ POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS: "-1" }),
+      ).toThrow(ConfigError);
+    });
+
     it("reads the Stripe fields even under the none provider (so they stay enumerable)", () => {
-      // All four vars are read unconditionally; selecting none keeps them inert but
+      // All five vars are read unconditionally; selecting none keeps them inert but
       // still parsed, which is what keeps the doc-coverage probe able to see them.
       const billing = loadConfig({
         POSTHORN_BILLING_PROVIDER: "none",
@@ -727,6 +754,7 @@ describe("loadConfig", () => {
         stripeSecretKey: "sk_test_abc",
         stripeWebhookSecret: "whsec_def",
         stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+        stripeWebhookToleranceSeconds: DEFAULT_STRIPE_TOLERANCE_SECONDS,
       });
     });
 

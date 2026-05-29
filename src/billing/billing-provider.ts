@@ -45,6 +45,12 @@ export interface BillingConfig {
   readonly stripeWebhookSecret: string | null;
   /** The Stripe meter `event_name` a usage push is recorded under. */
   readonly stripeMeterEventName: string;
+  /**
+   * Allowed clock skew (seconds) when verifying an inbound Stripe webhook
+   * signature's timestamp — the operator-tunable replay window. Defaults to 300
+   * (5 min); forwarded to {@link import("./stripe-signature.js").verifyStripeSignature}.
+   */
+  readonly stripeWebhookToleranceSeconds: number;
 }
 
 /**

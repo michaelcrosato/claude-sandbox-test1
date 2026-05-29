@@ -199,6 +199,7 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_STRIPE_SECRET_KEY` | _(unset)_ | Stripe secret API key (`sk_…`). **Required** when `POSTHORN_BILLING_PROVIDER=stripe` (startup fails fast otherwise); ignored when `none`. Sent as the Bearer credential on outbound Stripe calls. |
 | `POSTHORN_STRIPE_WEBHOOK_SECRET` | _(unset)_ | Stripe webhook signing secret (`whsec_…`). Optional even under the `stripe` provider: when unset, outbound usage pushes still work but `POST /v1/billing/webhook` stays `404` (the inbound surface is opt-in, like the admin API). |
 | `POSTHORN_STRIPE_METER_EVENT_NAME` | `posthorn_messages` | The Stripe meter `event_name` a usage push is recorded under (Stripe Billing Meter Events API). Must match the meter configured in Stripe. Ignored when the provider is `none`. |
+| `POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS` | `300` | Allowed clock skew (seconds) when verifying an inbound Stripe webhook signature's timestamp — the replay window. Default `300` (5 min) matches Stripe's own recommendation; raise it only if clock sync is unreliable. A non-negative integer. Ignored when the provider is `none`. |
 | `POSTHORN_SIGNUP_ENABLED` | `false` | Expose the public `POST /v1/signup` route (creates a tenant + first API key on the `free` plan, no operator involvement). `false` (default) keeps it `404` — the same opt-in posture as the admin API — so an unattended gateway never lets the world mint tenants. See [Self-serve signup](#self-serve-signup). |
 | `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` | `10` | Maximum signups accepted per rolling minute, **gateway-wide** (a single global bucket, not per-IP — the core has no trustworthy client address). Over it, `POST /v1/signup` returns `429` with `Retry-After`. A positive integer (`1`–`10000`). Only applies when signup is enabled. |
 
@@ -583,6 +584,7 @@ POSTHORN_BILLING_PROVIDER=stripe
 POSTHORN_STRIPE_SECRET_KEY=sk_live_…           # required for the stripe provider
 POSTHORN_STRIPE_WEBHOOK_SECRET=whsec_…         # optional; enables the inbound webhook route
 POSTHORN_STRIPE_METER_EVENT_NAME=posthorn_messages   # must match your Stripe meter
+POSTHORN_STRIPE_WEBHOOK_TOLERANCE_SECONDS=300        # inbound signature replay window (default 300s)
 ```
 
 `POSTHORN_STRIPE_SECRET_KEY` is **required** when the provider is `stripe` — startup

@@ -70,6 +70,7 @@ export function createBillingProvider(
         secretKey: config.stripeSecretKey ?? "",
         webhookSecret: config.stripeWebhookSecret,
         meterEventName: config.stripeMeterEventName,
+        toleranceInSeconds: config.stripeWebhookToleranceSeconds,
         transport: deps.transport,
       });
     case "none":
