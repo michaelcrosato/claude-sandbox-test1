@@ -24,10 +24,10 @@ backlog: [docs/GOAL.md](docs/GOAL.md). Agent loop + rules: [AGENTS.md](AGENTS.md
 | 0 · Stabilize | done | Gates green; working tree clean; `main` green. |
 | 1 · Tooling / deps | done | `scripts/agent/*` + `npm run agent:check` + `.aiignore` (TICKET001). Linter/formatter stance decided explicitly in TICKET005. |
 | 2 · Docs / repo-map | done | `AGENTS.md`, `ROADMAP.md`, `docs/ai/REPO_MAP.md`, root `GOAL.md`/`CLAUDE.md` pointers (TICKET001, TICKET004). Keep README · OpenAPI · DEPLOY · SDK types synchronized as the product changes. |
-| 3 · Bugs / tests | ongoing | Fixed the README admin-token minimum (TICKET002). Run the compiled-dist smokes in CI (TICKET003). |
+| 3 · Bugs / tests | ongoing | Fixed the README admin-token minimum (TICKET002); the compiled-dist smokes now run in CI (TICKET003). |
 | 4 · Modularity | n/a | Architecture is stable and well-factored (per-subsystem dirs, three conformant store backends). Do not refactor without a concrete reason. |
 | 5 · Features | human-gated | Backlog complete; new product scope is a human-supervised strategy decision (`docs/GOAL.md`). |
-| 6 · CI | strong | Already comprehensive; the open candidate is a build+smoke job (TICKET003). |
+| 6 · CI | strong | Already comprehensive; the compiled-dist smoke job landed (TICKET003). |
 
 ## Work to tickets
 
@@ -35,7 +35,7 @@ backlog: [docs/GOAL.md](docs/GOAL.md). Agent loop + rules: [AGENTS.md](AGENTS.md
 | --- | --- | --- | --- |
 | [TICKET001](tickets/TICKET001.md) | Agent scaffolding (scripts, .aiignore, AGENTS/ROADMAP/REPO_MAP, pointers) | High | done |
 | [TICKET002](tickets/TICKET002.md) | Fix README admin-token minimum (32 → 16) | High | done |
-| [TICKET003](tickets/TICKET003.md) | Run compiled-dist smokes in CI | Medium | todo |
+| [TICKET003](tickets/TICKET003.md) | Run compiled-dist smokes in CI | Medium | done |
 | [TICKET004](tickets/TICKET004.md) | Repo map + keep human/agent docs in sync | Medium | done |
 | [TICKET005](tickets/TICKET005.md) | Decide & document the no-linter/-formatter stance | Low | done |
 

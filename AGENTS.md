@@ -59,7 +59,7 @@ hand-edit the log.
 | Lint / format | none — deliberate (see Conventions › Code style); `scripts/agent/{lint,format}.sh` report "skipped" and exit 0 |
 | Docs site | `npm run build:site` |
 | Benchmark | `npm run bench` |
-| Compiled-dist smoke | `npm run build && node scripts/smoke-<name>.mjs` (smokes hit `127.0.0.1`) |
+| Compiled-dist smoke | all (non-PG): `bash scripts/agent/smoke.sh` · one: `npm run build && node scripts/smoke-<name>.mjs` (smokes hit `127.0.0.1`) |
 | Log compliance | `python scripts/validate-log-compliance.py` |
 | Postgres-backed tests | `POSTHORN_TEST_PG_URL=postgres://… npm test` (Docker `postgres:16`) |
 

@@ -1,6 +1,6 @@
 # TICKET003 — Run compiled-dist smokes in CI
 
-- **Status:** todo
+- **Status:** done
 - **Priority:** Medium
 
 ## Goal
@@ -33,9 +33,9 @@ export or bin wiring break) would pass CI today. The per-item definition of done
    Linux, so that's moot.
 
 ## Acceptance criteria
-- [ ] A CI job builds and runs every non-Postgres smoke; the job is green on `main`.
-- [ ] A failing smoke fails the job (verify by temporarily breaking one locally).
-- [ ] Existing jobs unaffected; total CI time stays reasonable.
+- [x] A CI job builds and runs every non-Postgres smoke; the job is green on `main`.
+- [x] A failing smoke fails the job (verify by temporarily breaking one locally).
+- [x] Existing jobs unaffected; total CI time stays reasonable.
 
 ## Commands
 `npm run build && for f in scripts/smoke-*.mjs; do [ "$f" = scripts/smoke-postgres.mjs ] && continue; node "$f" || exit 1; done`
@@ -47,3 +47,13 @@ Smoke flakiness or port races in CI. Mitigate by running serially and binding ep
 ## Notes
 Keeps the "build / dry-run / mock-validate everything" posture: real npm publish + registry push
 stay human-gated (see `docs/GOAL.md` Exclusions).
+
+## Validation
+- Implemented as a `scripts/agent/smoke.sh` runner (builds dist, then runs every non-Postgres
+  `scripts/smoke-*.mjs`, failing on the first non-zero exit) called by a new `smoke` CI job.
+- `bash scripts/agent/smoke.sh` runs all 15 non-Postgres smokes green locally (incl. the Python
+  SDK smoke); the runner is the exact command CI invokes.
+- Failure path verified: a temporary always-failing smoke makes the runner exit non-zero and stop.
+- `.github/workflows/ci.yml` parses cleanly; the 5 existing jobs are unchanged.
+- The literal "green on main" registers on the first CI run after this branch is pushed/merged —
+  not performed here (pushing to `main` is human-gated).

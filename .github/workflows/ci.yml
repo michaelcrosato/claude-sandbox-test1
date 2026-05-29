@@ -38,6 +38,33 @@ jobs:
       - name: Build
         run: npm run build
 
+  smoke:
+    name: Compiled-dist smokes
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Run on the engines.node floor (flag-free node:sqlite); exercising the
+      # compiled end-to-end paths on the minimum supported Node is the signal
+      # the unit suite can't give.
+      - name: Set up Node 22.13
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # smoke.sh builds dist, then runs every scripts/smoke-*.mjs except the
+      # Postgres one (it needs a live PG service). python3 is preinstalled on
+      # ubuntu-latest and drives smoke-python-sdk.mjs (import-only, no pip).
+      - name: Build + run compiled-dist smokes
+        env:
+          PYTHON: python3
+        run: bash scripts/agent/smoke.sh
+
   docker:
     name: Docker image build
     runs-on: ubuntu-latest
