@@ -227,6 +227,33 @@ Read commands print JSON to stdout; mutating commands print a one-line confirmat
 A non-2xx from the gateway becomes a single `API error <status> (<code>): …` line on
 stderr and a non-zero exit, so it composes in scripts.
 
+## Python SDK
+
+A zero-dependency port of the SDK above, standard-library only (Python 3.9+), with the
+same surface and wire contract — see [`clients/python`](clients/python). A producer can
+move between the two languages without surprises; the method↔operation mapping is tested
+against the live `/openapi.json`, so the Python client cannot silently drift from the API.
+
+```python
+from posthorn import PosthornClient, PosthornApiError, verify_webhook
+
+client = PosthornClient("https://posthorn.acme.example", "phk_...")
+
+# Register a destination — signing secret returned once:
+endpoint = client.create_endpoint(url="https://acme.example/hook", event_types=["user.created"])
+
+# Send an event (idempotency_key is optional; a retry won't double-send):
+result = client.send_message(event_type="user.created", payload={"id": 42}, idempotency_key="req_abc123")
+result["fanout"]["matched"]  # number of endpoints a delivery was enqueued for
+
+# Verify an inbound delivery against the raw body before trusting it:
+verify_webhook(endpoint["secret"], request.headers, raw_body)  # raises on a bad signature
+```
+
+Methods return the gateway's JSON as plain `dict`/`list`. Optional arguments are omitted
+unless passed; pass `None` explicitly to send a JSON `null`. Failures raise a subclass of
+`PosthornError` (`PosthornApiError` carries `.status` and a stable `.code`).
+
 ## Admin / Control-Plane SDK
 
 Provision tenants, manage quotas, and read billing usage programmatically:

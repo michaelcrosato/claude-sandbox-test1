@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "posthorn"
+version = "1.0.0"
+description = "Official Python SDK for Posthorn — reliable, signed, observable webhook delivery."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Posthorn" }]
+keywords = ["webhooks", "standard-webhooks", "hmac", "delivery", "posthorn"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Internet :: WWW/HTTP",
+  "Typing :: Typed",
+]
+# Zero runtime dependencies — standard library only, the same posture as the gateway.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/posthorn/posthorn"
+Documentation = "https://github.com/posthorn/posthorn#readme"
+Source = "https://github.com/posthorn/posthorn"
+
+[tool.hatch.build.targets.wheel]
+packages = ["posthorn"]
+
+[tool.hatch.build.targets.sdist]
+include = ["posthorn", "tests", "README.md"]
