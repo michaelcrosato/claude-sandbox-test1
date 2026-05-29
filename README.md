@@ -46,6 +46,9 @@ For production deployment with Prometheus monitoring and Docker Compose, see
 | Standard Webhooks | yes | partial | **yes, first-class** |
 | Entry price | $0 → $490/mo | $99/mo | **$0, generous free tier** |
 
+See [`docs/PARITY.md`](docs/PARITY.md) for the full, code-verified feature matrix vs. Svix,
+Convoy, and Hookdeck — including the short worklist of gaps Posthorn is closing.
+
 Key capabilities:
 
 - **[Standard Webhooks](https://www.standardwebhooks.com/) signing** — `whsec_` secrets,
