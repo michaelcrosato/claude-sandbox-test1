@@ -137,3 +137,14 @@ succeeds (`bash scripts/agent/check.sh` runs all three). Plus, when applicable: 
 extended (store change), OpenAPI drift/orphan tests pass (route change), new env var documented in
 both `.env.example` + `docs/DEPLOY.md`, a dist smoke for any new end-to-end path. Keep `main`
 green; never touch the manifest files; never hand-edit `docs/LOG.md`.
+
+**Known flake — vitest worker teardown.** On a full `npm test` (vitest's default `forks` pool with
+per-file isolation) a worker process is occasionally torn down mid-cleanup, surfacing as a one-off
+`Error: Worker exited unexpectedly` / Tinypool error. It is **non-deterministic and not a real
+failure** — the cause is worker-recycle timing in a suite that boots many real gateways (HTTP
+sockets + `node:sqlite`), not a product or test bug. **Re-run protocol:** if a single full run fails
+*only* with a worker-exit/Tinypool error and **no test assertion actually failed**, re-run it — a
+genuine regression reproduces, the flake does not. Do **not** paper over it with a blanket `retry`
+(it would mask real regressions) or by forcing `singleFork` / `pool: "threads"` (the first serializes
+the whole suite; the second risks native-addon issues with `node:sqlite`) — the rare re-run is
+cheaper than either, which is why `vitest.config.ts` is left on the safe defaults.
