@@ -64,12 +64,13 @@ remainder is prepped to the maximum and blocked on a human. Ground truth this ru
 | Publish tarball | `npm pack --dry-run` | `posthorn-1.0.0.tgz` · 171 files · dist `.js`+`.d.ts`+bin · no test/map files |
 | Docs site | `npm run build:site` | `SITE_BUILD_OK` · 4 files → `site/` |
 | Container | `docker build` + `docker inspect` | **exit 0** · 7 OCI labels correct (`version=1.0.0`) |
+| Postgres backend | `POSTHORN_TEST_PG_URL=… npm test` (Docker `postgres:16`) | **exit 0** · 67/67 files · **2358/2358** tests (the 6 PG-gated files run, not skipped) |
 
 ### Per-spec terminal status
 
 | Spec | Lane | Status | Note |
 | --- | --- | --- | --- |
-| SPEC-M1 steady-state maintenance | agent | ✅ **complete** (steady state) | gate green · audit 0 · 0 TODO · contract drift tests green — no open maintenance need |
+| SPEC-M1 steady-state maintenance | agent | ✅ **complete** (steady state) | gate green on **both** backends (SQLite 2068/2068; Postgres 2358/2358) · audit 0 · 0 TODO · contract drift tests green — no open maintenance need |
 | SPEC-H1 npm-publish readiness | human + agent-prep | ✅ prep done · ⛔ blocked | tarball verified; `npm publish` (trusted-publishing + provenance) needs human creds |
 | SPEC-H2 docker → registry | human + agent-prep | ✅ prep done · ⛔ blocked | image builds + labels correct; registry **push** needs human creds |
 | SPEC-H3 live Stripe | human + agent-prep | ✅ prep done · ⛔ blocked | flag-gated provider + mock tests green; **live keys** needed |
@@ -77,8 +78,10 @@ remainder is prepped to the maximum and blocked on a human. Ground truth this ru
 | SPEC-H5 5 discovery questions | human | ⛔ blocked | strategy; must not be answered in code |
 | SPEC-WONTDO non-goals | — | n/a | not implemented, by design |
 
-**Completion statement.** The autonomous lane (SPEC-M1) is at steady state and the agent-doable prep
-for H1/H2/H3/H4 is verified by real commands. **No further task is executable without a human
-providing credentials/decisions** (the `docs/GOAL.md` EXCLUSIONS); attempting them is out of scope by
-hard rule. "Not to stop" is honored by completing everything executable — not by crossing the
-EXCLUSION boundary, inventing features, or pushing to `main`.
+**Completion statement.** The autonomous lane (SPEC-M1) is at steady state — verified on **both**
+store backends (SQLite 2068/2068, and Postgres 2358/2358 against a throwaway Docker `postgres:16`,
+since torn down) — and the agent-doable prep for H1/H2/H3/H4 is verified by real commands. **No
+further task is executable without a human providing credentials/decisions** (the `docs/GOAL.md`
+EXCLUSIONS); attempting them is out of scope by hard rule. "Not to stop" is honored by completing
+everything executable — not by crossing the EXCLUSION boundary, inventing features, or pushing to
+`main`.
