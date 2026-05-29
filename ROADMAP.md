@@ -3,12 +3,12 @@
 Phased plan for keeping Posthorn AFK-maintainable by autonomous agents. Canonical goal +
 backlog: [docs/GOAL.md](docs/GOAL.md). Agent loop + rules: [AGENTS.md](AGENTS.md).
 
-## Assessment (2026-05-28)
+## Assessment (2026-05-29)
 
 - **Product:** v1.0 feature-complete. The 11-item commercial-readiness backlog in `docs/GOAL.md`
   is done (through iter-0131); `docs/PARITY.md` is the code-verified competitor matrix with every
   codeable gap closed.
-- **Health:** gates green — `npm run typecheck` clean, `npm test` 2063 passing / 6 Postgres files
+- **Health:** gates green — `npm run typecheck` clean, `npm test` 2068 passing / 6 Postgres files
   skipped, `npm run build` succeeds. Zero `TODO`/`FIXME` in `src`. CI runs 5 jobs (type/test/build,
   docker image, helm lint+template, `npm pack` readiness, dependency audit).
 - **Gap this roadmap closes:** the repo was AFK-ready for its *bespoke* loop (`docs/AXIOMS.md`,
