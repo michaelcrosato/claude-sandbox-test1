@@ -37,7 +37,7 @@ backlog: [docs/GOAL.md](docs/GOAL.md). Agent loop + rules: [AGENTS.md](AGENTS.md
 | [TICKET002](tickets/TICKET002.md) | Fix README admin-token minimum (32 → 16) | High | done |
 | [TICKET003](tickets/TICKET003.md) | Run compiled-dist smokes in CI | Medium | todo |
 | [TICKET004](tickets/TICKET004.md) | Repo map + keep human/agent docs in sync | Medium | done |
-| [TICKET005](tickets/TICKET005.md) | Decide & document the no-linter/-formatter stance | Low | todo |
+| [TICKET005](tickets/TICKET005.md) | Decide & document the no-linter/-formatter stance | Low | done |
 
 ## Risks / blockers
 
