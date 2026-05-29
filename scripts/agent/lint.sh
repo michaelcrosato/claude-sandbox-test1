@@ -8,5 +8,5 @@ if has_script lint; then
 elif [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f .eslintrc ] || [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ] || [ -f biome.json ]; then
   if have npx; then info "eslint (via npx)"; npx --no-install eslint .; else skip "linter config present but npx unavailable"; fi
 else
-  skip "no linter configured (no \"lint\" script / eslint / biome) — type safety via tsc"
+  skip "skipped — no linter configured (deliberate; strict tsc is the style gate, see AGENTS.md)"
 fi

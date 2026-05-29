@@ -1,6 +1,6 @@
 # TICKET005 — Decide & document the no-linter/-formatter stance
 
-- **Status:** todo
+- **Status:** done
 - **Priority:** Low
 
 ## Goal
@@ -35,9 +35,9 @@ correctness gain.
 3. Ensure the agent scripts' "skipped" message reads as deliberate, not missing.
 
 ## Acceptance criteria
-- [ ] The no-linter/-formatter decision is documented in one canonical place and linked.
-- [ ] `lint.sh`/`format.sh` exit 0 and clearly state the absence is intentional.
-- [ ] No new dependency added (decision is "stay tool-free" unless a future ticket overturns it).
+- [x] The no-linter/-formatter decision is documented in one canonical place and linked.
+- [x] `lint.sh`/`format.sh` exit 0 and clearly state the absence is intentional.
+- [x] No new dependency added (decision is "stay tool-free" unless a future ticket overturns it).
 
 ## Commands
 `ls -a | grep -Ei 'eslint|prettier|biome'` · `bash scripts/agent/lint.sh` · `bash scripts/agent/format.sh`

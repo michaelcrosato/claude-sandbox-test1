@@ -9,5 +9,5 @@ elif [ -f .prettierrc ] || [ -f .prettierrc.json ] || [ -f .prettierrc.cjs ] || 
   mode="--check"; [ "${1:-}" = "--write" ] && mode="--write"
   if have npx; then info "prettier $mode (via npx)"; npx --no-install prettier "$mode" .; else skip "prettier config present but npx unavailable"; fi
 else
-  skip "no formatter configured (no \"format\" script / prettier config)"
+  skip "skipped — no formatter configured (deliberate; see AGENTS.md)"
 fi

@@ -55,7 +55,7 @@ hand-edit the log.
 | Type-check | `npm run typecheck` |
 | Test (all / one) | `npm test` · `bash scripts/agent/test.sh src/http/api.test.ts` |
 | Build | `npm run build` |
-| Lint / format | none configured — `scripts/agent/{lint,format}.sh` report "skipped" (tsc is the static gate) |
+| Lint / format | none — deliberate (see Conventions › Code style); `scripts/agent/{lint,format}.sh` report "skipped" and exit 0 |
 | Docs site | `npm run build:site` |
 | Benchmark | `npm run bench` |
 | Compiled-dist smoke | `npm run build && node scripts/smoke-<name>.mjs` (smokes hit `127.0.0.1`) |
@@ -67,6 +67,11 @@ hand-edit the log.
 - **TypeScript strict**: `exactOptionalPropertyTypes` (don't assign `undefined` to an optional —
   omit it), `noUncheckedIndexedAccess` (indexed access is `T | undefined`), `verbatimModuleSyntax`
   (use `import type`). ESM only.
+- **Code style — no linter/formatter, by deliberate choice.** Strict `tsc` (the settings above) plus
+  reviewer discipline are the style gate; the tree is small and consistent, so adding ESLint/
+  Prettier/Biome would churn every file for no correctness gain. `scripts/agent/{lint,format}.sh`
+  report "skipped — none configured (deliberate)" and exit 0. Revisit only with a concrete need, as
+  its own ticket with a one-shot format commit isolated from logic changes.
 - **Tests** are colocated `src/**/*.test.ts`. The three store backends (in-memory / SQLite /
   Postgres) share `src/<area>/conformance.ts` — **extend the conformance suite when a store
   changes.** Postgres tests skip unless `POSTHORN_TEST_PG_URL` is set.
