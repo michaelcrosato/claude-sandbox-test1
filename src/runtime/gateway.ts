@@ -604,6 +604,10 @@ export function createGateway(
       // The provider decides whether POST /v1/billing/webhook is live (404 when its
       // webhook secret is unset), the same opt-in posture as the admin API.
       billing,
+      // Self-serve signup config gating POST /v1/signup. `loadConfig` always supplies it
+      // (disabled by default → the route 404s); the truthy guard keeps a hand-built config
+      // that omits the field degrading to signup-off rather than crashing boot.
+      ...(config.signup ? { signup: config.signup } : {}),
       // Canonical public base URL for portal links, when configured; otherwise the
       // portalUrl is derived from the request Host + X-Forwarded-Proto. Truthy guard
       // (not `!== null`) so a hand-built config omitting the field degrades cleanly.

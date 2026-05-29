@@ -7,6 +7,7 @@ import {
   DEFAULT_HOST,
   DEFAULT_HTTP_SHUTDOWN_GRACE_MS,
   DEFAULT_PORT,
+  DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE,
   DEFAULT_STRIPE_METER_EVENT_NAME,
   MEMORY_DATA_DIR,
   MIN_ADMIN_TOKEN_LENGTH,
@@ -77,6 +78,10 @@ describe("loadConfig", () => {
         stripeSecretKey: null,
         stripeWebhookSecret: null,
         stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+      },
+      signup: {
+        enabled: false,
+        ratePerMinute: DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE,
       },
     });
   });
@@ -730,6 +735,62 @@ describe("loadConfig", () => {
       expect(Object.isFrozen(billing)).toBe(true);
       expect(() => {
         (billing as { provider: string }).provider = "stripe";
+      }).toThrow(TypeError);
+    });
+  });
+
+  describe("POSTHORN_SIGNUP_ENABLED / POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE (signup)", () => {
+    it("defaults to disabled with the default per-minute cap", () => {
+      expect(loadConfig({}).signup).toEqual({
+        enabled: false,
+        ratePerMinute: DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE,
+      });
+    });
+
+    it("enables signup on true/1 (case-insensitive, trimmed) and disables on false/0", () => {
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "true" }).signup.enabled).toBe(true);
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "  TRUE  " }).signup.enabled).toBe(true);
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "1" }).signup.enabled).toBe(true);
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "false" }).signup.enabled).toBe(false);
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "0" }).signup.enabled).toBe(false);
+    });
+
+    it("treats a blank enabled flag as the default (disabled)", () => {
+      expect(loadConfig({ POSTHORN_SIGNUP_ENABLED: "   " }).signup.enabled).toBe(false);
+    });
+
+    it("rejects a non-boolean enabled flag with a ConfigError", () => {
+      expect(() => loadConfig({ POSTHORN_SIGNUP_ENABLED: "yes" })).toThrow(ConfigError);
+    });
+
+    it("reads a custom per-minute cap", () => {
+      expect(
+        loadConfig({ POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE: "100" }).signup.ratePerMinute,
+      ).toBe(100);
+    });
+
+    it("rejects a cap below 1, above MAX_RATE_LIMIT, or non-integer", () => {
+      expect(() => loadConfig({ POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE: "0" })).toThrow(ConfigError);
+      expect(() =>
+        loadConfig({ POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE: String(MAX_RATE_LIMIT + 1) }),
+      ).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE: "1.5" })).toThrow(
+        ConfigError,
+      );
+    });
+
+    it("reads the cap even while disabled (so the var stays enumerable for the doc guard)", () => {
+      // Both vars are read unconditionally; the cap is parsed even with signup off, which
+      // is what keeps the doc-coverage probe able to see POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE.
+      const signup = loadConfig({ POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE: "42" }).signup;
+      expect(signup).toEqual({ enabled: false, ratePerMinute: 42 });
+    });
+
+    it("freezes the signup sub-config", () => {
+      const signup = loadConfig({}).signup;
+      expect(Object.isFrozen(signup)).toBe(true);
+      expect(() => {
+        (signup as { enabled: boolean }).enabled = true;
       }).toThrow(TypeError);
     });
   });

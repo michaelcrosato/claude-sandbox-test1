@@ -116,7 +116,7 @@ describe("buildOpenApiDocument — structure", () => {
     }
   });
 
-  it("marks exactly the four unauthenticated routes with `security: []`", () => {
+  it("marks exactly the five unauthenticated routes with `security: []`", () => {
     const doc = buildOpenApiDocument();
     const open = new Set<string>();
     for (const { key, op } of eachOperation(doc)) {
@@ -124,8 +124,16 @@ describe("buildOpenApiDocument — structure", () => {
         open.add(key);
       }
     }
+    // The probes + the OpenAPI doc, plus the public self-serve signup route (the one
+    // unauthenticated *write*; its opt-in 404 + rate limit are enforced in the handler).
     expect(open).toEqual(
-      new Set(["GET /healthz", "GET /readyz", "GET /metrics", "GET /openapi.json"]),
+      new Set([
+        "GET /healthz",
+        "GET /readyz",
+        "GET /metrics",
+        "GET /openapi.json",
+        "POST /v1/signup",
+      ]),
     );
   });
 });

@@ -106,6 +106,23 @@ export interface FanoutConfig {
   readonly idlePollMs: number;
 }
 
+/** Self-serve signup settings (the opt-in `POST /v1/signup` credential-bootstrap route). */
+export interface SignupConfig {
+  /**
+   * Whether the public `POST /v1/signup` route is exposed. `false` (the default)
+   * keeps it `404` — indistinguishable from a nonexistent path — so an unattended
+   * gateway never lets the world mint tenants. Enable for a self-serve deployment.
+   */
+  readonly enabled: boolean;
+  /**
+   * Maximum signups accepted per rolling minute, **gateway-wide** (not per-IP: the
+   * socket-agnostic core has no trustworthy client address, and `X-Forwarded-For` is
+   * spoofable). A coarse global cap that blunts automated tenant-spraying; tune it to
+   * the real human signup rate. Only consulted while {@link enabled}.
+   */
+  readonly ratePerMinute: number;
+}
+
 /** The fully-resolved, validated configuration a {@link createGateway} consumes. */
 export interface GatewayConfig {
   /** Interface to bind. See {@link DEFAULT_HOST}. */
@@ -253,6 +270,13 @@ export interface GatewayConfig {
    * See `POSTHORN_BILLING_PROVIDER` / `POSTHORN_STRIPE_*`.
    */
   readonly billing: BillingConfig;
+  /**
+   * Self-serve signup settings. Disabled by default (`POSTHORN_SIGNUP_ENABLED`
+   * unset), keeping the public `POST /v1/signup` route `404` — the same opt-in
+   * posture as the admin API. When enabled, the route is rate-limited gateway-wide.
+   * See `POSTHORN_SIGNUP_ENABLED` / `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE`.
+   */
+  readonly signup: SignupConfig;
 }
 
 /** A configuration value was missing-but-required or malformed. */
@@ -641,6 +665,28 @@ function readBillingConfig(env: Env): BillingConfig {
   });
 }
 
+/** Signups accepted per rolling minute (gateway-wide) when the route is enabled but no cap is set. */
+export const DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE = 10;
+
+/**
+ * Read the self-serve signup settings. Disabled by default
+ * (`POSTHORN_SIGNUP_ENABLED` unset/`false`), in which case `POST /v1/signup` stays
+ * `404`. The rate-limit cap is read **unconditionally** (independent of the enabled
+ * flag) so the whole signup configuration surface is enumerable by the doc-coverage
+ * test — a var read only when enabled would escape that check — and must be a
+ * positive integer in `[1, MAX_RATE_LIMIT]`.
+ */
+function readSignupConfig(env: Env): SignupConfig {
+  const enabled = readBool(env, "POSTHORN_SIGNUP_ENABLED", false);
+  const ratePerMinute = readInt(
+    env,
+    "POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE",
+    DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE,
+    { min: 1, max: MAX_RATE_LIMIT },
+  );
+  return Object.freeze<SignupConfig>({ enabled, ratePerMinute });
+}
+
 /**
  * Build a validated {@link GatewayConfig} from an environment record. Pure: it
  * never reads `process.env` directly (the caller passes it) and performs no I/O,
@@ -672,7 +718,9 @@ function readBillingConfig(env: Env): BillingConfig {
  * `POSTHORN_BILLING_PROVIDER` (`none` (default) | `stripe`; `stripe` enables metered usage + the webhook route),
  * `POSTHORN_STRIPE_SECRET_KEY` (Stripe `sk_…`; required when the provider is `stripe`),
  * `POSTHORN_STRIPE_WEBHOOK_SECRET` (Stripe `whsec_…`; optional — when unset the `POST /v1/billing/webhook` route stays `404`),
- * `POSTHORN_STRIPE_METER_EVENT_NAME` (Stripe meter `event_name` for usage pushes; default `posthorn_messages`).
+ * `POSTHORN_STRIPE_METER_EVENT_NAME` (Stripe meter `event_name` for usage pushes; default `posthorn_messages`),
+ * `POSTHORN_SIGNUP_ENABLED` (`false` (default) keeps `POST /v1/signup` hidden as `404`; `true` exposes self-serve signup),
+ * `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` (gateway-wide signups/min cap when enabled; default `10`).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const httpTimeouts = readHttpServerTimeouts(env);
@@ -757,6 +805,7 @@ export function loadConfig(env: Env): GatewayConfig {
       ),
     }),
     billing: readBillingConfig(env),
+    signup: readSignupConfig(env),
   };
   return Object.freeze(config);
 }

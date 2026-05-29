@@ -4589,3 +4589,84 @@ describe("createApi — POST /v1/billing/webhook (inbound provider webhook)", ()
     expect(body(res).error.code).toBe("invalid_request");
   });
 });
+
+describe("createApi — POST /v1/signup (self-serve onboarding)", () => {
+  function setupSignup(
+    signup?: { enabled: boolean; ratePerMinute: number },
+    now?: () => number,
+  ): { api: ApiHandler; apps: InMemoryAppStore } {
+    const apps = new InMemoryAppStore();
+    const api = createApi({
+      apps,
+      endpoints: new InMemoryEndpointStore(),
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      ...(signup !== undefined ? { signup } : {}),
+      ...(now !== undefined ? { now } : {}),
+    });
+    return { api, apps };
+  }
+  function signupRequest(payload?: unknown): ApiRequest {
+    return request({
+      method: "POST",
+      path: "/v1/signup",
+      headers: payload !== undefined ? { "content-type": "application/json" } : {},
+      rawBody: payload !== undefined ? JSON.stringify(payload) : "",
+    });
+  }
+  it("is 404 (surface hidden) when signup is not wired", async () => {
+    const { api } = setupSignup(undefined);
+    const res = await api(signupRequest());
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+  it("is 404 when signup is wired but disabled, and the limiter is never reached", async () => {
+    const { api } = setupSignup({ enabled: false, ratePerMinute: 2 });
+    for (let i = 0; i < 5; i++) {
+      const res = await api(signupRequest());
+      expect(res.status).toBe(404);
+      expect(body(res).error.code).toBe("not_found");
+    }
+  });
+  it("creates a free-plan tenant + first key, returns the one-time secret, and the key authenticates", async () => {
+    const { api } = setupSignup({ enabled: true, ratePerMinute: 10 });
+    const res = await api(signupRequest({ name: "Acme" }));
+    expect(res.status).toBe(201);
+    const b = body(res);
+    expect(b.app.id).toMatch(/^app_/);
+    expect(b.app.name).toBe("Acme");
+    expect(b.app.plan).toBe("free");
+    expect(b.apiKey.appId).toBe(b.app.id);
+    expect(b.secret).toMatch(/^phk_/);
+    const probe = await api(
+      request({ method: "GET", path: "/v1/endpoints", headers: { authorization: `Bearer ${b.secret}` } }),
+    );
+    expect(probe.status).toBe(200);
+  });
+  it("accepts no body, creating an unnamed free-plan tenant", async () => {
+    const { api } = setupSignup({ enabled: true, ratePerMinute: 10 });
+    const res = await api(signupRequest());
+    expect(res.status).toBe(201);
+    expect(body(res).app.name).toBe("");
+    expect(body(res).app.plan).toBe("free");
+  });
+  it("rate-limits gateway-wide: 429 + Retry-After + rate_limited over the cap", async () => {
+    const { api } = setupSignup({ enabled: true, ratePerMinute: 2 }, () => 1_000_000);
+    expect((await api(signupRequest())).status).toBe(201);
+    expect((await api(signupRequest())).status).toBe(201);
+    const limited = await api(signupRequest());
+    expect(limited.status).toBe(429);
+    expect(body(limited).error.code).toBe("rate_limited");
+    expect(Number(limited.headers?.["retry-after"])).toBeGreaterThanOrEqual(1);
+  });
+  it("rejects a malformed JSON body with 400 invalid_json", async () => {
+    const { api } = setupSignup({ enabled: true, ratePerMinute: 10 });
+    const res = await api(
+      request({ method: "POST", path: "/v1/signup", headers: { "content-type": "application/json" }, rawBody: "not json" }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_json");
+  });
+});

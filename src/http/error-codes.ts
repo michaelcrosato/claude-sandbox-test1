@@ -44,6 +44,7 @@
  * | `idempotency_conflict` | 409 | An idempotency key was reused with a different payload. |
  * | `payload_too_large` | 413 | The request body exceeded the configured maximum size. |
  * | `quota_exceeded` | 429 | The tenant's monthly message quota is reached. |
+ * | `rate_limited` | 429 | A request-rate limit was exceeded (e.g. the self-serve signup endpoint). A `Retry-After` header gives the back-off in seconds. |
  * | `internal_error` | 500 | An unexpected server-side fault. The only code a client should never need to branch on. |
  */
 export const API_ERROR_CODES = [
@@ -58,6 +59,7 @@ export const API_ERROR_CODES = [
   "idempotency_conflict",
   "payload_too_large",
   "quota_exceeded",
+  "rate_limited",
   "internal_error",
 ] as const;
 

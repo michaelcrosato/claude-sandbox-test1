@@ -413,9 +413,11 @@ export {
   MEMORY_DATA_DIR,
   MIN_ADMIN_TOKEN_LENGTH,
   DEFAULT_STRIPE_METER_EVENT_NAME,
+  DEFAULT_SIGNUP_RATE_LIMIT_PER_MINUTE,
   type GatewayConfig,
   type WorkerConfig,
   type FanoutConfig,
+  type SignupConfig,
   type Env,
 } from "./runtime/config.js";
 

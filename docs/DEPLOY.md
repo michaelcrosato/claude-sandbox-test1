@@ -169,6 +169,8 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_STRIPE_SECRET_KEY` | _(unset)_ | Stripe secret API key (`sk_…`). **Required** when `POSTHORN_BILLING_PROVIDER=stripe` (startup fails fast otherwise); ignored when `none`. Sent as the Bearer credential on outbound Stripe calls. |
 | `POSTHORN_STRIPE_WEBHOOK_SECRET` | _(unset)_ | Stripe webhook signing secret (`whsec_…`). Optional even under the `stripe` provider: when unset, outbound usage pushes still work but `POST /v1/billing/webhook` stays `404` (the inbound surface is opt-in, like the admin API). |
 | `POSTHORN_STRIPE_METER_EVENT_NAME` | `posthorn_messages` | The Stripe meter `event_name` a usage push is recorded under (Stripe Billing Meter Events API). Must match the meter configured in Stripe. Ignored when the provider is `none`. |
+| `POSTHORN_SIGNUP_ENABLED` | `false` | Expose the public `POST /v1/signup` route (creates a tenant + first API key on the `free` plan, no operator involvement). `false` (default) keeps it `404` — the same opt-in posture as the admin API — so an unattended gateway never lets the world mint tenants. See [Self-serve signup](#self-serve-signup). |
+| `POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` | `10` | Maximum signups accepted per rolling minute, **gateway-wide** (a single global bucket, not per-IP — the core has no trustworthy client address). Over it, `POST /v1/signup` returns `429` with `Retry-After`. A positive integer (`1`–`10000`). Only applies when signup is enabled. |
 
 ---
 
@@ -561,6 +563,38 @@ endpoint at `https://<your-host>/v1/billing/webhook`.
 
 All outbound Stripe calls ride the same connection-time SSRF-guarded HTTP transport
 as webhook delivery, governed by `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS`.
+
+---
+
+## Self-serve signup
+
+By default, provisioning a tenant is a privileged operator action (the admin API or
+the `posthorn admin` CLI). For a **self-serve product** — where users sign themselves
+up without you in the loop — enable the public `POST /v1/signup` route:
+
+```bash
+POSTHORN_SIGNUP_ENABLED=true
+POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE=10   # optional; gateway-wide cap, default 10
+```
+
+`POST /v1/signup` creates a tenant and mints its first API key in one unauthenticated
+call, then returns the tenant, the key's metadata, and the key's **one-time** plaintext
+secret (persist it — it is never recoverable). The new tenant always lands on the
+`free` plan; a paid tier or a custom quota can only be assigned by an operator via the
+admin API, so a self-serve caller can never grant itself more than the free allowance.
+
+**Opt-in, like the admin API.** With `POSTHORN_SIGNUP_ENABLED` unset or `false` (the
+default) the route returns `404`, indistinguishable from a nonexistent path — an
+unattended gateway never lets the world mint tenants.
+
+**Rate limiting.** When enabled, signups are capped at
+`POSTHORN_SIGNUP_RATE_LIMIT_PER_MINUTE` per rolling minute, **gateway-wide**: it is a
+single global bucket rather than a per-client limit, because the request core has no
+trustworthy client address (`X-Forwarded-For` is spoofable). It is a coarse defense
+against automated tenant-spraying, not a fairness mechanism; over the cap the route
+returns `429` with a `Retry-After` header. The limit is in-process and per-replica
+(not coordinated across a multi-replica Postgres deployment), the same caveat as
+delivery rate limiting — size it per replica accordingly.
 
 ---
 

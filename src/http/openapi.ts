@@ -187,6 +187,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
       },
       { name: "Operational", description: "Liveness, metrics, and this document." },
       {
+        name: "Signup",
+        description:
+          "Public self-serve onboarding: create a tenant and its first API key without " +
+          "an operator. Opt-in and **disabled by default** (the route is `404` unless " +
+          "`POSTHORN_SIGNUP_ENABLED=true`); when enabled it is rate-limited gateway-wide. " +
+          "The created tenant lands on the `free` plan — a paid tier or custom quota can " +
+          "only be assigned by an operator via the admin API.",
+      },
+      {
         name: "EventTypes",
         description:
           "The event type catalog: named, human-readable event type definitions that document " +
@@ -288,6 +297,38 @@ export function buildOpenApiDocument(): OpenApiDocument {
           security: [],
           responses: {
             "200": jsonResponse("The OpenAPI 3.1 document.", { type: "object" }),
+          },
+        },
+      },
+      "/v1/signup": {
+        post: {
+          operationId: "signup",
+          tags: ["Signup"],
+          summary: "Self-serve signup",
+          description:
+            "Create a tenant and mint its first API key in one unauthenticated call — the " +
+            "self-serve onboarding path. The optional body may set a human-readable `name`; " +
+            "the tenant always lands on the `free` plan (a paid tier or custom quota is an " +
+            "operator-only action via the admin API). The plaintext key `secret` is returned " +
+            "**exactly once** here — persist it now; it is never recoverable. Opt-in and " +
+            "disabled by default: the route is `404` unless `POSTHORN_SIGNUP_ENABLED=true`, and " +
+            "when enabled it is rate-limited gateway-wide (`429` with `Retry-After` beyond the cap).",
+          security: [],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: ref("SignupRequest") } },
+          },
+          responses: {
+            "201": jsonResponse(
+              "The created tenant plus its first API key and the key's one-time secret.",
+              ref("SignupResult"),
+            ),
+            "400": errorResponse("Malformed request body."),
+            "404": errorResponse("Self-serve signup is not enabled on this instance."),
+            "429": errorResponse(
+              "The gateway-wide signup rate limit was exceeded. A `Retry-After` header gives " +
+                "the back-off in seconds.",
+            ),
           },
         },
       },
@@ -2455,6 +2496,32 @@ export function buildOpenApiDocument(): OpenApiDocument {
           description: "A freshly minted key: its metadata plus the one-time plaintext secret (shown only here).",
           required: ["apiKey", "secret"],
           properties: {
+            apiKey: ref("ApiKey"),
+            secret: {
+              type: "string",
+              examples: ["phk_..."],
+              description: "The plaintext key secret. Returned once, never recoverable — store it now.",
+            },
+          },
+        },
+        SignupRequest: {
+          type: "object",
+          description:
+            "The (optional) body of `POST /v1/signup`. Omit it entirely to create an unnamed " +
+            "free-tier tenant. Only `name` is honored — the plan is always `free`.",
+          properties: {
+            name: { type: "string", description: "Optional human-readable label for the new tenant." },
+          },
+        },
+        SignupResult: {
+          type: "object",
+          description:
+            "The result of a self-serve signup: the created tenant (`app`, including its one-time " +
+            "system webhook secret), its first API key's metadata (`apiKey`), and the key's " +
+            "one-time plaintext `secret`. The secret is shown only here — persist it now.",
+          required: ["app", "apiKey", "secret"],
+          properties: {
+            app: ref("CreatedApp"),
             apiKey: ref("ApiKey"),
             secret: {
               type: "string",

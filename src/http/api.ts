@@ -18,6 +18,7 @@
  * | GET    | /readyz              | none   | Readiness probe (200 ready / 503 not_ready, backend-gated). |
  * | GET    | /metrics             | none   | Prometheus exposition (operator metrics).|
  * | GET    | /openapi.json        | none   | The OpenAPI 3.1 description of this API.  |
+ * | POST   | /v1/signup           | none   | Self-serve: create a tenant + first key (201). Opt-in, rate-limited, `404` when disabled. |
  * | POST   | /v1/messages         | Bearer | Accept an event and fan it out (202).    |
  * | GET    | /v1/messages         | Bearer | List the tenant's messages (paginated).  |
  * | GET    | /v1/messages/:id     | Bearer | Read a message + its delivery statuses.  |
@@ -158,6 +159,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   fetchTransport,
   isSuccessStatus,
+  SlidingWindowRateLimiter,
   type Transport,
 } from "../worker/delivery-worker.js";
 import { endpointToDeliveryTarget } from "../endpoints/endpoint-resolver.js";
@@ -276,6 +278,15 @@ export interface ApiDeps {
    * is live only when a provider with a webhook secret is configured.
    */
   readonly billing?: BillingProvider;
+  /**
+   * Self-serve signup settings enabling the public `POST /v1/signup` route. When
+   * omitted, or when `enabled` is `false`, that route is `404` — the same opt-in
+   * posture as the admin API, so an unattended gateway never lets the world mint
+   * tenants. When enabled, signups are rate-limited gateway-wide to `ratePerMinute`
+   * (a coarse global cap: the socket-agnostic core has no trustworthy client IP, and
+   * `X-Forwarded-For` is spoofable). Wired from {@link import("../runtime/config.js").SignupConfig}.
+   */
+  readonly signup?: { readonly enabled: boolean; readonly ratePerMinute: number };
 }
 
 /**
@@ -934,6 +945,9 @@ export const API_ROUTE_KEYS = [
   "GET /readyz",
   "GET /metrics",
   "GET /openapi.json",
+  // Public, unauthenticated self-serve onboarding. Opt-in: `404` unless signup is
+  // enabled; rate-limited gateway-wide when on. The only write route with no credential.
+  "POST /v1/signup",
   "POST /v1/messages",
   "POST /v1/messages/batch",
   "GET /v1/messages",
@@ -2019,6 +2033,49 @@ export function createApi(deps: ApiDeps): ApiHandler {
   // route exists. A signature/verification failure maps to `400 invalid_request`; a
   // verified-but-unrecognized event still returns `200` (`handled: false`) so the
   // processor stops retrying (only the signature gate is fatal).
+  // --- Self-serve signup (public, opt-in) -----------------------------------
+  // The one unauthenticated write route: it bootstraps a tenant + its first API key so
+  // a user can onboard without an operator. Disabled by default (`404`, exactly like a
+  // disabled admin route); when enabled it is rate-limited gateway-wide. One limiter
+  // instance per gateway — in-process, not coordinated across replicas (the same caveat
+  // as delivery rate limiting), which is acceptable for a coarse anti-spray cap.
+  const signupRateLimiter = new SlidingWindowRateLimiter();
+  const createSignup: RouteHandler = async (ctx) => {
+    const signup = deps.signup;
+    if (signup === undefined || !signup.enabled) {
+      // Hidden exactly like a disabled admin route — never reveal the surface exists.
+      throw new HttpError(404, "not_found", `no route for ${ctx.req.method} ${ctx.req.path}`);
+    }
+    // Rate-limit before any work, counting every attempt (not just successes), so a
+    // flood of malformed bodies cannot slip past the cap. A single global bucket: the
+    // socket-agnostic core has no trustworthy client IP, and `X-Forwarded-For` is
+    // spoofable, so a per-IP key would be both impossible here and trivially evaded.
+    const nowMs = now();
+    const gate = signupRateLimiter.tryConsume("signup", signup.ratePerMinute, nowMs);
+    if (!gate.allowed) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((gate.retryAt - nowMs) / 1000));
+      return json(429, errorEnvelope("rate_limited", "signup rate limit exceeded; retry later"), {
+        "retry-after": String(retryAfterSeconds),
+      });
+    }
+    // The body is optional; only `name` is honored. The plan is forced to "free" — a
+    // self-serve tenant can never grant itself a paid tier or a custom quota.
+    const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
+    const input: NewApp = {
+      plan: "free",
+      ...("name" in body ? { name: body["name"] as string } : {}),
+    };
+    const app = await deps.apps.create(input);
+    // Mint the tenant's first API key. The plaintext secret is revealed exactly once,
+    // here (the store keeps only its hash) — the caller must persist it now.
+    const key = await deps.apps.createApiKey(app.id);
+    return json(201, {
+      app: createdAppView(app),
+      apiKey: apiKeyView(key.apiKey),
+      secret: key.secret,
+    });
+  };
+
   const billingWebhook: RouteHandler = async (ctx) => {
     const provider = deps.billing;
     if (provider === undefined || !provider.webhookConfigured) {
@@ -2049,6 +2106,9 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /readyz": ready,
     "GET /metrics": metricsExposition,
     "GET /openapi.json": openapi,
+    // Gating (opt-in 404 + rate limit) lives inside the handler, so it is registered
+    // unwrapped — it is neither tenant- nor admin-authenticated.
+    "POST /v1/signup": createSignup,
     "POST /v1/messages": authed(createMessage),
     "POST /v1/messages/batch": authed(batchSendMessages),
     "GET /v1/messages": authed(listMessages),
