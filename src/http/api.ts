@@ -176,6 +176,8 @@ import {
 } from "./router.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { forwardedProtoIsHttps } from "./security-headers.js";
+import type { BillingProvider } from "../billing/index.js";
+import { StripeSignatureError } from "../billing/index.js";
 
 /** Maximum number of messages accepted in a single `POST /v1/messages/batch` call. */
 export const MAX_BATCH_MESSAGES = 100;
@@ -265,6 +267,15 @@ export interface ApiDeps {
    * wired backend dependency to gate on.
    */
   readonly checkReadiness?: () => Promise<void>;
+  /**
+   * The pluggable billing backend (the flag-gated payment seam). When omitted, or
+   * when the wired provider has no configured webhook secret
+   * ({@link BillingProvider.webhookConfigured} is `false`), `POST /v1/billing/webhook`
+   * is `404` — the same opt-in posture as the admin API. The gateway always wires one
+   * (the {@link NoopBillingProvider} unless an operator enabled Stripe), so the route
+   * is live only when a provider with a webhook secret is configured.
+   */
+  readonly billing?: BillingProvider;
 }
 
 /**
@@ -952,6 +963,9 @@ export const API_ROUTE_KEYS = [
   "GET /v1/event-types/:id",
   "PATCH /v1/event-types/:id",
   "DELETE /v1/event-types/:id",
+  // Inbound billing webhook. Signature-authenticated (the provider's webhook secret),
+  // not a tenant key; `404` unless a billing provider with a webhook secret is wired.
+  "POST /v1/billing/webhook",
   // Admin / control-plane. Authenticated by the operator admin token (not a tenant
   // key); the whole group is `404` unless `POSTHORN_ADMIN_TOKEN` is configured.
   "POST /v1/admin/apps",
@@ -1996,6 +2010,37 @@ export function createApi(deps: ApiDeps): ApiHandler {
     return json(201, { token, portalUrl, expiresAt });
   };
 
+  // POST /v1/billing/webhook — the inbound provider webhook. Unlike every other v1
+  // route it is **not** tenant-authenticated: the request is authenticated by the
+  // provider's webhook *signature*, verified inside the provider against the raw body.
+  // The route is `404` unless a billing provider with a configured webhook secret is
+  // wired (`webhookConfigured`), the same opt-in posture as the admin API — so an
+  // instance with billing off, or Stripe on but no webhook secret, never reveals the
+  // route exists. A signature/verification failure maps to `400 invalid_request`; a
+  // verified-but-unrecognized event still returns `200` (`handled: false`) so the
+  // processor stops retrying (only the signature gate is fatal).
+  const billingWebhook: RouteHandler = async (ctx) => {
+    const provider = deps.billing;
+    if (provider === undefined || !provider.webhookConfigured) {
+      throw new HttpError(404, "not_found", `no route for ${ctx.req.method} ${ctx.req.path}`);
+    }
+    try {
+      const result = await provider.handleWebhook(ctx.req.rawBody, ctx.req.headers, now());
+      return json(200, { received: true, handled: result.handled, type: result.type });
+    } catch (err) {
+      if (err instanceof StripeSignatureError) {
+        // Fixed message — never echo the verifier's detail (which could hint at the
+        // failure mode); the StripeSignatureError itself never carries the digest.
+        throw new HttpError(
+          400,
+          "invalid_request",
+          "billing webhook signature verification failed",
+        );
+      }
+      throw err;
+    }
+  };
+
   // One handler per route key. The `Record<ApiRouteKey, …>` type makes this
   // exhaustive: a missing key or a stray extra key is a compile error, so the route
   // table and {@link API_ROUTE_KEYS} (and therefore the OpenAPI document) cannot drift.
@@ -2033,6 +2078,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     "GET /v1/event-types/:id": authed(getEventType),
     "PATCH /v1/event-types/:id": authed(updateEventType),
     "DELETE /v1/event-types/:id": authed(archiveEventType),
+    "POST /v1/billing/webhook": billingWebhook,
     "POST /v1/admin/apps": adminAuthed(createApp),
     "GET /v1/admin/apps": adminAuthed(listApps),
     "GET /v1/admin/apps/:id": adminAuthed(getApp),

@@ -40,6 +40,7 @@ import {
   type LogThreshold,
 } from "../logging/logger.js";
 import type { HstsPolicy } from "../http/security-headers.js";
+import type { BillingConfig, BillingProviderKind } from "../billing/index.js";
 
 /**
  * Default bind host. `0.0.0.0` is the right default for the headline deployment
@@ -244,6 +245,14 @@ export interface GatewayConfig {
   readonly worker: WorkerConfig;
   /** Fan-out dispatcher (transactional-outbox relay) tunables. */
   readonly fanout: FanoutConfig;
+  /**
+   * Billing backend settings. Defaults to the `none` provider (the
+   * {@link import("../billing/index.js").NoopBillingProvider} — billing disabled,
+   * the webhook route `404`), so the open-core gateway carries no payment dependency
+   * unless an operator opts in via `POSTHORN_BILLING_PROVIDER=stripe`.
+   * See `POSTHORN_BILLING_PROVIDER` / `POSTHORN_STRIPE_*`.
+   */
+  readonly billing: BillingConfig;
 }
 
 /** A configuration value was missing-but-required or malformed. */
@@ -576,6 +585,62 @@ function readHstsConfig(env: Env): HstsPolicy {
   return Object.freeze<HstsPolicy>({ maxAgeSeconds, includeSubDomains, preload });
 }
 
+/** Default Stripe meter `event_name` a usage push is recorded under when unset. */
+export const DEFAULT_STRIPE_METER_EVENT_NAME = "posthorn_messages";
+
+/**
+ * Read the optional billing settings. Disabled by default
+ * (`POSTHORN_BILLING_PROVIDER` unset or `none`), in which case the gateway wires the
+ * {@link import("../billing/index.js").NoopBillingProvider} and the Stripe fields are
+ * inert. Selecting `stripe` **requires** `POSTHORN_STRIPE_SECRET_KEY` (rejected at
+ * boot otherwise — fail fast rather than a runtime 401 on the first usage push); the
+ * webhook signing secret stays optional even then — its absence keeps the inbound
+ * `POST /v1/billing/webhook` route `404` (an opt-in surface, like the admin API).
+ *
+ * All four variables are read **unconditionally** (independent of the provider value)
+ * so the whole billing configuration surface is enumerable by the doc-coverage test —
+ * a var that is only conditionally read would escape that check.
+ */
+function readBillingConfig(env: Env): BillingConfig {
+  const rawProvider = env["POSTHORN_BILLING_PROVIDER"];
+  const providerText = (rawProvider ?? "").trim().toLowerCase();
+  let provider: BillingProviderKind;
+  if (providerText === "" || providerText === "none") {
+    provider = "none";
+  } else if (providerText === "stripe") {
+    provider = "stripe";
+  } else {
+    throw new ConfigError(
+      `POSTHORN_BILLING_PROVIDER must be "none" or "stripe", got ${JSON.stringify(rawProvider)}`,
+    );
+  }
+
+  const rawSecret = env["POSTHORN_STRIPE_SECRET_KEY"];
+  const stripeSecretKey =
+    rawSecret === undefined || rawSecret.trim() === "" ? null : rawSecret.trim();
+  const rawWebhook = env["POSTHORN_STRIPE_WEBHOOK_SECRET"];
+  const stripeWebhookSecret =
+    rawWebhook === undefined || rawWebhook.trim() === "" ? null : rawWebhook.trim();
+  const stripeMeterEventName = readString(
+    env,
+    "POSTHORN_STRIPE_METER_EVENT_NAME",
+    DEFAULT_STRIPE_METER_EVENT_NAME,
+  );
+
+  if (provider === "stripe" && stripeSecretKey === null) {
+    throw new ConfigError(
+      "POSTHORN_STRIPE_SECRET_KEY is required when POSTHORN_BILLING_PROVIDER=stripe",
+    );
+  }
+
+  return Object.freeze<BillingConfig>({
+    provider,
+    stripeSecretKey,
+    stripeWebhookSecret,
+    stripeMeterEventName,
+  });
+}
+
 /**
  * Build a validated {@link GatewayConfig} from an environment record. Pure: it
  * never reads `process.env` directly (the caller passes it) and performs no I/O,
@@ -603,7 +668,11 @@ function readHstsConfig(env: Env): HstsPolicy {
  * `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS` (`false` = block delivery to private/internal addresses, the SSRF default),
  * `POSTHORN_LOG_LEVEL` (`debug`/`info`/`warn`/`error`/`silent`; default `info`),
  * `POSTHORN_HSTS_MAX_AGE` (`Strict-Transport-Security max-age` in seconds; `0` = HSTS off, the default),
- * `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` / `POSTHORN_HSTS_PRELOAD` (HSTS modifiers; require a non-zero max-age).
+ * `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` / `POSTHORN_HSTS_PRELOAD` (HSTS modifiers; require a non-zero max-age),
+ * `POSTHORN_BILLING_PROVIDER` (`none` (default) | `stripe`; `stripe` enables metered usage + the webhook route),
+ * `POSTHORN_STRIPE_SECRET_KEY` (Stripe `sk_…`; required when the provider is `stripe`),
+ * `POSTHORN_STRIPE_WEBHOOK_SECRET` (Stripe `whsec_…`; optional — when unset the `POST /v1/billing/webhook` route stays `404`),
+ * `POSTHORN_STRIPE_METER_EVENT_NAME` (Stripe meter `event_name` for usage pushes; default `posthorn_messages`).
  */
 export function loadConfig(env: Env): GatewayConfig {
   const httpTimeouts = readHttpServerTimeouts(env);
@@ -687,6 +756,7 @@ export function loadConfig(env: Env): GatewayConfig {
         { min: 0 },
       ),
     }),
+    billing: readBillingConfig(env),
   };
   return Object.freeze(config);
 }

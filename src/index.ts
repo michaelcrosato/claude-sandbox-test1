@@ -412,11 +412,36 @@ export {
   DEFAULT_DATA_DIR,
   MEMORY_DATA_DIR,
   MIN_ADMIN_TOKEN_LENGTH,
+  DEFAULT_STRIPE_METER_EVENT_NAME,
   type GatewayConfig,
   type WorkerConfig,
   type FanoutConfig,
   type Env,
 } from "./runtime/config.js";
+
+export {
+  createBillingProvider,
+  usageReportFromSummary,
+  NoopBillingProvider,
+  StripeBillingProvider,
+  StripeBillingError,
+  StripeSignatureError,
+  signStripeSignatureHeader,
+  verifyStripeSignature,
+  STRIPE_SIGNATURE_HEADER,
+  DEFAULT_STRIPE_API_BASE_URL,
+  DEFAULT_STRIPE_TIMEOUT_MS,
+  DEFAULT_STRIPE_TOLERANCE_SECONDS,
+  type BillingProvider,
+  type BillingProviderKind,
+  type BillingConfig,
+  type BillingProviderDeps,
+  type BillingWebhookResult,
+  type UsageReport,
+  type StripeBillingProviderOptions,
+  type StripeSignInput,
+  type StripeVerifyOptions,
+} from "./billing/index.js";
 
 export {
   createGateway,

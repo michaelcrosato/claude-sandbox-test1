@@ -13,6 +13,13 @@ import { verify } from "../signing/webhook-signature.js";
 import { fixedSchedule } from "../delivery/retry-policy.js";
 import { InMemoryPortalSessionStore } from "../portal/portal-session.js";
 import { InMemoryEventTypeStore } from "../event-types/in-memory-event-type-store.js";
+import {
+  NoopBillingProvider,
+  StripeBillingProvider,
+  signStripeSignatureHeader,
+  type BillingProvider,
+} from "../billing/index.js";
+import type { Transport } from "../worker/delivery-worker.js";
 
 interface Fixture {
   readonly apps: InMemoryAppStore;
@@ -4486,5 +4493,99 @@ describe("createApi — error-code contract (non-vacuous emission proof)", () =>
     for (const code of observed) {
       expect(API_ERROR_CODES).toContain(code);
     }
+  });
+});
+
+describe("createApi — POST /v1/billing/webhook (inbound provider webhook)", () => {
+  const WEBHOOK_SECRET = "whsec_test_0123456789abcdef0123456789abcdef";
+  const NOW_MS = 1_700_000_000_000;
+  const NOW_S = Math.floor(NOW_MS / 1000);
+  const noopTransport: Transport = async () => ({ status: 200 });
+
+  /** Build an api with the given billing provider (or none) and a fixed verification clock. */
+  function setupBilling(billing?: BillingProvider): ApiHandler {
+    return createApi({
+      apps: new InMemoryAppStore(),
+      endpoints: new InMemoryEndpointStore(),
+      messages: new InMemoryMessageStore(),
+      queue: new InMemoryDeliveryQueue(),
+      attempts: new InMemoryDeliveryAttemptStore(),
+      eventTypes: new InMemoryEventTypeStore(),
+      now: () => NOW_MS,
+      ...(billing !== undefined ? { billing } : {}),
+    });
+  }
+
+  function stripeProvider(): StripeBillingProvider {
+    return new StripeBillingProvider({
+      secretKey: "sk_test",
+      webhookSecret: WEBHOOK_SECRET,
+      meterEventName: "posthorn_messages",
+      transport: noopTransport,
+    });
+  }
+
+  function signedWebhookRequest(payload: string, secret = WEBHOOK_SECRET): ApiRequest {
+    return request({
+      method: "POST",
+      path: "/v1/billing/webhook",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": signStripeSignatureHeader(secret, { timestamp: NOW_S, payload }),
+      },
+      rawBody: payload,
+    });
+  }
+
+  it("is 404 when no billing provider is wired (billing disabled)", async () => {
+    const api = setupBilling();
+    const res = await api(signedWebhookRequest('{"type":"invoice.paid"}'));
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("is 404 when the wired provider has no webhook secret (Noop default)", async () => {
+    const api = setupBilling(new NoopBillingProvider());
+    const res = await api(signedWebhookRequest('{"type":"invoice.paid"}'));
+    expect(res.status).toBe(404);
+    expect(body(res).error.code).toBe("not_found");
+  });
+
+  it("accepts a validly signed webhook with no tenant API key (signature-authed)", async () => {
+    const api = setupBilling(stripeProvider());
+    const res = await api(signedWebhookRequest('{"id":"evt_1","type":"invoice.paid"}'));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ received: true, handled: true, type: "invoice.paid" });
+  });
+
+  it("returns 200 handled:false for a verified-but-unrecognized event", async () => {
+    const api = setupBilling(stripeProvider());
+    const res = await api(signedWebhookRequest('{"id":"evt_2"}'));
+    expect(res.status).toBe(200);
+    expect(body(res)).toEqual({ received: true, handled: false, type: null });
+  });
+
+  it("rejects an invalid signature with 400 invalid_request", async () => {
+    const api = setupBilling(stripeProvider());
+    const payload = '{"type":"invoice.paid"}';
+    // Sign one body but send a different one → signature mismatch.
+    const req = signedWebhookRequest(payload);
+    const res = await api({ ...req, rawBody: payload + " " });
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
+  });
+
+  it("rejects a missing Stripe-Signature header with 400", async () => {
+    const api = setupBilling(stripeProvider());
+    const res = await api(
+      request({
+        method: "POST",
+        path: "/v1/billing/webhook",
+        headers: { "content-type": "application/json" },
+        rawBody: '{"type":"invoice.paid"}',
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(body(res).error.code).toBe("invalid_request");
   });
 });

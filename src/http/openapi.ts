@@ -204,6 +204,15 @@ export function buildOpenApiDocument(): OpenApiDocument {
           "and view recent delivery status — all scoped to the tenant's `appId`, without the " +
           "customer ever seeing the tenant API key.",
       },
+      {
+        name: "Billing",
+        description:
+          "Inbound billing-provider webhook. Authenticated by the provider's webhook " +
+          "signature (the `Stripe-Signature` header), not a tenant key, and disabled " +
+          "(the route is `404`) unless a billing provider with a configured webhook " +
+          "secret is wired (`POSTHORN_BILLING_PROVIDER=stripe` plus " +
+          "`POSTHORN_STRIPE_WEBHOOK_SECRET`).",
+      },
     ],
     security: [{ bearerAuth: [] }],
     paths: {
@@ -1021,6 +1030,39 @@ export function buildOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      "/v1/billing/webhook": {
+        post: {
+          operationId: "billingWebhook",
+          tags: ["Billing"],
+          summary: "Accept an inbound billing-provider webhook",
+          description:
+            "Receive and verify a signed webhook from the configured billing provider " +
+            "(e.g. a Stripe subscription/payment state change). The request is authenticated " +
+            "by its `Stripe-Signature` header — verified against the raw request body and the " +
+            "endpoint's webhook signing secret — **not** a tenant API key. The route exists " +
+            "only when a billing provider with a configured webhook secret is wired; otherwise " +
+            "it is `404`, indistinguishable from a nonexistent path. A verified but unrecognized " +
+            "event still returns `200` (`handled: false`) so the provider stops retrying; only a " +
+            "signature/verification failure is fatal (`400`).",
+          security: [{ stripeSignature: [] }],
+          requestBody: {
+            required: true,
+            description: "The provider's raw event payload, exactly as sent (re-signed for verification).",
+            content: { "application/json": { schema: { type: "object", additionalProperties: true } } },
+          },
+          responses: {
+            "200": jsonResponse(
+              "The signature verified; the event was accepted (whether or not it was a recognized type).",
+              ref("BillingWebhookAck"),
+            ),
+            "400": errorResponse(
+              "Signature verification failed (missing/malformed `Stripe-Signature`, a timestamp " +
+                "outside the tolerance window, or no matching signature).",
+            ),
+            "404": errorResponse("Billing is disabled, or no webhook secret is configured."),
+          },
+        },
+      },
       "/v1/admin/apps": {
         post: {
           operationId: "createApp",
@@ -1237,8 +1279,44 @@ export function buildOpenApiDocument(): OpenApiDocument {
             "A distinct credential from a tenant API key; the admin API is disabled (every " +
             "route `404`) unless the token is configured.",
         },
+        stripeSignature: {
+          type: "apiKey",
+          in: "header",
+          name: "Stripe-Signature",
+          description:
+            "The billing provider's webhook signature (`t=<unix-ts>,v1=<hex-hmac-sha256>`). " +
+            "Verified against the raw request body and the endpoint's webhook signing secret " +
+            "(`POSTHORN_STRIPE_WEBHOOK_SECRET`). Authorizes `POST /v1/billing/webhook` only — " +
+            "not a tenant credential.",
+        },
       },
       schemas: {
+        BillingWebhookAck: {
+          type: "object",
+          description:
+            "Acknowledgement of a signature-verified billing webhook. `received` is always " +
+            "`true` (the signature passed); `handled` is `true` only when the event was a " +
+            "recognized type the provider acted on, and `false` for a verified-but-unrecognized " +
+            "event (still a `200` so the provider stops retrying).",
+          required: ["received", "handled", "type"],
+          properties: {
+            received: {
+              type: "boolean",
+              description: "Always `true`: the request signature verified.",
+              examples: [true],
+            },
+            handled: {
+              type: "boolean",
+              description: "Whether the event was a recognized type the provider acted on.",
+              examples: [true],
+            },
+            type: {
+              type: ["string", "null"],
+              description: "The provider event `type` (e.g. `invoice.paid`), or `null` when absent.",
+              examples: ["invoice.paid"],
+            },
+          },
+        },
         EventType: {
           type: "object",
           description: "A named event type in the catalog.",

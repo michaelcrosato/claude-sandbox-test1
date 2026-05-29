@@ -7,6 +7,7 @@ import {
   DEFAULT_HOST,
   DEFAULT_HTTP_SHUTDOWN_GRACE_MS,
   DEFAULT_PORT,
+  DEFAULT_STRIPE_METER_EVENT_NAME,
   MEMORY_DATA_DIR,
   MIN_ADMIN_TOKEN_LENGTH,
   loadConfig,
@@ -70,6 +71,12 @@ describe("loadConfig", () => {
         graceMs: DEFAULT_FANOUT_GRACE_MS,
         batchSize: DEFAULT_FANOUT_BATCH_SIZE,
         idlePollMs: DEFAULT_FANOUT_IDLE_POLL_MS,
+      },
+      billing: {
+        provider: "none",
+        stripeSecretKey: null,
+        stripeWebhookSecret: null,
+        stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
       },
     });
   });
@@ -631,6 +638,99 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ POSTHORN_LOG_LEVEL: "trace" })).toThrow(
         /POSTHORN_LOG_LEVEL must be one of/,
       );
+    });
+  });
+
+  describe("POSTHORN_BILLING_PROVIDER / POSTHORN_STRIPE_* (billing)", () => {
+    it("defaults to the disabled none provider with inert Stripe fields", () => {
+      expect(loadConfig({}).billing).toEqual({
+        provider: "none",
+        stripeSecretKey: null,
+        stripeWebhookSecret: null,
+        stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+      });
+    });
+
+    it("treats a blank provider as none (disabled)", () => {
+      expect(loadConfig({ POSTHORN_BILLING_PROVIDER: "   " }).billing.provider).toBe("none");
+    });
+
+    it("accepts none/stripe case-insensitively, trimmed", () => {
+      expect(loadConfig({ POSTHORN_BILLING_PROVIDER: "none" }).billing.provider).toBe("none");
+      expect(
+        loadConfig({
+          POSTHORN_BILLING_PROVIDER: "  STRIPE  ",
+          POSTHORN_STRIPE_SECRET_KEY: "sk_live_x",
+        }).billing.provider,
+      ).toBe("stripe");
+    });
+
+    it("rejects an unrecognized provider with a ConfigError", () => {
+      expect(() => loadConfig({ POSTHORN_BILLING_PROVIDER: "paddle" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_BILLING_PROVIDER: "paddle" })).toThrow(
+        /POSTHORN_BILLING_PROVIDER must be "none" or "stripe"/,
+      );
+    });
+
+    it("requires a secret key when the provider is stripe (fail fast at boot)", () => {
+      expect(() => loadConfig({ POSTHORN_BILLING_PROVIDER: "stripe" })).toThrow(ConfigError);
+      expect(() => loadConfig({ POSTHORN_BILLING_PROVIDER: "stripe" })).toThrow(
+        /POSTHORN_STRIPE_SECRET_KEY is required when POSTHORN_BILLING_PROVIDER=stripe/,
+      );
+      // A blank secret key is treated as unset and is likewise rejected.
+      expect(() =>
+        loadConfig({ POSTHORN_BILLING_PROVIDER: "stripe", POSTHORN_STRIPE_SECRET_KEY: "   " }),
+      ).toThrow(/POSTHORN_STRIPE_SECRET_KEY is required/);
+    });
+
+    it("reads and trims the Stripe secret and webhook secret when stripe is selected", () => {
+      const billing = loadConfig({
+        POSTHORN_BILLING_PROVIDER: "stripe",
+        POSTHORN_STRIPE_SECRET_KEY: "  sk_test_abc  ",
+        POSTHORN_STRIPE_WEBHOOK_SECRET: "  whsec_def  ",
+      }).billing;
+      expect(billing.stripeSecretKey).toBe("sk_test_abc");
+      expect(billing.stripeWebhookSecret).toBe("whsec_def");
+    });
+
+    it("leaves the webhook secret optional under stripe (null keeps the route 404)", () => {
+      const billing = loadConfig({
+        POSTHORN_BILLING_PROVIDER: "stripe",
+        POSTHORN_STRIPE_SECRET_KEY: "sk_test_abc",
+      }).billing;
+      expect(billing.stripeWebhookSecret).toBeNull();
+    });
+
+    it("defaults the meter event name and reads an override", () => {
+      expect(loadConfig({}).billing.stripeMeterEventName).toBe(DEFAULT_STRIPE_METER_EVENT_NAME);
+      expect(
+        loadConfig({ POSTHORN_STRIPE_METER_EVENT_NAME: "  custom_meter  " }).billing
+          .stripeMeterEventName,
+      ).toBe("custom_meter");
+    });
+
+    it("reads the Stripe fields even under the none provider (so they stay enumerable)", () => {
+      // All four vars are read unconditionally; selecting none keeps them inert but
+      // still parsed, which is what keeps the doc-coverage probe able to see them.
+      const billing = loadConfig({
+        POSTHORN_BILLING_PROVIDER: "none",
+        POSTHORN_STRIPE_SECRET_KEY: "sk_test_abc",
+        POSTHORN_STRIPE_WEBHOOK_SECRET: "whsec_def",
+      }).billing;
+      expect(billing).toEqual({
+        provider: "none",
+        stripeSecretKey: "sk_test_abc",
+        stripeWebhookSecret: "whsec_def",
+        stripeMeterEventName: DEFAULT_STRIPE_METER_EVENT_NAME,
+      });
+    });
+
+    it("freezes the billing sub-config", () => {
+      const billing = loadConfig({}).billing;
+      expect(Object.isFrozen(billing)).toBe(true);
+      expect(() => {
+        (billing as { provider: string }).provider = "stripe";
+      }).toThrow(TypeError);
     });
   });
 });

@@ -17,12 +17,13 @@ procedures.
 7. [Logging](#logging)
 8. [Alerting](#alerting)
 9. [Grafana (optional)](#grafana-optional)
-10. [PostgreSQL backend](#postgresql-backend)
-11. [Running multiple replicas (active/active)](#running-multiple-replicas-activeactive)
-12. [Upgrading](#upgrading)
-13. [Standalone binary (without Docker)](#standalone-binary-without-docker)
-14. [Embedding as a library](#embedding-as-a-library)
-15. [Tuning for throughput](#tuning-for-throughput)
+10. [Billing](#billing)
+11. [PostgreSQL backend](#postgresql-backend)
+12. [Running multiple replicas (active/active)](#running-multiple-replicas-activeactive)
+13. [Upgrading](#upgrading)
+14. [Standalone binary (without Docker)](#standalone-binary-without-docker)
+15. [Embedding as a library](#embedding-as-a-library)
+16. [Tuning for throughput](#tuning-for-throughput)
 
 ---
 
@@ -164,6 +165,10 @@ All configuration is environment-driven — no config file to manage.
 | `POSTHORN_HSTS_INCLUDE_SUBDOMAINS` | `false` | Append `; includeSubDomains` to the HSTS header (applies the policy to every subdomain). Requires `POSTHORN_HSTS_MAX_AGE > 0`. |
 | `POSTHORN_HSTS_PRELOAD` | `false` | Append `; preload` to the HSTS header (opt into browser preload lists). Requires `includeSubDomains=true` and `max-age ≥ 31536000` (1 year); otherwise startup fails fast. |
 | `POSTHORN_LOG_LEVEL` | `info` | Minimum severity of structured (JSON Lines) logs written to stdout: `debug`, `info`, `warn`, `error`, or `silent`. `info` (default) shows request access lines and errors while keeping `/healthz` + `/readyz` + `/metrics` probe traffic (logged at `debug`) quiet; `silent` disables logging. See [Logging](#logging). |
+| `POSTHORN_BILLING_PROVIDER` | `none` | Billing backend: `none` (default) or `stripe`. `none` carries no payment dependency — metered-usage pushes are dropped and `POST /v1/billing/webhook` is `404`. `stripe` meters usage to Stripe and accepts Stripe-signed webhooks. See [Billing](#billing). |
+| `POSTHORN_STRIPE_SECRET_KEY` | _(unset)_ | Stripe secret API key (`sk_…`). **Required** when `POSTHORN_BILLING_PROVIDER=stripe` (startup fails fast otherwise); ignored when `none`. Sent as the Bearer credential on outbound Stripe calls. |
+| `POSTHORN_STRIPE_WEBHOOK_SECRET` | _(unset)_ | Stripe webhook signing secret (`whsec_…`). Optional even under the `stripe` provider: when unset, outbound usage pushes still work but `POST /v1/billing/webhook` stays `404` (the inbound surface is opt-in, like the admin API). |
+| `POSTHORN_STRIPE_METER_EVENT_NAME` | `posthorn_messages` | The Stripe meter `event_name` a usage push is recorded under (Stripe Billing Meter Events API). Must match the meter configured in Stripe. Ignored when the provider is `none`. |
 
 ---
 
@@ -513,6 +518,49 @@ build a dashboard from the PromQL queries above.  Key panels:
 - **Dead-letter backlog** — `posthorn_delivery_tasks{status="dead_letter"}` (alert threshold visible)
 - **Queue depth** — `posthorn_delivery_tasks{status="pending"}`
 - **Uptime** — `posthorn_uptime_seconds`
+
+---
+
+## Billing
+
+Billing is **optional and disabled by default** — the open-core gateway carries no
+payment dependency unless you opt in. With `POSTHORN_BILLING_PROVIDER=none` (the
+default), metered-usage reporting is a silent no-op and `POST /v1/billing/webhook`
+returns `404`, indistinguishable from a nonexistent path.
+
+Posthorn ships one concrete backend, **Stripe**, behind the same flag. It talks to
+Stripe in two directions:
+
+- **Outbound (metered usage)** — usage is reported to the [Stripe Billing Meter
+  Events API](https://docs.stripe.com/api/billing/meter-event) as a billable
+  message count per tenant per period, keyed by the tenant `appId` for idempotency
+  (a re-pushed period is a no-op on Stripe's side, not a double charge). Mapping a
+  Posthorn `appId` to a Stripe customer is an operator concern, out of scope for the
+  gateway itself.
+- **Inbound (signed webhooks)** — `POST /v1/billing/webhook` verifies the
+  `Stripe-Signature` header against the **raw** request body and your webhook signing
+  secret, then accepts the event. A verified-but-unrecognized event still returns
+  `200` (so Stripe stops retrying); only a signature/verification failure is fatal
+  (`400`). The route is live **only** when a webhook secret is configured — otherwise
+  it stays `404`, the same opt-in posture as the admin API.
+
+### Enabling Stripe
+
+```bash
+POSTHORN_BILLING_PROVIDER=stripe
+POSTHORN_STRIPE_SECRET_KEY=sk_live_…           # required for the stripe provider
+POSTHORN_STRIPE_WEBHOOK_SECRET=whsec_…         # optional; enables the inbound webhook route
+POSTHORN_STRIPE_METER_EVENT_NAME=posthorn_messages   # must match your Stripe meter
+```
+
+`POSTHORN_STRIPE_SECRET_KEY` is **required** when the provider is `stripe` — startup
+fails fast otherwise rather than surfacing a `401` on the first usage push. The
+webhook secret is independent: leave it unset and outbound usage reporting still
+works while the inbound webhook route stays `404`. Point your Stripe webhook
+endpoint at `https://<your-host>/v1/billing/webhook`.
+
+All outbound Stripe calls ride the same connection-time SSRF-guarded HTTP transport
+as webhook delivery, governed by `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS`.
 
 ---
 

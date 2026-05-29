@@ -45,6 +45,7 @@ import { FanoutDispatcher } from "../fanout/fanout-dispatcher.js";
 import { DataPruner } from "../pruner/data-pruner.js";
 import { createHttpServer } from "../http/server.js";
 import { hstsHeaderValue } from "../http/security-headers.js";
+import { createBillingProvider, NoopBillingProvider } from "../billing/index.js";
 import { createDashboardHandler } from "../dashboard/handler.js";
 import { InMemorySessionStore } from "../dashboard/sessions.js";
 import { createTenantDashboardHandler } from "../dashboard/tenant-handler.js";
@@ -559,6 +560,15 @@ export function createGateway(
   // omits it (a library embedder) degrading to HSTS-off rather than crashing boot.
   const hstsValue = config.hsts ? hstsHeaderValue(config.hsts) : null;
 
+  // The billing provider rides the same SSRF-guarded transport as delivery for its
+  // outbound usage push. `loadConfig` always supplies `billing` (defaulting to the
+  // `none` provider); the truthy guard keeps a hand-built config that omits the field
+  // (a library embedder) defaulting to Noop rather than crashing boot — billing stays
+  // off and the webhook route 404s, the same posture as an explicit `none`.
+  const billing = config.billing
+    ? createBillingProvider(config.billing, { transport: deliveryTransport })
+    : new NoopBillingProvider();
+
   const httpServer = createHttpServer(
     {
       apps,
@@ -590,6 +600,10 @@ export function createGateway(
       ...(config.adminToken !== null ? { adminToken: config.adminToken } : {}),
       // Always wire the portal session store so POST /v1/portal/sessions works.
       portalSessions,
+      // Always wire a billing provider (Noop unless an operator opted into Stripe).
+      // The provider decides whether POST /v1/billing/webhook is live (404 when its
+      // webhook secret is unset), the same opt-in posture as the admin API.
+      billing,
       // Canonical public base URL for portal links, when configured; otherwise the
       // portalUrl is derived from the request Host + X-Forwarded-Proto. Truthy guard
       // (not `!== null`) so a hand-built config omitting the field degrades cleanly.
