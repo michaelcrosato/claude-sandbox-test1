@@ -22,6 +22,7 @@ import {
   UnknownAppError,
   type App,
 } from "./app.js";
+import { PLAN_CATALOG } from "./plan.js";
 
 describe("id and secret generators", () => {
   it("mints prefixed, unique, URL-safe app ids", () => {
@@ -106,6 +107,36 @@ describe("normalizeNewApp", () => {
       monthlyMessageQuota: 1000,
     });
   });
+
+  it("defaults plan to null (custom/unmanaged) with no quota stamped", () => {
+    expect(normalizeNewApp()).toMatchObject({ plan: null, monthlyMessageQuota: null });
+  });
+
+  it("stamps the catalog quota when a plan is assigned", () => {
+    expect(normalizeNewApp({ plan: "free" })).toMatchObject({
+      plan: "free",
+      monthlyMessageQuota: PLAN_CATALOG.free.monthlyMessageQuota,
+    });
+  });
+
+  it("lets an explicit quota override the plan's stamped value", () => {
+    expect(normalizeNewApp({ plan: "scale", monthlyMessageQuota: 5 })).toMatchObject({
+      plan: "scale",
+      monthlyMessageQuota: 5,
+    });
+  });
+
+  it("treats an explicit null quota as 'unlimited', overriding the plan", () => {
+    expect(normalizeNewApp({ plan: "pro", monthlyMessageQuota: null })).toMatchObject({
+      plan: "pro",
+      monthlyMessageQuota: null,
+    });
+  });
+
+  it("rejects an unknown plan", () => {
+    // @ts-expect-error — plan must be a known tier or null
+    expect(() => normalizeNewApp({ plan: "enterprise" })).toThrow(TypeError);
+  });
 });
 
 describe("normalizeQuota", () => {
@@ -171,6 +202,7 @@ describe("applyAppUpdate", () => {
   const base: App = {
     id: "app_1",
     name: "before",
+    plan: null,
     monthlyMessageQuota: null,
     systemWebhookUrl: null,
     createdAt: 1000,
@@ -182,6 +214,7 @@ describe("applyAppUpdate", () => {
     expect(next).toEqual({
       id: "app_1",
       name: "after",
+      plan: null,
       monthlyMessageQuota: null,
       systemWebhookUrl: null,
       createdAt: 1000,
@@ -212,6 +245,43 @@ describe("applyAppUpdate", () => {
   it("rejects a negative or non-integer quota patch", () => {
     expect(() => applyAppUpdate(base, { monthlyMessageQuota: -1 }, 2000)).toThrow(TypeError);
     expect(() => applyAppUpdate(base, { monthlyMessageQuota: 2.5 }, 2000)).toThrow(TypeError);
+  });
+
+  it("stamps the catalog quota when a plan is assigned", () => {
+    const next = applyAppUpdate(base, { plan: "pro" }, 2000);
+    expect(next.plan).toBe("pro");
+    expect(next.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+  });
+
+  it("lets an explicit quota in the same patch override the plan's", () => {
+    const next = applyAppUpdate(base, { plan: "free", monthlyMessageQuota: 42 }, 2000);
+    expect(next.plan).toBe("free");
+    expect(next.monthlyMessageQuota).toBe(42);
+  });
+
+  it("re-stamps the quota when the plan changes", () => {
+    const pro = applyAppUpdate(base, { plan: "pro" }, 2000);
+    const scaled = applyAppUpdate(pro, { plan: "scale" }, 3000);
+    expect(scaled.plan).toBe("scale");
+    expect(scaled.monthlyMessageQuota).toBe(PLAN_CATALOG.scale.monthlyMessageQuota);
+  });
+
+  it("clearing the plan to null keeps the last-stamped quota (only drops the label)", () => {
+    const pro = applyAppUpdate(base, { plan: "pro" }, 2000);
+    const uncustomed = applyAppUpdate(pro, { plan: null }, 3000);
+    expect(uncustomed.plan).toBeNull();
+    expect(uncustomed.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+  });
+
+  it("leaves plan and quota unchanged when neither is in the patch", () => {
+    const pro = applyAppUpdate(base, { plan: "pro" }, 2000);
+    const renamed = applyAppUpdate(pro, { name: "x" }, 3000);
+    expect(renamed.plan).toBe("pro");
+    expect(renamed.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+  });
+
+  it("rejects an unknown plan patch", () => {
+    expect(() => applyAppUpdate(base, { plan: "enterprise" as never }, 2000)).toThrow(TypeError);
   });
 });
 

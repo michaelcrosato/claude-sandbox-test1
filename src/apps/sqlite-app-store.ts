@@ -37,6 +37,7 @@ import {
   type CreatedApp,
   type NewApp,
 } from "./app.js";
+import { isPlanId } from "./plan.js";
 
 // `node:sqlite` is loaded through createRequire rather than a static
 // `import ... from "node:sqlite"`. It is a genuine Node builtin and works either
@@ -69,6 +70,7 @@ export interface SqliteAppStoreOptions {
 interface AppRow {
   readonly id: string;
   readonly name: string;
+  readonly plan: string | null;
   readonly monthly_message_quota: number | null;
   readonly system_webhook_url: string | null;
   readonly system_webhook_secret: string | null;
@@ -91,6 +93,9 @@ function rowToApp(row: AppRow): App {
   return {
     id: row.id,
     name: row.name,
+    // Coerce an unrecognized stored value (a hand-tampered DB) to null rather than
+    // throwing on read — the write path validates via normalizePlan.
+    plan: isPlanId(row.plan) ? row.plan : null,
     monthlyMessageQuota:
       row.monthly_message_quota === null ? null : Number(row.monthly_message_quota),
     systemWebhookUrl: row.system_webhook_url ?? null,
@@ -154,6 +159,7 @@ export class SqliteAppStore implements AppStore {
     // Bring databases created before later schema additions up to current. For a
     // fresh database these columns are in SCHEMA and each call is a no-op.
     this.#migrateQuotaColumn();
+    this.#migratePlanColumn();
     this.#migrateLastUsedAtColumn();
     this.#migrateSystemWebhookColumns();
 
@@ -161,11 +167,11 @@ export class SqliteAppStore implements AppStore {
     // rowid order is insertion order → oldest-first, matching the in-memory backend.
     this.#listApps = this.#db.prepare("SELECT * FROM apps ORDER BY rowid");
     this.#insertApp = this.#db.prepare(
-      `INSERT INTO apps (id, name, monthly_message_quota, system_webhook_url, system_webhook_secret, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO apps (id, name, plan, monthly_message_quota, system_webhook_url, system_webhook_secret, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.#updateApp = this.#db.prepare(
-      "UPDATE apps SET name = ?, monthly_message_quota = ?, system_webhook_url = ?, updated_at = ? WHERE id = ?",
+      "UPDATE apps SET name = ?, plan = ?, monthly_message_quota = ?, system_webhook_url = ?, updated_at = ? WHERE id = ?",
     );
     this.#selectWebhookConfig = this.#db.prepare(
       "SELECT system_webhook_url, system_webhook_secret FROM apps WHERE id = ?",
@@ -210,6 +216,22 @@ export class SqliteAppStore implements AppStore {
       return;
     }
     this.#db.exec("ALTER TABLE apps ADD COLUMN monthly_message_quota INTEGER");
+  }
+
+  /**
+   * Add the `plan` column to a database created before the plan catalog existed.
+   * Existing rows default to `NULL` (custom/unmanaged — no preset), so an upgrade
+   * never changes a deployed tenant's quota. For a fresh database the column is in
+   * {@link SCHEMA} and this is a no-op.
+   */
+  #migratePlanColumn(): void {
+    const columns = this.#db.prepare("PRAGMA table_info(apps)").all() as {
+      name: string;
+    }[];
+    if (columns.some((c) => c.name === "plan")) {
+      return;
+    }
+    this.#db.exec("ALTER TABLE apps ADD COLUMN plan TEXT");
   }
 
   /**
@@ -258,6 +280,7 @@ export class SqliteAppStore implements AppStore {
     const app: App = {
       id,
       name: normalized.name,
+      plan: normalized.plan,
       monthlyMessageQuota: normalized.monthlyMessageQuota,
       systemWebhookUrl: normalized.systemWebhookUrl,
       createdAt: nowMs,
@@ -267,6 +290,7 @@ export class SqliteAppStore implements AppStore {
     this.#insertApp.run(
       app.id,
       app.name,
+      app.plan,
       app.monthlyMessageQuota,
       app.systemWebhookUrl,
       normalized.systemWebhookSecret,
@@ -293,7 +317,14 @@ export class SqliteAppStore implements AppStore {
         throw new UnknownAppError(id);
       }
       const next = applyAppUpdate(rowToApp(row), patch, this.#now());
-      this.#updateApp.run(next.name, next.monthlyMessageQuota, next.systemWebhookUrl, next.updatedAt, next.id);
+      this.#updateApp.run(
+        next.name,
+        next.plan,
+        next.monthlyMessageQuota,
+        next.systemWebhookUrl,
+        next.updatedAt,
+        next.id,
+      );
       // Keep the stored signing secret in sync with URL changes.
       if ("systemWebhookUrl" in patch) {
         if (next.systemWebhookUrl === null) {
@@ -424,6 +455,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS apps (
   id                    TEXT    PRIMARY KEY,
   name                  TEXT    NOT NULL,
+  plan                  TEXT,
   monthly_message_quota INTEGER,
   system_webhook_url    TEXT,
   system_webhook_secret TEXT,

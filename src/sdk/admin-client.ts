@@ -65,12 +65,40 @@ export interface PosthornAdminClientOptions {
 // types (which carry hashes and other internal state that never crosses the wire).
 // ---------------------------------------------------------------------------
 
+/** The named plan tiers the hosted control plane offers. `null` = custom/unmanaged. */
+export type PlanTier = "free" | "pro" | "scale";
+
+/**
+ * The metered allowances a {@link PlanTier} grants, as returned in
+ * {@link AdminApp.entitlements}. Each is a non-negative integer or `null` (no limit).
+ * Only `monthlyMessageQuota` is actively enforced; the rest are declared allowances.
+ */
+export interface PlanEntitlements {
+  /** Messages the tenant may accept per UTC calendar month under this plan. */
+  readonly monthlyMessageQuota: number | null;
+  /** Days of delivered history the plan declares (instance pruning is governed separately). */
+  readonly retentionDays: number | null;
+  /** Default per-endpoint delivery rate (deliveries/minute) the plan grants. */
+  readonly rateLimitPerMinute: number | null;
+}
+
 /** A tenant, as returned by the admin app routes. Carries no secret material. */
 export interface AdminApp {
   /** Server-assigned id (e.g. `app_…`); the `appId` endpoints and messages reference. */
   readonly id: string;
   /** Human-readable label; `""` when none was given. */
   readonly name: string;
+  /**
+   * The assigned plan tier, or `null` for a **custom/unmanaged** tenant. Assigning a
+   * plan stamps its {@link PlanEntitlements.monthlyMessageQuota} onto the tenant; the
+   * stored {@link monthlyMessageQuota} below is the live enforced value.
+   */
+  readonly plan: PlanTier | null;
+  /**
+   * The catalog allowances the assigned {@link plan} grants, or `null` for a
+   * custom/unmanaged tenant. A read-model convenience resolved from the plan.
+   */
+  readonly entitlements: PlanEntitlements | null;
   /**
    * The tenant's message quota per UTC calendar month, or `null` for **no limit**.
    * `POST /v1/messages` rejects a new message with `429` once a capped tenant reaches
@@ -109,8 +137,15 @@ export interface CreateAppInput {
   /** Optional human-readable label. Defaults to `""`. */
   readonly name?: string;
   /**
+   * Optional plan tier to assign, or `null`/absent for a custom/unmanaged tenant (the
+   * default). Stamps the plan's quota onto the tenant unless {@link monthlyMessageQuota}
+   * is also given (which overrides it). See {@link AdminApp.plan}.
+   */
+  readonly plan?: PlanTier | null;
+  /**
    * Optional monthly message quota (a non-negative integer), or `null`/absent for no
-   * limit (the default). See {@link AdminApp.monthlyMessageQuota}.
+   * limit (the default). Overrides any quota the {@link plan} would stamp.
+   * See {@link AdminApp.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
   /**
@@ -126,8 +161,15 @@ export interface UpdateAppInput {
   /** Replace the human-readable label. */
   readonly name?: string;
   /**
+   * Reassign the plan tier, or set `null` for custom/unmanaged. Omit to leave it
+   * unchanged. Assigning a non-null plan (without an explicit {@link monthlyMessageQuota}
+   * in the same patch) re-stamps the quota from the catalog. See {@link AdminApp.plan}.
+   */
+  readonly plan?: PlanTier | null;
+  /**
    * Replace the monthly message quota (a non-negative integer), or set `null` to
-   * remove the limit. Omit to leave it unchanged — the plan upgrade/downgrade lever.
+   * remove the limit. Omit to leave it unchanged. Overrides any quota the {@link plan}
+   * would stamp.
    */
   readonly monthlyMessageQuota?: number | null;
   /**
@@ -268,6 +310,7 @@ export class PosthornAdminClient {
   async createApp(input: CreateAppInput = {}): Promise<CreatedAdminApp> {
     const body: Record<string, unknown> = {};
     if (input.name !== undefined) body["name"] = input.name;
+    if (input.plan !== undefined) body["plan"] = input.plan;
     if (input.monthlyMessageQuota !== undefined) {
       body["monthlyMessageQuota"] = input.monthlyMessageQuota;
     }
@@ -295,14 +338,15 @@ export class PosthornAdminClient {
   }
 
   /**
-   * Update a tenant — `PATCH /v1/admin/apps/:id`. Only provided fields change; set
-   * `monthlyMessageQuota` to change the plan limit (or `null` to remove it). Set
-   * `systemWebhookUrl` to configure or clear system webhooks. Rejects `404` if the
-   * tenant is unknown.
+   * Update a tenant — `PATCH /v1/admin/apps/:id`. Only provided fields change; assign
+   * a `plan` to stamp its catalog quota, or set `monthlyMessageQuota` directly to
+   * override it (`null` removes the limit). Set `systemWebhookUrl` to configure or clear
+   * system webhooks. Rejects `404` if the tenant is unknown.
    */
   async updateApp(id: string, patch: UpdateAppInput): Promise<AdminApp> {
     const body: Record<string, unknown> = {};
     if (patch.name !== undefined) body["name"] = patch.name;
+    if (patch.plan !== undefined) body["plan"] = patch.plan;
     if (patch.monthlyMessageQuota !== undefined) {
       body["monthlyMessageQuota"] = patch.monthlyMessageQuota;
     }

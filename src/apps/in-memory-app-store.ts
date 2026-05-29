@@ -98,6 +98,7 @@ export class InMemoryAppStore implements AppStore {
     const app: App = {
       id,
       name: normalized.name,
+      plan: normalized.plan,
       monthlyMessageQuota: normalized.monthlyMessageQuota,
       systemWebhookUrl: normalized.systemWebhookUrl,
       createdAt: nowMs,

@@ -27,6 +27,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { PLAN_CATALOG, normalizePlan, type PlanId } from "./plan.js";
 
 /** Prefix on generated system webhook secrets. */
 export const SYSTEM_WEBHOOK_SECRET_PREFIX = "sws_";
@@ -40,6 +41,16 @@ export interface App {
   readonly id: string;
   /** Human-readable label. Empty string when none was given. */
   readonly name: string;
+  /**
+   * The tenant's assigned plan tier (`free` | `pro` | `scale`), or `null` for a
+   * **custom / unmanaged** tenant (the default). Assigning a plan stamps its
+   * {@link import("./plan.js").PlanEntitlements.monthlyMessageQuota} onto
+   * {@link monthlyMessageQuota} below; the plan is the label recording which preset
+   * was applied, while the stored quota is the live enforced value (see
+   * {@link import("./plan.js").PLAN_CATALOG}). `null` means no preset — the unmetered
+   * posture for a self-hosted single-tenant deployment.
+   */
+  readonly plan: PlanId | null;
   /**
    * The tenant's message quota per UTC calendar month, or `null` for **no limit**
    * (the default). When set, `POST /v1/messages` rejects a *new* message with `429`
@@ -84,8 +95,16 @@ export interface NewApp {
   /** Optional human-readable label. Defaults to `""`. */
   readonly name?: string;
   /**
+   * Optional plan tier to assign (`free` | `pro` | `scale`), or `null`/absent for a
+   * custom/unmanaged tenant (the default). When set (and no explicit
+   * {@link monthlyMessageQuota} is given), the plan's quota is stamped onto the app.
+   * See {@link App.plan}.
+   */
+  readonly plan?: PlanId | null;
+  /**
    * Optional monthly message quota (a non-negative integer), or `null`/absent for no
-   * limit (the default). See {@link App.monthlyMessageQuota}.
+   * limit (the default). When provided it **overrides** any quota the {@link plan}
+   * would stamp. See {@link App.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
   /**
@@ -101,8 +120,16 @@ export interface AppUpdate {
   /** Replace the human-readable label. */
   readonly name?: string;
   /**
+   * Reassign the plan tier (`free` | `pro` | `scale`), or set `null` for
+   * custom/unmanaged. Omit to leave it unchanged. Assigning a non-null plan (without
+   * an explicit {@link monthlyMessageQuota} in the same patch) re-stamps the quota
+   * from the catalog. See {@link App.plan}.
+   */
+  readonly plan?: PlanId | null;
+  /**
    * Replace the monthly message quota (a non-negative integer), or set `null` to
-   * remove the limit. Omit to leave it unchanged. See {@link App.monthlyMessageQuota}.
+   * remove the limit. Omit to leave it unchanged. When provided it **overrides** any
+   * quota the {@link plan} would stamp. See {@link App.monthlyMessageQuota}.
    */
   readonly monthlyMessageQuota?: number | null;
   /**
@@ -388,6 +415,7 @@ export function quotaRemaining(currentUsage: number, quota: number | null): numb
 /** The validated, normalized fields of a {@link NewApp}. */
 export interface NormalizedNewApp {
   readonly name: string;
+  readonly plan: PlanId | null;
   readonly monthlyMessageQuota: number | null;
   /** Normalized system webhook URL (`null` = not configured). */
   readonly systemWebhookUrl: string | null;
@@ -405,12 +433,33 @@ export interface NormalizedNewApp {
  */
 export function normalizeNewApp(input: NewApp = {}): NormalizedNewApp {
   const url = normalizeSystemWebhookUrl(input.systemWebhookUrl);
+  const plan = normalizePlan(input.plan);
   return {
     name: normalizeName(input.name),
-    monthlyMessageQuota: normalizeQuota(input.monthlyMessageQuota),
+    plan,
+    monthlyMessageQuota: resolveQuota(plan, input.monthlyMessageQuota),
     systemWebhookUrl: url,
     systemWebhookSecret: url !== null ? generateSystemWebhookSecret() : null,
   };
+}
+
+/**
+ * Resolve a tenant's effective monthly quota from its plan and an optional explicit
+ * value. An explicit `monthlyMessageQuota` (present — including explicit `null` for
+ * "unlimited") always **wins**; otherwise a non-null `plan` stamps its catalog quota,
+ * and a `null` plan leaves the quota `null` (no limit). `provided` is whether the
+ * caller supplied the field at all (so an explicit `null` overrides the plan, while
+ * an absent field defers to it). Shared by create and update so the stamp/override
+ * rule cannot drift.
+ */
+function resolveQuota(
+  plan: PlanId | null,
+  explicit: number | null | undefined,
+): number | null {
+  if (explicit !== undefined) {
+    return normalizeQuota(explicit);
+  }
+  return plan === null ? null : PLAN_CATALOG[plan].monthlyMessageQuota;
 }
 
 /**
@@ -420,13 +469,20 @@ export function normalizeNewApp(input: NewApp = {}): NormalizedNewApp {
  * semantics cannot drift. `id` and `createdAt` are preserved.
  */
 export function applyAppUpdate(current: App, patch: AppUpdate, nowMs: number): App {
+  const nextPlan = "plan" in patch ? normalizePlan(patch.plan) : current.plan;
   return {
     id: current.id,
     name: "name" in patch ? normalizeName(patch.name) : current.name,
+    plan: nextPlan,
+    // An explicit quota in the patch wins; otherwise reassigning to a non-null plan
+    // re-stamps the catalog quota (assigning `null` only clears the label, leaving the
+    // quota as-is); an omitted plan leaves the quota unchanged.
     monthlyMessageQuota:
       "monthlyMessageQuota" in patch
         ? normalizeQuota(patch.monthlyMessageQuota)
-        : current.monthlyMessageQuota,
+        : "plan" in patch && nextPlan !== null
+          ? PLAN_CATALOG[nextPlan].monthlyMessageQuota
+          : current.monthlyMessageQuota,
     systemWebhookUrl:
       "systemWebhookUrl" in patch
         ? normalizeSystemWebhookUrl(patch.systemWebhookUrl)

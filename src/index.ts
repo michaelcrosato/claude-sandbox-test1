@@ -314,6 +314,16 @@ export {
 } from "./apps/app.js";
 
 export {
+  PLAN_IDS,
+  PLAN_CATALOG,
+  isPlanId,
+  normalizePlan,
+  entitlementsForPlan,
+  type PlanId,
+  type PlanEntitlements,
+} from "./apps/plan.js";
+
+export {
   InMemoryAppStore,
   type InMemoryAppStoreOptions,
 } from "./apps/in-memory-app-store.js";

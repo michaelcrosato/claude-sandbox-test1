@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UnknownAppError, hashApiKey, type AppStore, SYSTEM_WEBHOOK_SECRET_PREFIX } from "./app.js";
+import { PLAN_CATALOG } from "./plan.js";
 
 /** Controllable clock + deterministic id/secret generators. */
 export interface AppConformanceClock {
@@ -148,6 +149,33 @@ export function describeAppStoreContract(
         await expect(store.create({ monthlyMessageQuota: 1.5 })).rejects.toThrow(TypeError);
         // @ts-expect-error — quota must be a number or null
         await expect(store.create({ monthlyMessageQuota: "100" })).rejects.toThrow(TypeError);
+      });
+
+      it("defaults plan to null and stamps a tier's quota, round-tripping both", async () => {
+        // Default: custom/unmanaged, no quota.
+        const custom = await store.create({ name: "custom" });
+        expect(custom.plan).toBeNull();
+        expect((await store.get(custom.id))?.plan).toBeNull();
+
+        // A named tier is persisted and stamps its catalog quota.
+        const pro = await store.create({ name: "pro", plan: "pro" });
+        expect(pro.plan).toBe("pro");
+        expect(pro.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+        const fetched = await store.get(pro.id);
+        expect(fetched?.plan).toBe("pro");
+        expect(fetched?.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+      });
+
+      it("lets an explicit quota override the plan's stamped value", async () => {
+        const app = await store.create({ plan: "scale", monthlyMessageQuota: 7 });
+        expect(app.plan).toBe("scale");
+        expect(app.monthlyMessageQuota).toBe(7);
+        expect((await store.get(app.id))?.monthlyMessageQuota).toBe(7);
+      });
+
+      it("rejects an unknown plan", async () => {
+        // @ts-expect-error — plan must be a known tier or null
+        await expect(store.create({ plan: "enterprise" })).rejects.toThrow(TypeError);
       });
 
       it("creates an app without systemWebhookUrl → both fields are null", async () => {
@@ -304,6 +332,40 @@ export function describeAppStoreContract(
         const lifted = await store.update(app.id, { monthlyMessageQuota: null });
         expect(lifted.monthlyMessageQuota).toBeNull();
         expect((await store.get(app.id))?.monthlyMessageQuota).toBeNull();
+      });
+
+      it("assigning a plan re-stamps its quota; clearing to null keeps it", async () => {
+        const app = await store.create({ name: "Acme" });
+        expect(app.plan).toBeNull();
+
+        // Assign a tier → plan + stamped quota persist.
+        const pro = await store.update(app.id, { plan: "pro" });
+        expect(pro.plan).toBe("pro");
+        expect(pro.monthlyMessageQuota).toBe(PLAN_CATALOG.pro.monthlyMessageQuota);
+        expect((await store.get(app.id))?.plan).toBe("pro");
+
+        // Reassign → re-stamps the new tier's quota.
+        const scaled = await store.update(app.id, { plan: "scale" });
+        expect(scaled.monthlyMessageQuota).toBe(PLAN_CATALOG.scale.monthlyMessageQuota);
+
+        // Clearing the label to null leaves the last-stamped quota in place.
+        const uncustomed = await store.update(app.id, { plan: null });
+        expect(uncustomed.plan).toBeNull();
+        expect(uncustomed.monthlyMessageQuota).toBe(PLAN_CATALOG.scale.monthlyMessageQuota);
+      });
+
+      it("an explicit quota in the same patch overrides the plan's", async () => {
+        const app = await store.create({ name: "Acme" });
+        const updated = await store.update(app.id, { plan: "free", monthlyMessageQuota: 3 });
+        expect(updated.plan).toBe("free");
+        expect(updated.monthlyMessageQuota).toBe(3);
+        expect((await store.get(app.id))?.monthlyMessageQuota).toBe(3);
+      });
+
+      it("rejects an unknown plan patch", async () => {
+        const app = await store.create();
+        // @ts-expect-error — plan must be a known tier or null
+        await expect(store.update(app.id, { plan: "enterprise" })).rejects.toThrow(TypeError);
       });
     });
 

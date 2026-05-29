@@ -2300,10 +2300,13 @@ describe("createApi — admin / control-plane API", () => {
 
       const got = await api(adminRequest("GET", `/v1/admin/apps/${appId}`, { token: ADMIN_TOKEN }));
       expect(got.status).toBe(200);
-      // The view is exactly identity + label + quota + timestamps — no secret material.
+      // The view is exactly identity + label + plan/entitlements + quota + timestamps —
+      // no secret material.
       expect(body(got)).toEqual({
         id: appId,
         name: "Acme",
+        plan: null,
+        entitlements: null,
         monthlyMessageQuota: null,
         systemWebhookUrl: null,
         createdAt: expect.any(Number),

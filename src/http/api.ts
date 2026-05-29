@@ -150,6 +150,7 @@ import {
   type CreatedApp,
   type NewApp,
 } from "../apps/app.js";
+import { entitlementsForPlan, type PlanId } from "../apps/plan.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { ingest } from "../fanout/fanout.js";
 import {
@@ -786,6 +787,10 @@ function appView(app: App): Record<string, unknown> {
   return {
     id: app.id,
     name: app.name,
+    // The assigned plan tier (null = custom/unmanaged), with the catalog allowances
+    // it grants resolved for display. `entitlements` is null for a custom plan.
+    plan: app.plan,
+    entitlements: entitlementsForPlan(app.plan),
     // The tenant's monthly message quota (null = no limit) — operator-visible so a
     // dashboard can show the plan; not secret material.
     monthlyMessageQuota: app.monthlyMessageQuota,
@@ -1720,9 +1725,10 @@ export function createApi(deps: ApiDeps): ApiHandler {
   // (no resolved `app`) and are gated by `adminAuthed`, not `authed`.
 
   const createApp: RouteHandler = async (ctx) => {
-    // The body is optional: no body creates an unnamed, unlimited app. When present,
-    // `name`, `monthlyMessageQuota`, and `systemWebhookUrl` are validated by the
-    // store's normalizeNewApp (TypeError → 400).
+    // The body is optional: no body creates an unnamed, custom-plan, unlimited app.
+    // When present, `name`, `plan`, `monthlyMessageQuota`, and `systemWebhookUrl` are
+    // validated by the store's normalizeNewApp (TypeError → 400). Assigning a `plan`
+    // stamps its quota unless an explicit `monthlyMessageQuota` overrides it.
     const body = ctx.req.rawBody.length > 0 ? parseJsonObject(ctx.req) : {};
     // Reject a private/internal system webhook URL before it is stored, mirroring the
     // endpoint-URL guard (BlockedUrlError → 400 url_not_allowed). The system-event send
@@ -1734,6 +1740,7 @@ export function createApi(deps: ApiDeps): ApiHandler {
     }
     const input: NewApp = {
       ...("name" in body ? { name: body["name"] as string } : {}),
+      ...("plan" in body ? { plan: body["plan"] as PlanId | null } : {}),
       ...("monthlyMessageQuota" in body
         ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
         : {}),
@@ -1756,11 +1763,12 @@ export function createApi(deps: ApiDeps): ApiHandler {
       assertUrlDeliverable(body["systemWebhookUrl"], ssrfPolicy);
     }
     // Only the patchable fields are forwarded; values are validated by applyAppUpdate
-    // (TypeError → 400). Setting `monthlyMessageQuota` is the plan upgrade/downgrade
-    // path (null removes the limit). `systemWebhookUrl` null clears the system webhook.
-    // An unknown app throws UnknownAppError → 404.
+    // (TypeError → 400). Assigning a `plan` re-stamps its catalog quota; an explicit
+    // `monthlyMessageQuota` overrides it (null removes the limit). `systemWebhookUrl`
+    // null clears the system webhook. An unknown app throws UnknownAppError → 404.
     const patch: AppUpdate = {
       ...("name" in body ? { name: body["name"] as string } : {}),
+      ...("plan" in body ? { plan: body["plan"] as PlanId | null } : {}),
       ...("monthlyMessageQuota" in body
         ? { monthlyMessageQuota: body["monthlyMessageQuota"] as number | null }
         : {}),

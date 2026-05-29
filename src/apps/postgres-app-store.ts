@@ -26,6 +26,7 @@ import {
   type CreatedApp,
   type NewApp,
 } from "./app.js";
+import { isPlanId } from "./plan.js";
 
 export interface PostgresAppStoreOptions {
   now?: () => number;
@@ -37,6 +38,7 @@ export interface PostgresAppStoreOptions {
 interface AppRow {
   readonly id: string;
   readonly name: string;
+  readonly plan: string | null;
   readonly monthly_message_quota: string | null; // BIGINT as string
   readonly system_webhook_url: string | null;
   readonly system_webhook_secret: string | null;
@@ -58,6 +60,9 @@ function rowToApp(row: AppRow): App {
   return {
     id: row.id,
     name: row.name,
+    // Coerce an unrecognized stored value (a hand-tampered DB) to null rather than
+    // throwing on read — the write path validates via normalizePlan.
+    plan: isPlanId(row.plan) ? row.plan : null,
     monthlyMessageQuota:
       row.monthly_message_quota === null ? null : Number(row.monthly_message_quota),
     systemWebhookUrl: row.system_webhook_url ?? null,
@@ -117,15 +122,16 @@ export class PostgresAppStore implements AppStore {
     const app: App = {
       id,
       name: normalized.name,
+      plan: normalized.plan,
       monthlyMessageQuota: normalized.monthlyMessageQuota,
       systemWebhookUrl: normalized.systemWebhookUrl,
       createdAt: nowMs,
       updatedAt: nowMs,
     };
     await this.#pool.query(
-      "INSERT INTO apps (id, name, monthly_message_quota, system_webhook_url, system_webhook_secret, created_at, updated_at)" +
-        " VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [app.id, app.name, app.monthlyMessageQuota, app.systemWebhookUrl,
+      "INSERT INTO apps (id, name, plan, monthly_message_quota, system_webhook_url, system_webhook_secret, created_at, updated_at)" +
+        " VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [app.id, app.name, app.plan, app.monthlyMessageQuota, app.systemWebhookUrl,
        normalized.systemWebhookSecret, app.createdAt, app.updatedAt],
     );
     return { ...app, systemWebhookSecret: normalized.systemWebhookSecret };
@@ -161,8 +167,8 @@ export class PostgresAppStore implements AppStore {
       }
       const next = applyAppUpdate(rowToApp(row), patch, this.#now());
       await client.query(
-        "UPDATE apps SET name=$1, monthly_message_quota=$2, system_webhook_url=$3, updated_at=$4 WHERE id=$5",
-        [next.name, next.monthlyMessageQuota, next.systemWebhookUrl, next.updatedAt, next.id],
+        "UPDATE apps SET name=$1, plan=$2, monthly_message_quota=$3, system_webhook_url=$4, updated_at=$5 WHERE id=$6",
+        [next.name, next.plan, next.monthlyMessageQuota, next.systemWebhookUrl, next.updatedAt, next.id],
       );
       if ("systemWebhookUrl" in patch) {
         if (next.systemWebhookUrl === null) {
@@ -318,12 +324,18 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS apps (
   id                    TEXT   PRIMARY KEY,
   name                  TEXT   NOT NULL,
+  plan                  TEXT,
   monthly_message_quota BIGINT,
   system_webhook_url    TEXT,
   system_webhook_secret TEXT,
   created_at            BIGINT NOT NULL,
   updated_at            BIGINT NOT NULL
 );
+
+-- Bring a database created before the plan catalog up to date. Idempotent: a
+-- fresh table already has the column. NULL = custom/unmanaged (no preset), so
+-- the upgrade never changes a deployed tenant's quota.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS plan TEXT;
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id           TEXT   PRIMARY KEY,

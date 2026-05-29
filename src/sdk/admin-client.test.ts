@@ -192,6 +192,26 @@ describe("PosthornAdminClient (against the in-process HTTP server)", () => {
     expect(unlimited.monthlyMessageQuota).toBeNull();
   });
 
+  it("assigns a plan, surfacing its entitlements and stamped quota", async () => {
+    const { admin } = await startAdminServer();
+    // Default tenant: custom/unmanaged.
+    const custom = await admin.createApp({ name: "Custom" });
+    expect(custom.plan).toBeNull();
+    expect(custom.entitlements).toBeNull();
+
+    // Assign a tier at create → plan label, resolved entitlements, stamped quota.
+    const pro = await admin.createApp({ name: "Pro", plan: "pro" });
+    expect(pro.plan).toBe("pro");
+    expect(pro.entitlements?.monthlyMessageQuota).toBe(pro.monthlyMessageQuota);
+    expect(pro.entitlements?.retentionDays).toBeGreaterThan(0);
+
+    // Upgrade via PATCH → re-stamps the new tier's quota.
+    const scaled = await admin.updateApp(pro.id, { plan: "scale" });
+    expect(scaled.plan).toBe("scale");
+    expect(scaled.monthlyMessageQuota).toBe(scaled.entitlements?.monthlyMessageQuota);
+    expect(scaled.monthlyMessageQuota!).toBeGreaterThan(pro.monthlyMessageQuota!);
+  });
+
   it("getApp on an unknown id rejects with a 404 PosthornApiError", async () => {
     const { admin } = await startAdminServer();
     const err = await admin.getApp("app_nope").then(

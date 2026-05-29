@@ -30,6 +30,7 @@ import {
 } from "../attempts/delivery-attempt.js";
 import { MAX_LIST_DELIVERIES_LIMIT } from "../queue/delivery-queue.js";
 import { MAX_REPLAY_LIMIT } from "../queue/replay-endpoint.js";
+import { PLAN_IDS } from "../apps/plan.js";
 import { DELIVERY_FAILURE_REASONS } from "../delivery/failure-reason.js";
 import { API_ERROR_CODES } from "./error-codes.js";
 import {
@@ -1075,9 +1076,10 @@ export function buildOpenApiDocument(): OpenApiDocument {
           tags: ["Admin"],
           summary: "Update a tenant",
           description:
-            "Patch a tenant; only the provided fields change. Set `monthlyMessageQuota` to " +
-            "change the plan (a non-negative integer to cap monthly messages, or null to remove " +
-            "the limit), or `name` to rename. Requires the admin token.",
+            "Patch a tenant; only the provided fields change. Assign a `plan` (free/pro/scale, " +
+            "or null for custom) to stamp its catalog quota, set `monthlyMessageQuota` directly " +
+            "(a non-negative integer, or null to remove the limit) to override it, or `name` to " +
+            "rename. Requires the admin token.",
           security: [{ adminAuth: [] }],
           parameters: [idParam("The app id.")],
           requestBody: jsonBody(ref("AppUpdate")),
@@ -2168,13 +2170,58 @@ export function buildOpenApiDocument(): OpenApiDocument {
             },
           },
         },
+        PlanEntitlements: {
+          type: "object",
+          description:
+            "The metered allowances a plan tier grants. Each is a non-negative integer or " +
+            "null (no limit). Only `monthlyMessageQuota` is actively enforced today (stamped " +
+            "onto the tenant); `retentionDays` and `rateLimitPerMinute` are the plan's declared " +
+            "allowances surfaced for display.",
+          required: ["monthlyMessageQuota", "retentionDays", "rateLimitPerMinute"],
+          properties: {
+            monthlyMessageQuota: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description: "Messages the tenant may accept per UTC calendar month under this plan.",
+            },
+            retentionDays: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "Days of delivered message/attempt history the plan declares. Note: the running " +
+                "gateway prunes by the instance-wide `POSTHORN_RETENTION_DAYS`, not this per-plan value.",
+            },
+            rateLimitPerMinute: {
+              type: ["integer", "null"],
+              minimum: 0,
+              description:
+                "The default per-endpoint delivery rate (deliveries/minute) the plan grants — the " +
+                "same unit as a per-endpoint `rateLimit` and `POSTHORN_DEFAULT_RATE_LIMIT`.",
+            },
+          },
+        },
         App: {
           type: "object",
           description: "A tenant. The unit a single instance serves, owns endpoints/messages, and (in the hosted plane) is metered/billed.",
-          required: ["id", "name", "monthlyMessageQuota", "systemWebhookUrl", "createdAt", "updatedAt"],
+          required: ["id", "name", "plan", "entitlements", "monthlyMessageQuota", "systemWebhookUrl", "createdAt", "updatedAt"],
           properties: {
             id: { type: "string", examples: ["app_2Yx9..."], description: "The `appId` endpoints and messages reference." },
             name: { type: "string", description: "Human-readable label; empty string when none." },
+            plan: {
+              type: ["string", "null"],
+              enum: [...PLAN_IDS, null],
+              description:
+                "The assigned plan tier, or null for a custom/unmanaged tenant (the default). " +
+                "Assigning a plan stamps its `monthlyMessageQuota` onto the tenant; the stored " +
+                "quota is the live enforced value, while this records which preset was applied.",
+            },
+            entitlements: {
+              ...nullableRef("PlanEntitlements"),
+              description:
+                "The catalog allowances the assigned `plan` grants, or null for a custom/" +
+                "unmanaged tenant. A read-model convenience resolved from the plan; the enforced " +
+                "value remains `monthlyMessageQuota` below.",
+            },
             monthlyMessageQuota: {
               type: ["integer", "null"],
               minimum: 0,
@@ -2223,13 +2270,21 @@ export function buildOpenApiDocument(): OpenApiDocument {
         },
         NewApp: {
           type: "object",
-          description: "The (optional) body of `POST /v1/admin/apps`. Omit it entirely to create an unnamed, unlimited tenant.",
+          description: "The (optional) body of `POST /v1/admin/apps`. Omit it entirely to create an unnamed, custom-plan, unlimited tenant.",
           properties: {
             name: { type: "string", description: "Optional human-readable label." },
+            plan: {
+              type: ["string", "null"],
+              enum: [...PLAN_IDS, null],
+              description:
+                "Optional plan tier to assign; omit or null for a custom/unmanaged tenant (the " +
+                "default). Stamps the plan's quota onto the tenant unless `monthlyMessageQuota` " +
+                "is also given (which overrides it).",
+            },
             monthlyMessageQuota: {
               type: ["integer", "null"],
               minimum: 0,
-              description: "Optional monthly message quota; omit or null for no limit (the default).",
+              description: "Optional monthly message quota; omit or null for no limit. Overrides any quota the `plan` would stamp.",
             },
             systemWebhookUrl: {
               type: ["string", "null"],
@@ -2245,13 +2300,22 @@ export function buildOpenApiDocument(): OpenApiDocument {
           type: "object",
           description:
             "The body of `PATCH /v1/admin/apps/{id}`. Only the provided fields change; " +
-            "`monthlyMessageQuota` set to null removes the limit.",
+            "assigning a `plan` re-stamps its catalog quota (an explicit `monthlyMessageQuota` " +
+            "in the same patch overrides it; null removes the limit).",
           properties: {
             name: { type: "string", description: "Replace the human-readable label." },
+            plan: {
+              type: ["string", "null"],
+              enum: [...PLAN_IDS, null],
+              description:
+                "Reassign the plan tier, or null for custom/unmanaged. Assigning a non-null plan " +
+                "(without an explicit `monthlyMessageQuota` in the same patch) re-stamps the quota " +
+                "from the catalog. Omit to leave unchanged.",
+            },
             monthlyMessageQuota: {
               type: ["integer", "null"],
               minimum: 0,
-              description: "Replace the monthly message quota; null removes the limit.",
+              description: "Replace the monthly message quota; null removes the limit. Overrides any quota the `plan` would stamp.",
             },
             systemWebhookUrl: {
               type: ["string", "null"],
