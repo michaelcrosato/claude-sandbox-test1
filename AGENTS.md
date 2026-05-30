@@ -148,3 +148,30 @@ genuine regression reproduces, the flake does not. Do **not** paper over it with
 (it would mask real regressions) or by forcing `singleFork` / `pool: "threads"` (the first serializes
 the whole suite; the second risks native-addon issues with `node:sqlite`) — the rare re-run is
 cheaper than either, which is why `vitest.config.ts` is left on the safe defaults.
+
+## Cursor Cloud specific instructions
+
+**Automatic startup (update script):** `bash scripts/agent/bootstrap.sh` (`npm ci`). No Docker or
+Postgres required for the default gate.
+
+**Services**
+
+| Service | Required for default dev? | Notes |
+| --- | --- | --- |
+| Node ≥ 22.13 | yes | `bash scripts/agent/doctor.sh` |
+| Posthorn gateway | only for manual HTTP/API work | `npm run build && npm start` — port **3000** by default |
+| PostgreSQL | no (optional) | `POSTHORN_TEST_PG_URL=postgres://… npm test` or `scripts/smoke-postgres.mjs` |
+
+**Run the gateway locally:** set `POSTHORN_ADMIN_TOKEN` (enables admin API + `/dashboard`), point
+`POSTHORN_DATA_DIR` at a writable directory (SQLite files), then `npm start`. The **admin CLI**
+(`node dist/main.js admin …`) reads the same `POSTHORN_DATA_DIR` — if it differs from the running
+gateway, tenants/keys land in a different database. For deliveries to `127.0.0.1` / RFC1918 targets
+during dev, set `POSTHORN_ALLOW_PRIVATE_NETWORK_WEBHOOKS=true` (SSRF guard blocks them by default).
+
+**Lint/format:** deliberately none — `scripts/agent/lint.sh` and `format.sh` exit 0 with "skipped".
+
+**Gate:** `bash scripts/agent/check.sh` (≈20s full Vitest). On a one-off `Worker exited unexpectedly`
+/Tinypool teardown with no failed assertions, re-run once (see flake note above).
+
+**Optional:** `bash scripts/agent/smoke.sh` after build (compiled-dist smokes; no long-running stack).
+`pwsh` is not installed in Cloud VMs — use `check.sh`, not `scripts/local-gate.ps1`.
