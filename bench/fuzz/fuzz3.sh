@@ -13,11 +13,15 @@ RES=$(curl -s -X POST http://127.0.0.1:3000/v1/signup -H "Content-Type: applicat
 API_KEY=$(echo "$RES" | jq -r '.secret')
 APP_ID=$(echo "$RES" | jq -r '.app.id')
 
+PAYLOAD1=$(cat << 'PAYLOAD'
+{"id": "test.event2", "name": "test'; DROP TABLE apps; --"}
+PAYLOAD
+)
 # Try SQLi properly
 curl -s -X POST http://127.0.0.1:3000/v1/event-types \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"id": "test.event2", "name": "test\'; DROP TABLE apps; --"}'
+  -d "$PAYLOAD1"
 
 # Test messages schema
 curl -s -X POST http://127.0.0.1:3000/v1/messages \
