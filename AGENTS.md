@@ -66,6 +66,8 @@ hand-edit the log.
 
 ## Conventions
 
+- **Vulnerability remediation:** Proactively run `npm audit fix --force` when moderate or higher vulnerabilities are detected in core dependencies (e.g. `vite`, `esbuild`), provided the full test suite remains green.
+- **Chaos testing:** All new or updated API endpoints must pass stress testing against JSON recursion limits, massive payloads, and concurrent idempotency requests prior to merging.
 - **TypeScript strict**: `exactOptionalPropertyTypes` (don't assign `undefined` to an optional —
   omit it), `noUncheckedIndexedAccess` (indexed access is `T | undefined`), `verbatimModuleSyntax`
   (use `import type`). ESM only.
