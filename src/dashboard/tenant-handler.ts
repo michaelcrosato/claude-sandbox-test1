@@ -219,13 +219,16 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
       const attemptLog = attemptsPage.data;
 
       // Enrich delivery tasks with endpoint URLs (best-effort: a deleted endpoint is null).
-      const enriched: EnrichedDelivery[] = await Promise.all(
-        tasks.map(async (task) => {
-          if (task.endpointId === null) return { task, endpointUrl: null };
-          const ep = await endpoints.get(task.endpointId);
-          return { task, endpointUrl: ep !== null && ep.appId === appId ? ep.url : null };
-        }),
-      );
+      const uniqueEndpointIds = Array.from(new Set(tasks.map(t => t.endpointId).filter(id => id !== null)));
+      const endpointMap = new Map<string, string>();
+      await Promise.all(uniqueEndpointIds.map(async id => {
+        const ep = await endpoints.get(id as string);
+        if (ep !== null && ep.appId === appId) endpointMap.set(id as string, ep.url);
+      }));
+      const enriched: EnrichedDelivery[] = tasks.map((task) => ({
+        task,
+        endpointUrl: task.endpointId !== null ? (endpointMap.get(task.endpointId) ?? null) : null
+      }));
 
       return html(200, tenantMessageDetailPage(message, enriched, attemptLog));
     }
