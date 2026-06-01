@@ -188,11 +188,11 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const ssrfPolicy = { allowPrivateNetworks: deps.allowPrivateNetworks ?? false };
 
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal`;
+    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal; Secure`;
   }
 
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/portal; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/portal; Max-Age=0; Secure`;
   }
 
   /** Validate the session cookie. Returns `{ appId }` when valid, or a redirect response. */

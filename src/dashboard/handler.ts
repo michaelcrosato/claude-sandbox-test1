@@ -118,12 +118,12 @@ export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
 
   // Set-Cookie header value for a new session token.
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Secure`;
   }
 
   // Set-Cookie header value that clears the cookie.
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure`;
   }
 
   // Redirect to login if not authenticated; return undefined when the session is valid.

@@ -103,6 +103,7 @@ describe("createDashboardHandler — login / logout", () => {
     expect(headers["set-cookie"]).toMatch(/ph_session=[^;]+/);
     expect(headers["set-cookie"]).toContain("HttpOnly");
     expect(headers["set-cookie"]).toContain("SameSite=Strict");
+    expect(headers["set-cookie"]).toContain("Secure");
   });
 
   it("POST /dashboard/logout clears cookie and redirects to login", async () => {
@@ -114,6 +115,7 @@ describe("createDashboardHandler — login / logout", () => {
     const headers = res.headers as Record<string, string>;
     expect(headers["location"]).toBe("/dashboard/login");
     expect(headers["set-cookie"]).toContain("Max-Age=0");
+    expect(headers["set-cookie"]).toContain("Secure");
   });
 });
 
