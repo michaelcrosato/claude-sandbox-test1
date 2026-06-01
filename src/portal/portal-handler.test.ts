@@ -59,6 +59,7 @@ describe("createPortalHandler", () => {
     expect(res.headers?.["location"]).toBe("/portal/endpoints");
     expect(res.headers?.["set-cookie"]).toContain(token);
     expect(res.headers?.["set-cookie"]).toContain("HttpOnly");
+    expect(res.headers?.["set-cookie"]).toContain("Secure");
     expect(res.headers?.["set-cookie"]).toContain("SameSite=Strict");
   });
 
@@ -296,6 +297,7 @@ describe("createPortalHandler", () => {
     expect(res.status).toBe(302);
     expect(res.headers?.["location"]).toBe("/portal/login");
     expect(res.headers?.["set-cookie"]).toContain("Max-Age=0");
+    expect(res.headers?.["set-cookie"]).toContain("HttpOnly; SameSite=Strict; Path=/portal; Secure");
     // Session is gone: the token no longer validates.
     expect(sessions.getSession(token, clock.t + 1)).toBeNull();
   });
