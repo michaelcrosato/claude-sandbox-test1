@@ -102,6 +102,7 @@ describe("createDashboardHandler — login / logout", () => {
     expect(headers["location"]).toBe("/dashboard/apps");
     expect(headers["set-cookie"]).toMatch(/ph_session=[^;]+/);
     expect(headers["set-cookie"]).toContain("HttpOnly");
+    expect(headers["set-cookie"]).toContain("Secure");
     expect(headers["set-cookie"]).toContain("SameSite=Strict");
   });
 

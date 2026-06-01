@@ -59,6 +59,7 @@ describe("createPortalHandler", () => {
     expect(res.headers?.["location"]).toBe("/portal/endpoints");
     expect(res.headers?.["set-cookie"]).toContain(token);
     expect(res.headers?.["set-cookie"]).toContain("HttpOnly");
+    expect(res.headers?.["set-cookie"]).toContain("Secure");
     expect(res.headers?.["set-cookie"]).toContain("SameSite=Strict");
   });
 

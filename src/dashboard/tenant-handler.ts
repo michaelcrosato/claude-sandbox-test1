@@ -113,11 +113,11 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
   const clock = deps.now ?? (() => Date.now());
 
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+    return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
   }
 
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
   }
 
   /**
