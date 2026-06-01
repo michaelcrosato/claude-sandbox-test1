@@ -218,14 +218,17 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
       ]);
       const attemptLog = attemptsPage.data;
 
+      // Since endpoints are scoped per-tenant, we can avoid N+1 queries by
+      // fetching all endpoints for the app in a single query and doing a memory lookup.
+      const appEndpoints = await endpoints.listByApp(appId);
+      const endpointsById = new Map(appEndpoints.map((ep) => [ep.id, ep]));
+
       // Enrich delivery tasks with endpoint URLs (best-effort: a deleted endpoint is null).
-      const enriched: EnrichedDelivery[] = await Promise.all(
-        tasks.map(async (task) => {
-          if (task.endpointId === null) return { task, endpointUrl: null };
-          const ep = await endpoints.get(task.endpointId);
-          return { task, endpointUrl: ep !== null && ep.appId === appId ? ep.url : null };
-        }),
-      );
+      const enriched: EnrichedDelivery[] = tasks.map((task) => {
+        if (task.endpointId === null) return { task, endpointUrl: null };
+        const ep = endpointsById.get(task.endpointId);
+        return { task, endpointUrl: ep !== undefined ? ep.url : null };
+      });
 
       return html(200, tenantMessageDetailPage(message, enriched, attemptLog));
     }
