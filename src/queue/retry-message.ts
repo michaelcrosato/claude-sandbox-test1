@@ -67,18 +67,22 @@ export async function retryMessageDeliveries(
   deps: RetryMessageDeps,
 ): Promise<RetryMessageResult> {
   const tasks = await deps.queue.listByMessage(messageId);
+  const deadLetterTasks = tasks.filter(task => task.status === "dead_letter");
+
+  if (deadLetterTasks.length === 0) {
+    return { messageId, retried: 0, tasks };
+  }
+
+  const results = await Promise.allSettled(
+    deadLetterTasks.map(task => deps.queue.retry(task.id))
+  );
+
   let retried = 0;
-  for (const task of tasks) {
-    if (task.status !== "dead_letter") {
-      continue;
-    }
-    try {
-      await deps.queue.retry(task.id);
+  for (const result of results) {
+    if (result.status === "fulfilled") {
       retried += 1;
-    } catch (err) {
-      // Expected under a concurrent retry of the same message: the task was
-      // revived (now pending) between the list and this call, so it is no longer
-      // terminal. Treat as already-handled rather than an error.
+    } else {
+      const err = result.reason;
       if (
         err instanceof DeliveryStateError ||
         err instanceof UnknownDeliveryTaskError
@@ -88,6 +92,7 @@ export async function retryMessageDeliveries(
       throw err;
     }
   }
+
   // Re-list so the returned snapshots reflect the revived (`pending`) tasks.
   const refreshed = retried > 0 ? await deps.queue.listByMessage(messageId) : tasks;
   return { messageId, retried, tasks: refreshed };

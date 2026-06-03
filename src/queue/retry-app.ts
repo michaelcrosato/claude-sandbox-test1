@@ -51,12 +51,20 @@ export async function retryEndpointDeliveries(
     limit,
   });
 
+  if (page.deliveries.length === 0) {
+    return { retried: 0, hasMore: false };
+  }
+
+  const results = await Promise.allSettled(
+    page.deliveries.map(task => deps.queue.retry(task.id))
+  );
+
   let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
+  for (const result of results) {
+    if (result.status === "fulfilled") {
       retried += 1;
-    } catch (err) {
+    } else {
+      const err = result.reason;
       if (
         err instanceof DeliveryStateError ||
         err instanceof UnknownDeliveryTaskError
@@ -127,12 +135,20 @@ export async function retryAppDeliveries(
     limit,
   });
 
+  if (page.deliveries.length === 0) {
+    return { retried: 0, hasMore: false };
+  }
+
+  const results = await Promise.allSettled(
+    page.deliveries.map(task => deps.queue.retry(task.id))
+  );
+
   let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
+  for (const result of results) {
+    if (result.status === "fulfilled") {
       retried += 1;
-    } catch (err) {
+    } else {
+      const err = result.reason;
       // The task was already revived by a concurrent caller — treat as handled.
       if (
         err instanceof DeliveryStateError ||
