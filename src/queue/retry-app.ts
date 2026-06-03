@@ -51,21 +51,22 @@ export async function retryEndpointDeliveries(
     limit,
   });
 
-  let retried = 0;
-  for (const task of page.deliveries) {
+  const promises = page.deliveries.map(async (task) => {
     try {
       await deps.queue.retry(task.id);
-      retried += 1;
+      return 1;
     } catch (err) {
       if (
         err instanceof DeliveryStateError ||
         err instanceof UnknownDeliveryTaskError
       ) {
-        continue;
+        return 0;
       }
       throw err;
     }
-  }
+  });
+  const counts = await Promise.all(promises);
+  let retried = 0; for (const c of counts) retried += c;
 
   return { retried, hasMore: page.nextCursor !== null };
 }
@@ -127,22 +128,23 @@ export async function retryAppDeliveries(
     limit,
   });
 
-  let retried = 0;
-  for (const task of page.deliveries) {
+  const promises = page.deliveries.map(async (task) => {
     try {
       await deps.queue.retry(task.id);
-      retried += 1;
+      return 1;
     } catch (err) {
       // The task was already revived by a concurrent caller — treat as handled.
       if (
         err instanceof DeliveryStateError ||
         err instanceof UnknownDeliveryTaskError
       ) {
-        continue;
+        return 0;
       }
       throw err;
     }
-  }
+  });
+  const counts = await Promise.all(promises);
+  let retried = 0; for (const c of counts) retried += c;
 
   return { retried, hasMore: page.nextCursor !== null };
 }
