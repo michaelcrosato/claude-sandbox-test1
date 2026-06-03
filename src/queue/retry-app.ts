@@ -52,20 +52,22 @@ export async function retryEndpointDeliveries(
   });
 
   let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
-      retried += 1;
-    } catch (err) {
-      if (
-        err instanceof DeliveryStateError ||
-        err instanceof UnknownDeliveryTaskError
-      ) {
-        continue;
+  await Promise.all(
+    page.deliveries.map(async (task) => {
+      try {
+        await deps.queue.retry(task.id);
+        retried += 1;
+      } catch (err) {
+        if (
+          err instanceof DeliveryStateError ||
+          err instanceof UnknownDeliveryTaskError
+        ) {
+          return;
+        }
+        throw err;
       }
-      throw err;
-    }
-  }
+    }),
+  );
 
   return { retried, hasMore: page.nextCursor !== null };
 }
@@ -128,21 +130,23 @@ export async function retryAppDeliveries(
   });
 
   let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
-      retried += 1;
-    } catch (err) {
-      // The task was already revived by a concurrent caller — treat as handled.
-      if (
-        err instanceof DeliveryStateError ||
-        err instanceof UnknownDeliveryTaskError
-      ) {
-        continue;
+  await Promise.all(
+    page.deliveries.map(async (task) => {
+      try {
+        await deps.queue.retry(task.id);
+        retried += 1;
+      } catch (err) {
+        // The task was already revived by a concurrent caller — treat as handled.
+        if (
+          err instanceof DeliveryStateError ||
+          err instanceof UnknownDeliveryTaskError
+        ) {
+          return;
+        }
+        throw err;
       }
-      throw err;
-    }
-  }
+    }),
+  );
 
   return { retried, hasMore: page.nextCursor !== null };
 }
