@@ -410,6 +410,51 @@ describe("systemEventTransportFrom", () => {
     }
   });
 
+  it("clears the timeout when the transport rejects first (no late abort)", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedSignal: AbortSignal | undefined;
+      const transport: Transport = (_request, signal) => {
+        capturedSignal = signal;
+        return Promise.reject(new Error("boom"));
+      };
+      const send = systemEventTransportFrom(transport, { timeoutMs: 5000 });
+      await expect(
+        send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" }),
+      ).rejects.toThrow("boom");
+      vi.advanceTimersByTime(60_000);
+      expect(capturedSignal!.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enforces POST method regardless of init.method", async () => {
+    const { transport, calls } = recordingTransport({ status: 202 });
+    const send = systemEventTransportFrom(transport);
+
+    await send("https://ops.example/hook", {
+      method: "GET", // attempt to override
+      headers: {},
+      body: "{}",
+    });
+
+    expect(calls[0]!.request.method).toBe("POST");
+  });
+
+  it("handles negative timeoutMs as no-timeout (preserves fire-and-forget)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, calls } = recordingTransport();
+      const send = systemEventTransportFrom(transport, { timeoutMs: -1000 });
+      await send("https://ops.example/hook", { method: "POST", headers: {}, body: "{}" });
+      vi.advanceTimersByTime(1_000_000);
+      expect(calls[0]!.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates a connection-time SSRF block from the guarded transport", async () => {
     // Wrap a guarded transport whose DNS resolution is pinned to the cloud-metadata
     // address — the same connection-time defense the tenant delivery path uses. The
