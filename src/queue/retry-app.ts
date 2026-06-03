@@ -51,21 +51,25 @@ export async function retryEndpointDeliveries(
     limit,
   });
 
-  let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
-      retried += 1;
-    } catch (err) {
-      if (
-        err instanceof DeliveryStateError ||
-        err instanceof UnknownDeliveryTaskError
-      ) {
-        continue;
+  const results = await Promise.all(
+    page.deliveries.map(async (task) => {
+      try {
+        await deps.queue.retry(task.id);
+        return true;
+      } catch (err) {
+        // The task was already revived by a concurrent caller — treat as handled.
+        if (
+          err instanceof DeliveryStateError ||
+          err instanceof UnknownDeliveryTaskError
+        ) {
+          return false;
+        }
+        throw err;
       }
-      throw err;
-    }
-  }
+    }),
+  );
+
+  const retried = results.filter(Boolean).length;
 
   return { retried, hasMore: page.nextCursor !== null };
 }
@@ -127,22 +131,25 @@ export async function retryAppDeliveries(
     limit,
   });
 
-  let retried = 0;
-  for (const task of page.deliveries) {
-    try {
-      await deps.queue.retry(task.id);
-      retried += 1;
-    } catch (err) {
-      // The task was already revived by a concurrent caller — treat as handled.
-      if (
-        err instanceof DeliveryStateError ||
-        err instanceof UnknownDeliveryTaskError
-      ) {
-        continue;
+  const results = await Promise.all(
+    page.deliveries.map(async (task) => {
+      try {
+        await deps.queue.retry(task.id);
+        return true;
+      } catch (err) {
+        // The task was already revived by a concurrent caller — treat as handled.
+        if (
+          err instanceof DeliveryStateError ||
+          err instanceof UnknownDeliveryTaskError
+        ) {
+          return false;
+        }
+        throw err;
       }
-      throw err;
-    }
-  }
+    }),
+  );
+
+  const retried = results.filter(Boolean).length;
 
   return { retried, hasMore: page.nextCursor !== null };
 }
