@@ -18,7 +18,7 @@
  *   subsequent query uses that session-held `appId`, so a tenant cannot forge
  *   another tenant's data by crafting a URL.
  * - Cross-tenant resources return `404`, not `403` — same as the JSON API.
- * - Session cookies are `HttpOnly; SameSite=Strict`. No CSRF token needed.
+ * - Session cookies are `HttpOnly; Secure; SameSite=Strict`. No CSRF token needed.
  * - Session store is in-memory: a restart forces re-login (expected for a
  *   developer-debugging tool).
  */
@@ -113,11 +113,11 @@ export function createTenantDashboardHandler(deps: TenantDashboardDeps): ApiHand
   const clock = deps.now ?? (() => Date.now());
 
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+    return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
   }
 
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
   }
 
   /**

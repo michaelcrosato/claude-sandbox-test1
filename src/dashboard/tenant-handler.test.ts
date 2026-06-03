@@ -103,6 +103,7 @@ describe("createTenantDashboardHandler — login / logout", () => {
     const setCookie = (res.headers as Record<string, string>)["set-cookie"];
     expect(setCookie).toMatch(/ph_tenant_session=/);
     expect(setCookie).toMatch(/HttpOnly/);
+    expect(setCookie).toMatch(/Secure/);
     expect(setCookie).toMatch(/SameSite=Strict/);
     const location = (res.headers as Record<string, string>)["location"];
     expect(location).toBe("/dashboard/tenant/messages");

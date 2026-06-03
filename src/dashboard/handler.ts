@@ -9,9 +9,8 @@
  * Security decisions (not incidental):
  * - `POSTHORN_ADMIN_TOKEN` is the sole credential — no extra password to configure.
  * - Tokens are compared in constant time (SHA-256 both sides) to prevent timing leaks.
- * - Session cookies are `HttpOnly; SameSite=Strict`, preventing JS access and CSRF
- *   from cross-site requests respectively. `Secure` is omitted because the Node server
- *   has no TLS; operators deploying over HTTPS should add it via a reverse proxy.
+ * - Session cookies are `HttpOnly; Secure; SameSite=Strict`, preventing JS access and CSRF
+ *   from cross-site requests respectively. `Secure` is included to ensure the cookie is only sent over HTTPS.
  * - Sessions are ephemeral (in-memory); a gateway restart requires re-login.
  * - All user-supplied strings are HTML-escaped in the templates.
  */
@@ -118,12 +117,12 @@ export function createDashboardHandler(deps: DashboardDeps): ApiHandler {
 
   // Set-Cookie header value for a new session token.
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+    return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
   }
 
   // Set-Cookie header value that clears the cookie.
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
   }
 
   // Redirect to login if not authenticated; return undefined when the session is valid.

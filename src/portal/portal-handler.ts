@@ -21,7 +21,7 @@
  *  POST /portal/logout        — clear session cookie
  *
  * Security decisions (not incidental):
- *  - Session cookie is `HttpOnly; SameSite=Strict`. No CSRF token needed.
+ *  - Session cookie is `HttpOnly; Secure; SameSite=Strict`. No CSRF token needed.
  *  - `appId` comes from the session (resolved at token exchange), never a URL param.
  *  - Cross-tenant endpoints return `404` (existence never revealed).
  *  - The signing secret is shown exactly once (at endpoint creation and at rotation);
@@ -188,11 +188,11 @@ export function createPortalHandler(deps: PortalDeps): ApiHandler {
   const ssrfPolicy = { allowPrivateNetworks: deps.allowPrivateNetworks ?? false };
 
   function sessionCookie(token: string): string {
-    return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/portal`;
+    return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/portal`;
   }
 
   function clearCookie(): string {
-    return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/portal; Max-Age=0`;
+    return `${COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/portal; Max-Age=0`;
   }
 
   /** Validate the session cookie. Returns `{ appId }` when valid, or a redirect response. */
