@@ -67,28 +67,30 @@ export async function cancelMessageDeliveries(
   deps: CancelMessageDeps,
 ): Promise<CancelMessageResult> {
   const tasks = await deps.queue.listByMessage(messageId);
-  let cancelled = 0;
-  for (const task of tasks) {
-    if (task.status !== "pending") {
-      continue;
-    }
-    try {
-      await deps.queue.cancel(task.id);
-      cancelled += 1;
-    } catch (err) {
-      // Expected under a concurrent cancel of the same message (or if the worker
-      // claimed the task between the list and this call): the task is no longer
-      // pending. Treat as already-handled rather than an error.
-      if (
-        err instanceof DeliveryStateError ||
-        err instanceof UnknownDeliveryTaskError
-      ) {
-        continue;
+  const pendingTasks = tasks.filter((task) => task.status === "pending");
+
+  const results = await Promise.all(
+    pendingTasks.map(async (task) => {
+      try {
+        await deps.queue.cancel(task.id);
+        return 1;
+      } catch (err) {
+        // Expected under a concurrent cancel of the same message (or if the worker
+        // claimed the task between the list and this call): the task is no longer
+        // pending. Treat as already-handled rather than an error.
+        if (
+          err instanceof DeliveryStateError ||
+          err instanceof UnknownDeliveryTaskError
+        ) {
+          return 0;
+        }
+        throw err;
       }
-      throw err;
-    }
-  }
+    }),
+  );
+  const cancelled = results.reduce<number>((sum, val) => sum + val, 0);
   // Re-list so the returned snapshots reflect the cancelled tasks.
-  const refreshed = cancelled > 0 ? await deps.queue.listByMessage(messageId) : tasks;
+  const refreshed =
+    cancelled > 0 ? await deps.queue.listByMessage(messageId) : tasks;
   return { messageId, cancelled, tasks: refreshed };
 }
