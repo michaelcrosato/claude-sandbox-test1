@@ -1,0 +1,5 @@
+🧪 Add tests for createBillingProvider
+
+🎯 **What:** Added missing tests for the `createBillingProvider` factory function in `src/billing/index.ts`.
+📊 **Coverage:** Covered all code paths of `createBillingProvider` including branching on `"none"` and `"stripe"` configurations, correctly passing config and mocked transport. Handled the case when `stripeSecretKey` is `null` translating it into an empty string fallback mechanism.
+✨ **Result:** Improved test coverage and reliability of the billing provider resolution logic ensuring accurate initialization of `StripeBillingProvider` and `NoopBillingProvider` implementations.
