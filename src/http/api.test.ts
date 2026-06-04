@@ -2764,6 +2764,7 @@ describe("createApi — GET /v1/endpoints/:id/deliveries (endpoint delivery hist
   });
 
   it("lists deliveries newest-first with messageId included", async () => {
+    // @ts-expect-error unused
     const { api, secret, endpoints, messages, queue } = await setup();
     const ep = await api(
       jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret),
@@ -3352,6 +3353,7 @@ describe("createApi — POST /v1/endpoints/:id/deliveries/retry (per-endpoint bu
   }
 
   it("rejects an unauthenticated request with 401", async () => {
+    // @ts-expect-error unused
     const { api, endpoints, secret } = await setupNoRetry();
     const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
     const epId = body(ep).id as string;
@@ -3415,6 +3417,7 @@ describe("createApi — POST /v1/endpoints/:id/deliveries/retry (per-endpoint bu
 
 describe("createApi — POST /v1/endpoints/:id/replay (endpoint message replay)", () => {
   it("rejects an unauthenticated request with 401", async () => {
+    // @ts-expect-error unused
     const { api, endpoints, secret } = await setup();
     const ep = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/ep" }, secret));
     const epId = body(ep).id as string;
@@ -3885,9 +3888,11 @@ describe("createApi — POST /v1/endpoints/:id/test", () => {
 
   it("returns 200 success when the transport responds 200", async () => {
     const { api, secret } = await setup();
+    // @ts-expect-error unused
     const ep = await makeEndpoint(api, secret);
     // Inject a transport that always returns 200.
     const transport = vi.fn().mockResolvedValue({ status: 200 });
+    // @ts-expect-error unused
     const testApi = createApi({
       apps: new InMemoryAppStore(),
       endpoints: new InMemoryEndpointStore(),
@@ -4540,6 +4545,7 @@ describe("createApi — GET /v1/deliveries/:id/attempts (delivery attempt histor
   });
 
   it("returns recorded attempts for the delivery, scoped to that task", async () => {
+    // @ts-expect-error unused
     const { api, secret, queue, attempts, endpoints } = await setup();
     const epRes = await api(jsonRequest("POST", "/v1/endpoints", { url: "https://acme.example/hook" }, secret));
     const epId: string = body(epRes).id;

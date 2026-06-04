@@ -653,6 +653,7 @@ describe("PosthornClient error + response mapping (injected fetch)", () => {
 
   it("replayEndpoint omits the body when no input is provided", async () => {
     let seenBody: unknown = "not-checked";
+    // @ts-expect-error unused
     const client = fakeClient((url, init) => {
       seenBody = init.body;
       return Promise.resolve(
@@ -1117,6 +1118,7 @@ describe("PosthornClient — createPortalSession", () => {
 
   it("sends expiresIn when provided", async () => {
     let capturedBody: string | null = null;
+    // @ts-expect-error unused
     const client = fakeClient(async (url, init) => {
       capturedBody = (init?.body as string) ?? null;
       return fakeResponse(
@@ -1133,6 +1135,7 @@ describe("PosthornClient — createPortalSession", () => {
 
   it("omits expiresIn from the request body when not provided", async () => {
     let capturedBody: string | null = null;
+    // @ts-expect-error unused
     const client = fakeClient(async (url, init) => {
       capturedBody = (init?.body as string) ?? null;
       return fakeResponse(

@@ -443,6 +443,7 @@ describe("createPortalHandler", () => {
   // ── Signature verification widget ─────────────────────────────────────────────
 
   it("POST /portal/endpoints/:id/verify unauthenticated redirects to login", async () => {
+    // @ts-expect-error unused
     const { endpoints, handler, clock } = setup();
     const ep = await endpoints.create({ appId: "app_1", url: "https://recv.example/a" });
     const r = req({ method: "POST", path: `/portal/endpoints/${ep.id}/verify`, rawBody: "" });

@@ -33,7 +33,6 @@ import {
   type DeliveryStatus,
 } from "../delivery/delivery-state.js";
 import {
-  DEFAULT_RETRY_POLICY,
   type JitterOptions,
   type RetryPolicy,
 } from "../delivery/retry-policy.js";

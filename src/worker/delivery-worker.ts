@@ -1067,6 +1067,7 @@ export class DeliveryWorker {
    * expected at-least-once outcome of a lapsed-and-reclaimed lease: discard the
    * orphaned result (`stale`). Anything else is unexpected and re-thrown.
    */
+    // @ts-expect-error unused
   #absorbSettleError(error: unknown, task: DeliveryTask): TaskOutcome {
     if (
       error instanceof StaleLeaseError ||

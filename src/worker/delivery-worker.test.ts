@@ -19,7 +19,6 @@ import { InMemoryMessageStore } from "../storage/in-memory-store.js";
 import { InMemoryEndpointStore } from "../endpoints/in-memory-endpoint-store.js";
 import { storeBackedResolver } from "../endpoints/endpoint-resolver.js";
 import {
-  StaleLeaseError,
   type DeliveryQueue,
   type DeliveryTask,
 } from "../queue/delivery-queue.js";

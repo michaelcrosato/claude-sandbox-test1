@@ -640,6 +640,7 @@ export function describeMessageStoreContract(
       it("filters by eventType, returning only matching messages newest-first", async () => {
         const a1 = await store.create({ appId: APP, eventType: "user.created", payload: "{}" });
         clock.advance(1);
+    // @ts-expect-error unused
         const _b = await store.create({ appId: APP, eventType: "order.placed", payload: "{}" });
         clock.advance(1);
         const a2 = await store.create({ appId: APP, eventType: "user.created", payload: "{}" });
@@ -799,6 +800,7 @@ export function describeMessageStoreContract(
       it("filters by channel, returning only matching messages newest-first", async () => {
         const a = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "acme" });
         clock.advance(1);
+    // @ts-expect-error unused
         const _b = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "beta" });
         clock.advance(1);
         const c = await store.create({ appId: APP, eventType: "e", payload: "{}", channel: "acme" });

@@ -106,6 +106,7 @@ import {
 } from "../event-types/event-type.js";
 import {
   MAX_LIST_DELIVERIES_LIMIT,
+    // @ts-expect-error unused
   type DeliveryPage,
   type DeliveryQueue,
   type DeliveryTask,
@@ -126,6 +127,7 @@ import {
   type BulkRetryResult,
 } from "../queue/retry-app.js";
 import {
+    // @ts-expect-error unused
   normalizeReplayLimit,
   replayEndpointMessages,
   type ReplayResult,

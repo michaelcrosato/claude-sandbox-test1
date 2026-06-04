@@ -29,7 +29,6 @@ import {
   assertValidVisibilityTimeout,
   createLeaseToken,
   createTaskId,
-  decodeDeliveryCursor,
   encodeDeliveryCursor,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
   normalizeClaimOptions,
