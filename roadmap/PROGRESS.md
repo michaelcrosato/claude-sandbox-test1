@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0012 done (batch message intake)
+
+**What:** Added `POST /v1/messages/batch` for authenticated producers to send 1 to 100 messages in one request. The route returns per-item `ok` results, reuses single-message validation/idempotency/quota/fanout behavior, supports mixed success and failure, and keeps idempotent batch retries from creating duplicate delivery work.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0012/verify.log`. Security reviewer returned APPROVE. The first evaluator found implementation behavior correct but asked for CI evidence; after evidence was added, the follow-up evaluator returned PASS. Local checks passed: `npm run typecheck`, `npx vitest run tests/messages-http.test.ts tests/usage-http.test.ts`, `npm test` (91 tests), `npm run lint`, `npm run build`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is the authoritative full gate and passed.
+
+**Next step:** Merge PR #41 after the final evidence/state commit goes green, then continue to the next unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0011 done (usage metering and quota enforcement)
 
 **What:** Added current-month usage metering for accepted messages and delivery attempts. Tenants can read `GET /v1/usage`, admins can read `GET /v1/admin/apps/:id/usage`, and capped tenants receive `429 quota_exceeded` before new message fanout work is created. Idempotent retries return the original send without double-counting usage.
