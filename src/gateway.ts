@@ -36,11 +36,13 @@ import {
   acceptMessage,
   acceptMessageBatch,
   getMessageStatus,
+  listMessages,
   listMessageAttempts,
   MessageConflictError,
   MessageValidationError,
   retryMessage,
 } from './messages';
+import { renderAdminDashboardPage, renderTenantDashboardPage } from './dashboard';
 import { renderPrometheusMetrics } from './metrics';
 import { createOpenApiDocument } from './openapi';
 import { createPortalSession, PortalSessionValidationError } from './portal-sessions';
@@ -236,6 +238,20 @@ async function handleRequest(context: RequestContext): Promise<void> {
       return;
     }
     writeJson(context.response, 200, createOpenApiDocument());
+    return;
+  }
+
+  if (url.pathname === '/dashboard' || url.pathname === '/dashboard/tenant') {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+    writeText(
+      context.response,
+      200,
+      url.pathname === '/dashboard' ? renderAdminDashboardPage() : renderTenantDashboardPage(),
+      { 'content-type': 'text/html; charset=utf-8' },
+    );
     return;
   }
 
@@ -673,6 +689,38 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
     return;
   }
 
+  if (url.pathname === '/v1/messages') {
+    if (context.request.method !== 'GET' && context.request.method !== 'POST') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+
+    if (context.request.method === 'GET') {
+      try {
+        writeJson(context.response, 200, listMessages(scoped.storage, scoped.tenant.appId, {
+          limit: url.searchParams.get('limit'),
+          cursor: url.searchParams.get('cursor'),
+        }));
+      } catch (error) {
+        writeMessageError(context.response, error);
+      }
+      return;
+    }
+
+    const body = await readJsonBody(context);
+    if (body === null) return;
+
+    try {
+      writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body, context.now()));
+    } catch (error) {
+      writeMessageError(context.response, error);
+    }
+    return;
+  }
+
   const attemptsMessageId = messageAttemptsPathFromPath(url.pathname);
   if (attemptsMessageId !== null) {
     if (context.request.method !== 'GET') {
@@ -732,21 +780,7 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
     return;
   }
 
-  if (context.request.method !== 'POST') {
-    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
-    return;
-  }
-
-  const scoped = authenticateTenantRequest(context);
-  if (scoped === null) return;
-  const body = await readJsonBody(context);
-  if (body === null) return;
-
-  try {
-    writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body, context.now()));
-  } catch (error) {
-    writeMessageError(context.response, error);
-  }
+  writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
 }
 
 function authenticateTenantRequest(context: RequestContext): ScopedRequest | null {

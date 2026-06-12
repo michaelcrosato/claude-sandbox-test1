@@ -73,6 +73,7 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('get', '/v1/event-types/{id}', 'bearer', 'Fetch event type', 200, ['Event Types']),
   route('patch', '/v1/event-types/{id}', 'bearer', 'Update event type', 200, ['Event Types']),
   route('delete', '/v1/event-types/{id}', 'bearer', 'Archive event type', 204, ['Event Types']),
+  route('get', '/v1/messages', 'bearer', 'List messages', 200, ['Messages']),
   route('post', '/v1/messages', 'bearer', 'Accept message', 202, ['Messages']),
   route('post', '/v1/messages/batch', 'bearer', 'Accept message batch', 200, ['Messages']),
   route('get', '/v1/messages/{id}', 'bearer', 'Fetch message status', 200, ['Messages']),
@@ -308,6 +309,11 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
             ],
           },
         },
+      });
+    case 'get /v1/messages':
+      return objectSchema({
+        data: { type: 'array', items: { $ref: '#/components/schemas/Message' } },
+        nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] },
       });
     case 'get /v1/messages/{id}':
       return objectSchema({

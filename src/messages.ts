@@ -34,6 +34,11 @@ export interface MessageStatusResult {
   readonly deliveries: readonly DeliveryTaskRecord[];
 }
 
+export interface MessageListPage {
+  readonly data: readonly MessageRecord[];
+  readonly nextCursor: string | null;
+}
+
 export interface RetryMessageResult {
   readonly retried: number;
 }
@@ -57,6 +62,11 @@ export interface MessageAttemptsPage {
 }
 
 export interface ListMessageAttemptsOptions {
+  readonly limit?: unknown;
+  readonly cursor?: unknown;
+}
+
+export interface ListMessagesOptions {
   readonly limit?: unknown;
   readonly cursor?: unknown;
 }
@@ -107,6 +117,8 @@ export class MessageConflictError extends Error {
 const MESSAGE_ID_PREFIX = 'msg_';
 const DELIVERY_ID_PREFIX = 'del_';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+const DEFAULT_MESSAGES_PAGE_LIMIT = 25;
+const MAX_MESSAGES_PAGE_LIMIT = 100;
 const DEFAULT_ATTEMPTS_PAGE_LIMIT = 50;
 const MAX_ATTEMPTS_PAGE_LIMIT = 100;
 
@@ -256,6 +268,48 @@ export function getMessageStatus(
   };
 }
 
+export function listMessages(
+  storage: PosthornStorage,
+  appId: string,
+  options: ListMessagesOptions = {},
+): MessageListPage {
+  const limit = parsePageLimit(options.limit, DEFAULT_MESSAGES_PAGE_LIMIT, MAX_MESSAGES_PAGE_LIMIT);
+  const cursor = parseMessagesCursor(options.cursor);
+  const cursorClause =
+    cursor === null
+      ? ''
+      : `
+        AND (
+          created_at < ?
+          OR (created_at = ? AND id < ?)
+        )
+      `;
+  const params: Array<string | number> = [appId];
+  if (cursor !== null) {
+    params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  params.push(limit + 1);
+
+  const rows = storage.db
+    .prepare(
+      `
+        SELECT id, event_type, payload_json, created_at
+        FROM messages
+        WHERE app_id = ?
+          ${cursorClause}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `,
+    )
+    .all(...params) as unknown as MessageRow[];
+
+  const pageRows = rows.slice(0, limit);
+  return {
+    data: pageRows.map(messageFromRow),
+    nextCursor: rows.length > limit ? encodeMessagesCursor(pageRows[pageRows.length - 1]) : null,
+  };
+}
+
 export function listDeliveriesForMessage(
   storage: PosthornStorage,
   appId: string,
@@ -319,7 +373,7 @@ export function listMessageAttempts(
 ): MessageAttemptsPage | null {
   if (!messageBelongsToTenant(storage, appId, messageId)) return null;
 
-  const limit = parseAttemptsLimit(options.limit);
+  const limit = parsePageLimit(options.limit, DEFAULT_ATTEMPTS_PAGE_LIMIT, MAX_ATTEMPTS_PAGE_LIMIT);
   const cursor = parseAttemptsCursor(options.cursor);
   const cursorClause =
     cursor === null
@@ -562,18 +616,43 @@ function parseDeliveryAttemptOutcome(value: unknown): DeliveryAttemptAuditOutcom
   return 'failed';
 }
 
-function parseAttemptsLimit(value: unknown): number {
-  if (value === undefined || value === null) return DEFAULT_ATTEMPTS_PAGE_LIMIT;
+function parsePageLimit(value: unknown, defaultLimit: number, maxLimit: number): number {
+  if (value === undefined || value === null) return defaultLimit;
   if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) {
-    throw new MessageValidationError('limit must be an integer between 1 and 100.');
+    throw new MessageValidationError(`limit must be an integer between 1 and ${maxLimit}.`);
   }
 
   const limit = Number(value);
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ATTEMPTS_PAGE_LIMIT) {
-    throw new MessageValidationError('limit must be an integer between 1 and 100.');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > maxLimit) {
+    throw new MessageValidationError(`limit must be an integer between 1 and ${maxLimit}.`);
   }
 
   return limit;
+}
+
+function parseMessagesCursor(value: unknown): MessagesCursor | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new MessageValidationError('cursor is invalid.');
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('cursor payload must be an object.');
+    }
+    const cursor = parsed as Partial<MessagesCursor>;
+    if (typeof cursor.createdAt !== 'string' || typeof cursor.id !== 'string') {
+      throw new Error('cursor fields are invalid.');
+    }
+    if (Number.isNaN(Date.parse(cursor.createdAt)) || cursor.id.trim() === '') {
+      throw new Error('cursor values are invalid.');
+    }
+
+    return { createdAt: cursor.createdAt, id: cursor.id };
+  } catch {
+    throw new MessageValidationError('cursor is invalid.');
+  }
 }
 
 function parseAttemptsCursor(value: unknown): AttemptsCursor | null {
@@ -599,6 +678,16 @@ function parseAttemptsCursor(value: unknown): AttemptsCursor | null {
   } catch {
     throw new MessageValidationError('cursor is invalid.');
   }
+}
+
+function encodeMessagesCursor(row: Pick<MessageRow, 'created_at' | 'id'>): string {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: String(row.created_at),
+      id: String(row.id),
+    }),
+    'utf8',
+  ).toString('base64url');
 }
 
 function encodeAttemptsCursor(row: Pick<DeliveryAttemptAuditRow, 'attempted_at' | 'id'>): string {
@@ -686,6 +775,11 @@ interface DeliveryRow {
 
 interface AttemptsCursor {
   readonly attemptedAt: string;
+  readonly id: string;
+}
+
+interface MessagesCursor {
+  readonly createdAt: string;
   readonly id: string;
 }
 

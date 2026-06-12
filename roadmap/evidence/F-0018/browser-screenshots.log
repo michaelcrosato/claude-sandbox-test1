@@ -1,0 +1,2 @@
+admin-dashboard.png: {"connected":true,"tenant":true,"usageLoaded":true,"keyListed":true,"keyReady":true}
+tenant-dashboard.png: {"connected":true,"message":true,"attempts":true,"endpoint":true}
