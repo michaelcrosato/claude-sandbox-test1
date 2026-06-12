@@ -74,6 +74,9 @@ export interface ListMessageAttemptsInput {
 export interface ListMessagesInput {
   readonly limit?: number;
   readonly cursor?: string;
+  readonly eventType?: string;
+  readonly after?: string;
+  readonly before?: string;
 }
 
 export interface ListDeliveriesInput {
@@ -351,7 +354,7 @@ export class PosthornClient {
   }
 
   listMessages(input: ListMessagesInput = {}): Promise<MessageListPage> {
-    return this.request('get', `/v1/messages${queryString(input, ['limit', 'cursor'])}`);
+    return this.request('get', `/v1/messages${queryString(input, ['eventType', 'after', 'before', 'limit', 'cursor'])}`);
   }
 
   getMessage(id: string): Promise<MessageStatusResult> {

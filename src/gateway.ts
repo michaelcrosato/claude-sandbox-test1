@@ -817,6 +817,9 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
         writeJson(context.response, 200, listMessages(scoped.storage, scoped.tenant.appId, {
           limit: url.searchParams.get('limit'),
           cursor: url.searchParams.get('cursor'),
+          eventType: url.searchParams.get('eventType'),
+          after: url.searchParams.get('after'),
+          before: url.searchParams.get('before'),
         }));
       } catch (error) {
         writeMessageError(context.response, error);

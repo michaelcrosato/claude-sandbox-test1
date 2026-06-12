@@ -249,6 +249,9 @@ describe('PosthornClient', () => {
     });
 
     const messageInput: Parameters<PosthornClient['listMessages']>[0] & { readonly token: string } = {
+      eventType: 'sdk.catalog',
+      after: '2026-06-12T00:00:00.000Z',
+      before: '2026-06-13T00:00:00.000Z',
       limit: 10,
       cursor: 'msg_cursor',
       token: 'secret-token',
@@ -286,7 +289,7 @@ describe('PosthornClient', () => {
     await client.listDeliveries(deliveriesInput);
 
     expect(requestedUrls).toEqual([
-      'https://posthorn.example/v1/messages?limit=10&cursor=msg_cursor',
+      'https://posthorn.example/v1/messages?eventType=sdk.catalog&after=2026-06-12T00%3A00%3A00.000Z&before=2026-06-13T00%3A00%3A00.000Z&limit=10&cursor=msg_cursor',
       'https://posthorn.example/v1/messages/msg_123/attempts?limit=10&cursor=attempt_cursor',
       'https://posthorn.example/v1/endpoints/ep_123/deliveries?limit=10&cursor=delivery_cursor',
       'https://posthorn.example/v1/endpoints/ep_123/stats?days=7',

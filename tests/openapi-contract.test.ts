@@ -289,6 +289,11 @@ function expectValidOpenApi31(document: ReturnType<typeof createOpenApiDocument>
       expect(successResponseContent(operation.responses[String(route.successStatus)])).toBe(route.successStatus !== 204);
       expect(defaultErrorRef(operation.responses.default)).toBe('#/components/schemas/ErrorEnvelope');
       expect(parameterNames(operation.parameters)).toEqual(pathParameterNames(path));
+      if (method === 'get' && path === '/v1/messages') {
+        expect(queryParameterNames(operation.parameters)).toEqual(['limit', 'cursor', 'eventType', 'after', 'before']);
+      } else {
+        expect(queryParameterNames(operation.parameters)).toEqual([]);
+      }
       if (route.auth === 'none') {
         expect(operation.security).toBeUndefined();
       } else {
@@ -328,7 +333,15 @@ function defaultErrorRef(response: unknown): string | undefined {
 }
 
 function parameterNames(parameters: unknown): readonly string[] {
-  return ((parameters ?? []) as readonly { readonly name: string }[]).map((parameter) => parameter.name);
+  return ((parameters ?? []) as readonly { readonly name: string; readonly in: string }[])
+    .filter((parameter) => parameter.in === 'path')
+    .map((parameter) => parameter.name);
+}
+
+function queryParameterNames(parameters: unknown): readonly string[] {
+  return ((parameters ?? []) as readonly { readonly name: string; readonly in: string }[])
+    .filter((parameter) => parameter.in === 'query')
+    .map((parameter) => parameter.name);
 }
 
 function pathParameterNames(path: string): readonly string[] {

@@ -285,7 +285,7 @@ function route(
 
 function operationForRoute(implementedRoute: ImplementedRoute): OpenApiOperation {
   const requestBody = requestBodyForRoute(implementedRoute);
-  const parameters = pathParameters(implementedRoute.path);
+  const parameters = [...pathParameters(implementedRoute.path), ...queryParameters(implementedRoute)];
   const responses: Record<string, unknown> = {
     [String(implementedRoute.successStatus)]: {
       description: successDescription(implementedRoute.successStatus),
@@ -484,6 +484,28 @@ function pathParameters(path: string): readonly unknown[] {
     required: true,
     schema: { type: 'string' },
   }));
+}
+
+function queryParameters(implementedRoute: ImplementedRoute): readonly unknown[] {
+  const key = `${implementedRoute.method} ${implementedRoute.path}`;
+  if (key !== 'get /v1/messages') return [];
+
+  return [
+    queryParameter('limit', { type: 'integer', minimum: 1, maximum: 100 }),
+    queryParameter('cursor', { type: 'string' }),
+    queryParameter('eventType', { type: 'string' }),
+    queryParameter('after', { type: 'string', format: 'date-time' }),
+    queryParameter('before', { type: 'string', format: 'date-time' }),
+  ];
+}
+
+function queryParameter(name: string, schema: OpenApiSchema): Record<string, unknown> {
+  return {
+    name,
+    in: 'query',
+    required: false,
+    schema,
+  };
 }
 
 function operationId(implementedRoute: ImplementedRoute): string {

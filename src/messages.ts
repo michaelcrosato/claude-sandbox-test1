@@ -69,6 +69,9 @@ export interface ListMessageAttemptsOptions {
 export interface ListMessagesOptions {
   readonly limit?: unknown;
   readonly cursor?: unknown;
+  readonly eventType?: unknown;
+  readonly after?: unknown;
+  readonly before?: unknown;
 }
 
 export interface MessageFanout {
@@ -275,6 +278,12 @@ export function listMessages(
 ): MessageListPage {
   const limit = parsePageLimit(options.limit, DEFAULT_MESSAGES_PAGE_LIMIT, MAX_MESSAGES_PAGE_LIMIT);
   const cursor = parseMessagesCursor(options.cursor);
+  const eventType = parseEventTypeFilter(options.eventType);
+  const after = parseDateTimeFilter(options.after, 'after');
+  const before = parseDateTimeFilter(options.before, 'before');
+  if (after !== null && before !== null && after >= before) {
+    throw new MessageValidationError('after must be earlier than before.');
+  }
   const cursorClause =
     cursor === null
       ? ''
@@ -284,7 +293,20 @@ export function listMessages(
           OR (created_at = ? AND id < ?)
         )
       `;
+  const whereClauses = ['app_id = ?'];
   const params: Array<string | number> = [appId];
+  if (eventType !== null) {
+    whereClauses.push('event_type = ?');
+    params.push(eventType);
+  }
+  if (after !== null) {
+    whereClauses.push('created_at >= ?');
+    params.push(after);
+  }
+  if (before !== null) {
+    whereClauses.push('created_at < ?');
+    params.push(before);
+  }
   if (cursor !== null) {
     params.push(cursor.createdAt, cursor.createdAt, cursor.id);
   }
@@ -295,7 +317,7 @@ export function listMessages(
       `
         SELECT id, event_type, payload_json, created_at
         FROM messages
-        WHERE app_id = ?
+        WHERE ${whereClauses.join('\n          AND ')}
           ${cursorClause}
         ORDER BY created_at DESC, id DESC
         LIMIT ?
@@ -503,6 +525,57 @@ function parseIdempotencyKey(value: unknown): string | null {
   }
 
   return idempotencyKey;
+}
+
+function parseEventTypeFilter(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !isValidEventTypeIdentifier(value)) {
+    throw new MessageValidationError('eventType must be a valid event type identifier.');
+  }
+
+  return value;
+}
+
+function parseDateTimeFilter(value: unknown, name: 'after' | 'before'): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !isStrictDateTime(value)) {
+    throw new MessageValidationError(`${name} must be a valid date-time string.`);
+  }
+
+  const timestamp = Date.parse(value);
+  return new Date(timestamp).toISOString();
+}
+
+function isStrictDateTime(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (match === null) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offset = match[8];
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (offset !== 'Z') {
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+
+  return Number.isFinite(Date.parse(value));
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }
 
 function generateId(prefix: string): string {

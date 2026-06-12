@@ -101,7 +101,7 @@ Key capabilities:
 | GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
 | POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
-| GET | `/v1/messages` | Bearer | implemented | List messages, newest-first (keyset-paginated with `?limit=` and `?cursor=`). Additional filters such as `?eventType=`, `?channel=`, and created-at windows are planned. |
+| GET | `/v1/messages` | Bearer | implemented | List messages, newest-first (keyset-paginated; filters: `eventType`, `after`, `before`). |
 | GET | `/v1/messages/:id` | Bearer | implemented | Read a message + per-endpoint delivery statuses. |
 | POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
@@ -205,7 +205,12 @@ const { data } = await client.listMessageAttempts(message.id);
 data[0]; // { attemptNumber, outcome, responseStatus, durationMs, attemptedAt, ... }
 
 // Browse messages and deliveries:
-const messages = await client.listMessages({ limit: 25 });
+const messages = await client.listMessages({
+  eventType: "user.created",
+  after: "2026-06-01T00:00:00.000Z",
+  before: "2026-07-01T00:00:00.000Z",
+  limit: 25,
+});
 const endpointDeliveries = await client.listEndpointDeliveries(endpoint.endpoint.id, { limit: 25 });
 const endpointStats = await client.getEndpointStats(endpoint.endpoint.id, { days: 7 });
 const deliveries = await client.listDeliveries({
