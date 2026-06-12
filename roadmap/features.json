@@ -841,6 +841,46 @@
         "roadmap/metrics.jsonl",
         "roadmap/STATUS.md"
       ]
+    },
+    {
+      "dependencies": [
+        "F-0019"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0020",
+      "epic": "observability",
+      "title": "Endpoint delivery history and stats",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement tenant-scoped endpoint delivery history and endpoint delivery stats so customers can debug one receiver without scanning app-wide message history.",
+      "acceptance": [
+        "GET /v1/endpoints/:id/deliveries returns a tenant-scoped, newest-first, keyset-paginated delivery history for one endpoint, including message id, event type, delivery status, attempt count, timestamps, and last error without exposing endpoint secrets or payloads.",
+        "GET /v1/endpoints/:id/stats returns endpoint-scoped totals for a trailing window, including delivery counts by status, success rate, average successful delivery duration, per-day trend, and failure reason breakdown.",
+        "Both routes require tenant bearer auth, return 404 for other-tenant or missing endpoints, validate pagination/window inputs, and keep disabled/deleted endpoint semantics consistent with existing endpoint reads.",
+        "OpenAPI and README route rows mark both endpoint observability routes implemented and document response shapes.",
+        "Tests cover tenant isolation, pagination, stats calculations, empty endpoints, invalid query parameters, and no raw secret or payload leakage."
+      ],
+      "priority": 1,
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0020.md",
+        "roadmap/evidence/F-0020/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ]
     }
   ]
 }
