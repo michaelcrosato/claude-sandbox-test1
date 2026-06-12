@@ -1,4 +1,768 @@
 {
   "$schema": "./features.schema.json",
-  "features": []
+  "features": [
+    {
+      "dependencies": [],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0001/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0001",
+      "epic": "foundation",
+      "title": "Product TypeScript scaffold and gate wiring",
+      "spec_ref": "roadmap/ROADMAP.md#now",
+      "description": "Create the runnable Node/TypeScript product skeleton for Posthorn: src entry points, Vitest tests, build output, and npm scripts. This converts the repo from operations-template mode to product mode without weakening the existing engine gates.",
+      "acceptance": [
+        "npm scripts named typecheck, test, build, and lint exist and succeed on a clean checkout.",
+        "bash scripts/verify.sh runs in product mode and passes without template-mode skips for lint or unit tests.",
+        "src/index.ts exports a minimal Posthorn product entry point and a unit test proves it can be imported.",
+        "README development instructions match the scaffold and do not claim unimplemented routes are available."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "biome.json",
+        "vitest.config.ts",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0001.md",
+        "roadmap/evidence/F-0001/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0001"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0002",
+      "epic": "storage",
+      "title": "Configuration and SQLite storage foundation",
+      "spec_ref": "README.md#configuration",
+      "description": "Add Posthorn configuration loading and the default SQLite-backed persistence foundation. The store must support file-backed and in-memory modes so tests stay isolated and deployments remain single-container by default.",
+      "acceptance": [
+        "loadConfig parses documented POSTHORN_* environment variables with defaults and rejects invalid numeric values.",
+        "The storage layer opens and closes a SQLite database at POSTHORN_DATA_DIR or :memory: without external services.",
+        "A migration or schema initialization path creates the initial tables idempotently.",
+        "Unit tests cover defaults, invalid config, in-memory storage, and file-backed persistence using synthetic temp data."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0002.md",
+        "roadmap/evidence/F-0002/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0001",
+        "F-0002"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0003",
+      "epic": "http-core",
+      "title": "HTTP server with health and readiness endpoints",
+      "spec_ref": "README.md#api-routes",
+      "description": "Build the first HTTP surface: a startable gateway process with /healthz and /readyz. Health reports the process is up; readiness proves the storage backend is reachable.",
+      "acceptance": [
+        "createGateway(loadConfig(...)) starts and stops an HTTP server without leaking handles.",
+        "GET /healthz returns 200 with a small JSON body and no authentication requirement.",
+        "GET /readyz returns 200 when storage can be queried and 503 when storage initialization fails.",
+        "Integration tests exercise both endpoints over HTTP against an in-memory store."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0003.md",
+        "roadmap/evidence/F-0003/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0002",
+        "F-0003"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0004",
+      "epic": "endpoints",
+      "title": "Tenant endpoint management CRUD",
+      "spec_ref": "README.md#api-routes",
+      "description": "Let tenants register and manage webhook destinations through the documented endpoint routes. This supplies the registered endpoints that message fanout will target.",
+      "acceptance": [
+        "Bearer-authenticated tenants can create endpoints with URL, event type filters, and optional headers.",
+        "Tenants can list, fetch, update, and delete only their own endpoints.",
+        "Created endpoints receive a whsec_ signing secret that is returned once and persisted hashed or otherwise protected from accidental disclosure.",
+        "Tests cover create/list/read/update/delete, tenant isolation, validation failures, and deleted endpoints being hidden from future reads."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0004.md",
+        "roadmap/evidence/F-0004/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0001"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0005",
+      "epic": "webhook-signing",
+      "title": "Standard Webhooks signing and verification utilities",
+      "spec_ref": "README.md#receiving-webhooks",
+      "description": "Implement Standard Webhooks compatible signing and receiver verification primitives using HMAC-SHA256 and whsec_ secrets. These utilities are the contract between Posthorn deliveries and customer receivers.",
+      "acceptance": [
+        "Signing produces the expected Standard Webhooks headers for id, timestamp, and signature using whsec_ secrets.",
+        "Verification accepts valid raw-body signatures and rejects missing headers, malformed timestamps, stale timestamps, and bad signatures.",
+        "Replay-window behavior is configurable with a safe default.",
+        "Unit tests include deterministic vectors for valid, invalid, and multi-signature cases."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0005.md",
+        "roadmap/evidence/F-0005/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0002",
+        "F-0004",
+        "F-0005"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0006",
+      "epic": "messages",
+      "title": "Core message intake and fanout queue",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement POST /v1/messages so authenticated producers can submit events and Posthorn creates delivery work for matching endpoints. The first version persists messages and pending delivery tasks but leaves retry execution to the worker feature.",
+      "acceptance": [
+        "POST /v1/messages validates eventType and payload, authenticates a tenant API key, and returns 202 for accepted messages.",
+        "Accepted messages are persisted with created-at metadata and can be read back through the store.",
+        "Fanout creates one pending delivery task for each enabled endpoint whose filter matches the event type.",
+        "Tests cover authentication, validation errors, no-match fanout, one-match fanout, and multi-endpoint fanout."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0006.md",
+        "roadmap/evidence/F-0006/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0006"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0007",
+      "epic": "delivery-worker",
+      "title": "Crash-safe retry delivery worker",
+      "spec_ref": "README.md#why-posthorn",
+      "description": "Add the leased delivery worker that sends pending tasks, signs payloads, and retries failures with exponential backoff. Delivery must be at-least-once and not require Redis or any external broker.",
+      "acceptance": [
+        "The worker claims pending deliveries with a lease so concurrent ticks do not process the same task at the same time.",
+        "Successful HTTP delivery marks the task succeeded and records duration and response status.",
+        "Failed delivery schedules the next attempt using exponential backoff and dead-letters after the configured attempt budget.",
+        "Tests use a local synthetic receiver and cover success, retry, dead-letter, timeout, and lease reclaim behavior."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0007.md",
+        "roadmap/evidence/F-0007/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0006"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0008",
+      "epic": "messages",
+      "title": "Idempotent message intake",
+      "spec_ref": "README.md#why-posthorn",
+      "description": "Protect producers from duplicate fanout when they retry a send with the same idempotency key. Reusing a key with the same request returns the original message; reusing it with a different request returns a conflict.",
+      "acceptance": [
+        "POST /v1/messages accepts an optional idempotencyKey and stores the request fingerprint per tenant.",
+        "A repeated request with the same key and same body returns the original accepted message without creating new delivery tasks.",
+        "A repeated request with the same key and different body returns the documented idempotency_conflict error.",
+        "Tests cover tenant scoping, same-body retry, changed-body conflict, and fanout count staying stable."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0008.md",
+        "roadmap/evidence/F-0008/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0007"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0009",
+      "epic": "observability",
+      "title": "Per-attempt audit log",
+      "spec_ref": "README.md#api-routes",
+      "description": "Expose the delivery-attempt history needed to debug flaky receivers. Each HTTP send attempt records enough structured detail for the tenant API to return a useful audit trail.",
+      "acceptance": [
+        "Every delivery attempt records attempt number, outcome, timestamp, duration, response status when available, and failure reason when available.",
+        "GET /v1/messages/:id/attempts returns a paginated newest-first audit log for the authenticated tenant.",
+        "Tenants cannot read attempts for another tenant message.",
+        "Tests cover success attempts, failed attempts, pagination, and tenant isolation."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0009.md",
+        "roadmap/evidence/F-0009/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0002",
+        "F-0003"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0010",
+      "epic": "admin",
+      "title": "Admin tenant and API-key management",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement the disabled-by-default admin control plane for creating tenants and minting or revoking tenant API keys. This is the provisioning path needed before real SaaS teams can use the gateway.",
+      "acceptance": [
+        "Admin routes return 404 unless POSTHORN_ADMIN_TOKEN is configured.",
+        "With a valid admin token, operators can create, list, read, update, and delete tenant apps.",
+        "Operators can mint, list, and revoke tenant API keys, with new phk_ secrets shown once.",
+        "Tests cover disabled admin surface, invalid admin token, app CRUD, key mint/list/revoke, and revoked-key authentication failure."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0010.md",
+        "roadmap/evidence/F-0010/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0007",
+        "F-0010"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0011",
+      "epic": "usage",
+      "title": "Usage metering and quota enforcement",
+      "spec_ref": "README.md#api-routes",
+      "description": "Track monthly tenant message and delivery-operation usage and enforce configured caps. Tenants need to see their own usage, and admins need a billing read model.",
+      "acceptance": [
+        "Accepted messages increment tenant message usage in the current month.",
+        "Each delivery attempt increments tenant delivery-operation usage.",
+        "Tenants over a configured monthly message quota receive the documented quota_exceeded error before fanout.",
+        "GET /v1/usage and GET /v1/admin/apps/:id/usage return current usage and quota status with tests for month-boundary reset."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0011.md",
+        "roadmap/evidence/F-0011/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0008"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0012",
+      "epic": "messages",
+      "title": "Batch message intake",
+      "spec_ref": "README.md#api-routes",
+      "description": "Add POST /v1/messages/batch for efficient producer sends of up to 100 events. The route should return per-item results so one invalid item does not hide the outcome of the rest.",
+      "acceptance": [
+        "POST /v1/messages/batch accepts 1 to 100 items and rejects empty or oversized batches.",
+        "Each valid item follows the same validation, idempotency, persistence, and fanout behavior as single-message intake.",
+        "The response contains per-item ok/error results using the documented stable error codes.",
+        "Tests cover mixed success/failure batches, idempotency inside a batch, and no duplicate fanout on retried batches."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0012.md",
+        "roadmap/evidence/F-0012/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0003",
+        "F-0004",
+        "F-0006",
+        "F-0009",
+        "F-0010",
+        "F-0011",
+        "F-0012"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0013",
+      "epic": "api-contract",
+      "title": "OpenAPI 3.1 contract and closed error codes",
+      "spec_ref": "README.md#api-routes",
+      "description": "Serve a machine-readable OpenAPI 3.1 contract for implemented routes and pin the public error-code envelope. Client SDKs and external users need the contract to match runtime behavior.",
+      "acceptance": [
+        "GET /openapi.json returns a valid OpenAPI 3.1 document for every implemented public and admin route.",
+        "Every non-2xx response uses the documented error envelope with a stable code from a closed schema enum.",
+        "Tests compare emitted runtime error codes to the OpenAPI Error.code enum.",
+        "The README route table and OpenAPI route list are synchronized for implemented routes."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0013.md",
+        "roadmap/evidence/F-0013/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0013"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0014",
+      "epic": "clients",
+      "title": "TypeScript SDK and command-line client",
+      "spec_ref": "README.md#typescript-sdk",
+      "description": "Ship the first producer-facing client surface: a zero-surprise TypeScript SDK plus CLI commands for common tenant operations. The SDK and CLI should exercise the same HTTP contract that users see.",
+      "acceptance": [
+        "PosthornClient can create endpoints, send single and batch messages, fetch message status, retry messages, list attempts, and read usage.",
+        "The CLI supports create-endpoint, send, list-endpoints, get-message, usage, and help with JSON output for read commands.",
+        "Client errors expose status and stable error code without requiring callers to parse raw response bodies.",
+        "Tests run the SDK and CLI against the in-process gateway and verify method-to-route coverage."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0014.md",
+        "roadmap/evidence/F-0014/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0007",
+        "F-0011"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0015",
+      "epic": "observability",
+      "title": "Prometheus metrics endpoint",
+      "spec_ref": "README.md#monitoring",
+      "description": "Expose operator metrics in Prometheus text format so deployments can alert on ingestion, delivery outcomes, dead letters, and process uptime. The endpoint is unauthenticated by design and must not leak tenant payload data.",
+      "acceptance": [
+        "GET /metrics returns Prometheus text exposition with message, delivery, dead-letter, uptime, and build-info metrics.",
+        "Metric labels are bounded to documented low-cardinality values and never include tenant IDs, endpoint URLs, or payload fields.",
+        "Counters and gauges update when messages are accepted and deliveries succeed, retry, or dead-letter.",
+        "Tests pin metric names, labels, and representative values."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0015.md",
+        "roadmap/evidence/F-0015/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0003",
+        "F-0010"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0016",
+      "epic": "deployment",
+      "title": "Docker and production compose reference",
+      "spec_ref": "README.md#quick-start",
+      "description": "Provide the single-container deployment path promised in the product README. Operators should be able to build an image, run it with a mounted data volume, and confirm health locally without adding Redis or Postgres.",
+      "acceptance": [
+        "A Dockerfile builds the Posthorn gateway using npm ci and the compiled distribution.",
+        "docker run with POSTHORN_DATA_DIR and POSTHORN_ADMIN_TOKEN starts the service and exposes /healthz.",
+        "A docker-compose production reference includes the app service, persistent volume, and Prometheus scrape example without Redis.",
+        "Machine checks or documented smoke commands prove the image builds and the container health route responds."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "Dockerfile",
+        "docker-compose.yml",
+        "docs/**",
+        "README.md",
+        "src/**",
+        "tests/**",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0016.md",
+        "roadmap/evidence/F-0016/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0004",
+        "F-0007",
+        "F-0010"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0017",
+      "epic": "product-catalog",
+      "title": "Event type catalog and consumer portal sessions",
+      "spec_ref": "README.md#api-routes",
+      "description": "Add the tenant-managed event type catalog and consumer portal session minting route described in the README. These features make endpoint testing and customer-facing portal flows more useful without changing the core delivery path.",
+      "acceptance": [
+        "Tenants can create, list, update, and archive event types with optional schema examples.",
+        "Endpoint test sends use a registered event type schemaExample when no explicit payload is supplied and report the payloadSource.",
+        "POST /v1/portal/sessions returns a short-lived session token scoped to the tenant and intended endpoint-management surface.",
+        "Tests cover event type CRUD, archived event types, test-send example fallback, and portal token expiry."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0017.md",
+        "roadmap/evidence/F-0017/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0009",
+        "F-0010",
+        "F-0011"
+      ],
+      "status": "pending",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0018",
+      "epic": "dashboard",
+      "title": "Admin and tenant dashboard",
+      "spec_ref": "README.md#dashboard",
+      "description": "Add a browser dashboard unlocked by POSTHORN_ADMIN_TOKEN and tenant API keys. The dashboard should make tenant provisioning and delivery debugging possible without requiring a CLI.",
+      "acceptance": [
+        "GET /dashboard serves an admin panel for listing tenants, creating tenants, minting keys, and viewing tenant usage.",
+        "GET /dashboard/tenant serves a tenant panel for message history, delivery status, and per-attempt audit logs.",
+        "Dashboard flows use existing API routes and show loading, empty, error, and success states.",
+        "UI evidence includes automated or manual browser screenshots for the main admin and tenant flows."
+      ],
+      "authorized_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0018.md",
+        "roadmap/evidence/F-0018/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 3
+    }
+  ]
 }
