@@ -2,8 +2,6 @@ import type { DeliveryListPage } from './deliveries';
 import type {
   EndpointDeliveriesPage,
   EndpointDeliveryStats,
-  EndpointStatsOptions,
-  ListEndpointDeliveriesOptions,
 } from './endpoint-observability';
 import type { EndpointTestResult } from './endpoint-tests';
 import type { CreateEndpointResult, EndpointRecord, RotateEndpointSecretInput, RotateEndpointSecretResult } from './endpoints';
@@ -64,6 +62,15 @@ export interface ListDeliveriesInput {
   readonly failureReason?: string;
   readonly limit?: number;
   readonly cursor?: string;
+}
+
+export interface ListEndpointDeliveriesInput {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface GetEndpointStatsInput {
+  readonly days?: number;
 }
 
 export type CreateEventTypeInput = (
@@ -202,16 +209,19 @@ export class PosthornClient {
     return this.request('post', `/v1/endpoints/${pathSegment(id)}/test`, input);
   }
 
-  listEndpointDeliveries(id: string, input: ListEndpointDeliveriesOptions = {}): Promise<EndpointDeliveriesPage> {
-    return this.request('get', `/v1/endpoints/${pathSegment(id)}/deliveries${queryString(input)}`);
+  listEndpointDeliveries(id: string, input: ListEndpointDeliveriesInput = {}): Promise<EndpointDeliveriesPage> {
+    return this.request('get', `/v1/endpoints/${pathSegment(id)}/deliveries${queryString(input, ['limit', 'cursor'])}`);
   }
 
-  getEndpointStats(id: string, input: EndpointStatsOptions = {}): Promise<EndpointStatsReadResult> {
-    return this.request('get', `/v1/endpoints/${pathSegment(id)}/stats${queryString(input)}`);
+  getEndpointStats(id: string, input: GetEndpointStatsInput = {}): Promise<EndpointStatsReadResult> {
+    return this.request('get', `/v1/endpoints/${pathSegment(id)}/stats${queryString(input, ['days'])}`);
   }
 
   listDeliveries(input: ListDeliveriesInput = {}): Promise<DeliveryListPage> {
-    return this.request('get', `/v1/deliveries${queryString(input)}`);
+    return this.request(
+      'get',
+      `/v1/deliveries${queryString(input, ['status', 'endpointId', 'eventType', 'failureReason', 'limit', 'cursor'])}`,
+    );
   }
 
   listEventTypes(): Promise<EventTypeListResult> {
@@ -244,7 +254,7 @@ export class PosthornClient {
   }
 
   listMessages(input: ListMessagesInput = {}): Promise<MessageListPage> {
-    return this.request('get', `/v1/messages${queryString(input)}`);
+    return this.request('get', `/v1/messages${queryString(input, ['limit', 'cursor'])}`);
   }
 
   getMessage(id: string): Promise<MessageStatusResult> {
@@ -256,7 +266,7 @@ export class PosthornClient {
   }
 
   listMessageAttempts(id: string, input: ListMessageAttemptsInput = {}): Promise<MessageAttemptsPage> {
-    return this.request('get', `/v1/messages/${pathSegment(id)}/attempts${queryString(input)}`);
+    return this.request('get', `/v1/messages/${pathSegment(id)}/attempts${queryString(input, ['limit', 'cursor'])}`);
   }
 
   getUsage(): Promise<UsageReadResult> {
@@ -311,9 +321,11 @@ function pathSegment(value: string): string {
   return encodeURIComponent(requireNonEmpty(value, 'id'));
 }
 
-function queryString(input: object): string {
+function queryString(input: object, allowedKeys: readonly string[]): string {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(input)) {
+  const record = input as Record<string, unknown>;
+  for (const key of allowedKeys) {
+    const value = record[key];
     if (value !== undefined && value !== null) params.set(key, String(value));
   }
 

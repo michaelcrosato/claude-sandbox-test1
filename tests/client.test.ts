@@ -230,6 +230,70 @@ describe('PosthornClient', () => {
     expect((await client.listEventTypes()).data).toEqual([]);
   });
 
+  it('serializes only allowlisted query keys for SDK list helpers', async () => {
+    assertClientInputTypes();
+    const requestedUrls: string[] = [];
+    const client = new PosthornClient({
+      baseUrl: 'https://posthorn.example',
+      apiKey: TENANT_KEY,
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return new Response(JSON.stringify({ data: [], nextCursor: null, stats: { total: 0 } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const messageInput: Parameters<PosthornClient['listMessages']>[0] & { readonly token: string } = {
+      limit: 10,
+      cursor: 'msg_cursor',
+      token: 'secret-token',
+    };
+    const attemptsInput: Parameters<PosthornClient['listMessageAttempts']>[1] & { readonly apiKey: string } = {
+      limit: 10,
+      cursor: 'attempt_cursor',
+      apiKey: 'secret-key',
+    };
+    const endpointDeliveriesInput: Parameters<PosthornClient['listEndpointDeliveries']>[1] & {
+      readonly secret: string;
+    } = {
+      limit: 10,
+      cursor: 'delivery_cursor',
+      secret: 'whsec_secret',
+    };
+    const endpointStatsInput: Parameters<PosthornClient['getEndpointStats']>[1] & { readonly token: string } = {
+      days: 7,
+      token: 'secret-token',
+    };
+    const deliveriesInput: Parameters<PosthornClient['listDeliveries']>[0] & { readonly apiKey: string } = {
+      status: 'dead_letter',
+      endpointId: 'ep_123',
+      eventType: 'sdk.catalog',
+      failureReason: 'http_503',
+      limit: 10,
+      cursor: 'delivery_cursor',
+      apiKey: 'secret-key',
+    };
+
+    await client.listMessages(messageInput);
+    await client.listMessageAttempts('msg_123', attemptsInput);
+    await client.listEndpointDeliveries('ep_123', endpointDeliveriesInput);
+    await client.getEndpointStats('ep_123', endpointStatsInput);
+    await client.listDeliveries(deliveriesInput);
+
+    expect(requestedUrls).toEqual([
+      'https://posthorn.example/v1/messages?limit=10&cursor=msg_cursor',
+      'https://posthorn.example/v1/messages/msg_123/attempts?limit=10&cursor=attempt_cursor',
+      'https://posthorn.example/v1/endpoints/ep_123/deliveries?limit=10&cursor=delivery_cursor',
+      'https://posthorn.example/v1/endpoints/ep_123/stats?days=7',
+      'https://posthorn.example/v1/deliveries?status=dead_letter&endpointId=ep_123&eventType=sdk.catalog&failureReason=http_503&limit=10&cursor=delivery_cursor',
+    ]);
+    expect(requestedUrls.join('\n')).not.toContain('secret');
+    expect(requestedUrls.join('\n')).not.toContain('apiKey');
+    expect(requestedUrls.join('\n')).not.toContain('token');
+  });
+
   it('throws PosthornApiError with status, stable code, and parsed response body', async () => {
     const { address } = await startSeededGateway();
     const invalidClient = new PosthornClient({ baseUrl: address.url, apiKey: OTHER_TENANT_KEY });
@@ -326,6 +390,16 @@ async function startSeededGateway(
 interface DeliveredRequest {
   readonly url: string;
   readonly init: Parameters<DeliveryFetch>[1];
+}
+
+function assertClientInputTypes(): void {
+  const endpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: 1, cursor: 'cursor' };
+  const endpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: 7 };
+  // @ts-expect-error endpoint delivery limits are typed as numbers, not strings.
+  const invalidEndpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: '1' };
+  // @ts-expect-error endpoint stats days are typed as numbers, not strings.
+  const invalidEndpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: '7' };
+  void [endpointDeliveries, endpointStats, invalidEndpointDeliveries, invalidEndpointStats];
 }
 
 function seedTenant(storage: PosthornStorage, appId: string, name: string, apiKey: string): void {
