@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0010 done (admin tenant and API-key management)
+
+**What:** Added the disabled-by-default admin control plane for tenant provisioning. With `POSTHORN_ADMIN_TOKEN` configured, operators can create, list, read, update, and delete tenant apps; mint tenant `phk_` API keys; list key records without secrets or hashes; and revoke keys so they stop authenticating.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0010/verify.log`. Fresh-context evaluator returned PASS. Security reviewer initially BLOCKed method dispatch before admin auth; the route now authenticates enabled admin requests before returning `405`, and security re-review returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/admin-http.test.ts`, `npm test` (81 tests), `npm run lint`, `npm run build`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** The first admin route pass returned `405` before token validation on unsupported methods, which leaked route shape to invalid admin tokens. The fix authenticates once after the disabled-admin `404` check and before any method-specific response.
+
+**Next step:** Merge PR #39 after the final evidence/state commit goes green, then start F-0011 (usage metering and quota enforcement), which is now unblocked by F-0010.
+
+---
+
 ## 2026-06-12 — F-0009 done (per-attempt audit log)
 
 **What:** Added `GET /v1/messages/:id/attempts` for tenant-authenticated delivery attempt history. The route returns newest-first attempt rows with attempt number, outcome, timestamp, duration, response status, failure reason, delivery ID, message ID, and endpoint ID; missing and other-tenant messages both return `404`.
