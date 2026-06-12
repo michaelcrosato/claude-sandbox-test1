@@ -59,6 +59,7 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('get', '/healthz', 'none', 'Health check', 200, ['System']),
   route('get', '/readyz', 'none', 'Readiness check', 200, ['System']),
   route('get', '/openapi.json', 'none', 'OpenAPI contract', 200, ['System']),
+  route('get', '/metrics', 'none', 'Prometheus metrics', 200, ['System']),
   route('get', '/v1/endpoints', 'bearer', 'List endpoints', 200, ['Endpoints']),
   route('post', '/v1/endpoints', 'bearer', 'Create endpoint', 201, ['Endpoints']),
   route('get', '/v1/endpoints/{id}', 'bearer', 'Fetch endpoint', 200, ['Endpoints']),
@@ -189,7 +190,8 @@ function operationForRoute(implementedRoute: ImplementedRoute): OpenApiOperation
   const responses: Record<string, unknown> = {
     [String(implementedRoute.successStatus)]: {
       description: successDescription(implementedRoute.successStatus),
-      content: implementedRoute.successStatus === 204 ? undefined : jsonContent(successSchemaRef(implementedRoute)),
+      content:
+        implementedRoute.successStatus === 204 ? undefined : successContent(implementedRoute, successSchemaRef(implementedRoute)),
     },
     default: {
       description: 'Error response',
@@ -227,6 +229,8 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
       return { $ref: '#/components/schemas/Readiness' };
     case 'get /openapi.json':
       return { type: 'object' };
+    case 'get /metrics':
+      return { type: 'string' };
     case 'get /v1/endpoints':
       return objectSchema({ data: { type: 'array', items: { $ref: '#/components/schemas/Endpoint' } } });
     case 'post /v1/endpoints':
@@ -343,6 +347,18 @@ function jsonContent(schema: OpenApiSchema): Record<string, unknown> {
       schema,
     },
   };
+}
+
+function successContent(implementedRoute: ImplementedRoute, schema: OpenApiSchema): Record<string, unknown> {
+  if (`${implementedRoute.method} ${implementedRoute.path}` === 'get /metrics') {
+    return {
+      'text/plain; version=0.0.4': {
+        schema,
+      },
+    };
+  }
+
+  return jsonContent(schema);
 }
 
 function errorEnvelopeSchema(): OpenApiSchema {

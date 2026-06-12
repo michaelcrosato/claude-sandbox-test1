@@ -31,6 +31,7 @@ import {
   MessageValidationError,
   retryMessage,
 } from './messages';
+import { renderPrometheusMetrics } from './metrics';
 import { createOpenApiDocument } from './openapi';
 import { openStorage, type PosthornStorage } from './storage';
 import { getUsageSummary, UsageQuotaExceededError } from './usage';
@@ -71,6 +72,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
 
   const storageFactory = dependencies.openStorage ?? openStorage;
   const now = dependencies.now ?? (() => new Date());
+  const startedAt = now();
   const readinessProbe =
     dependencies.readinessProbe ??
     ((currentStorage: PosthornStorage) => {
@@ -131,6 +133,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
         getReadinessError: () => readinessError,
         readinessProbe,
         now,
+        startedAt,
       }).catch((error: unknown) => {
         if (!response.headersSent) {
           writeJson(response, 500, { error: { code: 'internal_error', message: 'Internal server error.' } });
@@ -169,6 +172,7 @@ interface RequestContext {
   readonly getReadinessError: () => Error | null;
   readonly readinessProbe: (storage: PosthornStorage) => void;
   readonly now: () => Date;
+  readonly startedAt: Date;
 }
 
 async function handleRequest(context: RequestContext): Promise<void> {
@@ -214,6 +218,29 @@ async function handleRequest(context: RequestContext): Promise<void> {
       return;
     }
     writeJson(context.response, 200, createOpenApiDocument());
+    return;
+  }
+
+  if (url.pathname === '/metrics') {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+    const storage = context.getStorage();
+    const readinessError = context.getReadinessError();
+    if (storage === null || readinessError !== null) {
+      writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
+      return;
+    }
+    try {
+      context.readinessProbe(storage);
+    } catch {
+      writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
+      return;
+    }
+    writeText(context.response, 200, renderPrometheusMetrics(storage, { now: context.now(), startedAt: context.startedAt }), {
+      'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+    });
     return;
   }
 
@@ -794,6 +821,11 @@ function writeMessageError(response: ServerResponse, error: unknown): void {
 function writeJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(JSON.stringify(body));
+}
+
+function writeText(response: ServerResponse, status: number, body: string, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...headers });
+  response.end(body);
 }
 
 interface ScopedRequest {

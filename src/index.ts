@@ -75,6 +75,8 @@ export {
   MessageValidationError,
   retryMessage,
 } from './messages';
+export type { MetricsSnapshotOptions } from './metrics';
+export { renderPrometheusMetrics } from './metrics';
 export type { ApiErrorCode, HttpMethod, ImplementedRoute, OpenApiDocument } from './openapi';
 export { API_ERROR_CODES, createOpenApiDocument, IMPLEMENTED_ROUTES } from './openapi';
 export type { PosthornStorage, StorageOptions } from './storage';
