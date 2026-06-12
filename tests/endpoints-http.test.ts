@@ -208,6 +208,10 @@ describe('endpoint management HTTP routes', () => {
 
     await expectEndpointError(address, { url: 'ftp://example.com/hook' }, 'invalid_request');
     await expectEndpointError(address, { url: 'http://127.0.0.1/hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://localhost./hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://foo.localhost./hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://svc.local./hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://svc.internal./hook' }, 'url_not_allowed');
     await expectEndpointError(
       address,
       { url: 'https://example.com/hook', eventTypes: ['bad type'] },

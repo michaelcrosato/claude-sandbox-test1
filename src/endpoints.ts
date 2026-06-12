@@ -225,7 +225,11 @@ function parseEndpointUrl(input: string): string {
 }
 
 function isInternalHostname(rawHostname: string): boolean {
-  const hostname = rawHostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  const hostname = rawHostname
+    .toLowerCase()
+    .replace(/^\[/, '')
+    .replace(/\]$/, '')
+    .replace(/\.+$/, '');
   const ipVersion = isIP(hostname);
   if (ipVersion === 4) return isPrivateIpv4(hostname);
   if (ipVersion === 6) return isPrivateIpv6(hostname);
