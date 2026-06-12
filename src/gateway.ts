@@ -22,7 +22,13 @@ import {
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
-import { acceptMessage, listMessageAttempts, MessageConflictError, MessageValidationError } from './messages';
+import {
+  acceptMessage,
+  acceptMessageBatch,
+  listMessageAttempts,
+  MessageConflictError,
+  MessageValidationError,
+} from './messages';
 import { openStorage, type PosthornStorage } from './storage';
 import { getUsageSummary, UsageQuotaExceededError } from './usage';
 
@@ -214,7 +220,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
-  if (url.pathname === '/v1/messages' || messageAttemptsPathFromPath(url.pathname) !== null) {
+  if (
+    url.pathname === '/v1/messages' ||
+    url.pathname === '/v1/messages/batch' ||
+    messageAttemptsPathFromPath(url.pathname) !== null
+  ) {
     await handleMessageRequest(context, url);
     return;
   }
@@ -451,6 +461,26 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
 }
 
 async function handleMessageRequest(context: RequestContext, url: URL): Promise<void> {
+  if (url.pathname === '/v1/messages/batch') {
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+
+    if (context.request.method !== 'POST') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const body = await readJsonBody(context);
+    if (body === null) return;
+
+    try {
+      writeJson(context.response, 200, acceptMessageBatch(scoped.storage, scoped.tenant.appId, body, context.now()));
+    } catch (error) {
+      writeMessageError(context.response, error);
+    }
+    return;
+  }
+
   const attemptsMessageId = messageAttemptsPathFromPath(url.pathname);
   if (attemptsMessageId !== null) {
     if (context.request.method !== 'GET') {
