@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -212,6 +213,8 @@ describe('endpoint management HTTP routes', () => {
     await expectEndpointError(address, { url: 'http://foo.localhost./hook' }, 'url_not_allowed');
     await expectEndpointError(address, { url: 'http://svc.local./hook' }, 'url_not_allowed');
     await expectEndpointError(address, { url: 'http://svc.internal./hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://[fe90::1]/hook' }, 'url_not_allowed');
+    await expectEndpointError(address, { url: 'http://[ff00::1]/hook' }, 'url_not_allowed');
     await expectEndpointError(
       address,
       { url: 'https://example.com/hook', eventTypes: ['bad type'] },
@@ -240,9 +243,32 @@ describe('endpoint management HTTP routes', () => {
     expect(listDeleted.status).toBe(200);
     expect(listDeleted.body.data).toEqual([]);
   });
+
+  it('returns 413 when a request body crosses the configured maximum before the request ends', async () => {
+    const { address } = await startSeededGateway({ maxBodyBytes: 8 });
+
+    const rawResponse = await sendPartialRawRequest(
+      address.port,
+      [
+        'POST /v1/endpoints HTTP/1.1',
+        'Host: 127.0.0.1',
+        `Authorization: Bearer ${TENANT_A_KEY}`,
+        'Content-Type: application/json',
+        'Content-Length: 1000000',
+        'Connection: close',
+        '',
+        '{"url":"https://example.com/hook"',
+      ].join('\r\n'),
+    );
+
+    expect(rawResponse).toContain('HTTP/1.1 413 Payload Too Large');
+    expect(rawResponse).toContain('"code":"payload_too_large"');
+  });
 });
 
-async function startSeededGateway(): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
+async function startSeededGateway(
+  options: { readonly maxBodyBytes?: number } = {},
+): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
   const storage = openStorage({ dataDir: ':memory:' });
   seedTenant(storage, 'app_a', 'Tenant A', TENANT_A_KEY);
   seedTenant(storage, 'app_b', 'Tenant B', TENANT_B_KEY);
@@ -255,6 +281,7 @@ async function startSeededGateway(): Promise<{ address: GatewayAddress; storage:
         POSTHORN_DATA_DIR: ':memory:',
       }),
       port: 0,
+      maxBodyBytes: options.maxBodyBytes,
     },
     {
       openStorage: () => storage,
@@ -334,5 +361,39 @@ function requestRaw(
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+function sendPartialRawRequest(port: number, payload: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const socket = connect({ host: '127.0.0.1', port }, () => {
+      socket.write(payload);
+    });
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => {
+      settleWithError(new Error('Timed out waiting for response.'));
+    }, 1_000);
+
+    const settle = (response: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(response);
+    };
+    const settleWithError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      reject(error);
+    };
+
+    socket.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      settle(Buffer.concat(chunks).toString('utf8'));
+    });
+    socket.on('error', settleWithError);
   });
 }

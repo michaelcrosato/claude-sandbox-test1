@@ -287,11 +287,20 @@ function endpointIdFromPath(pathname: string): string | null {
 }
 
 async function readJsonBody(context: RequestContext): Promise<unknown | null> {
-  const rawBody = await readRequestBody(context.request, context.maxBodyBytes);
-  if (rawBody === null) {
-    writeJson(context.response, 413, { error: { code: 'payload_too_large', message: 'Request body is too large.' } });
+  const bodyResult = await readRequestBody(context.request, context.maxBodyBytes);
+  if (bodyResult.status === 'too_large') {
+    writeJson(
+      context.response,
+      413,
+      { error: { code: 'payload_too_large', message: 'Request body is too large.' } },
+      { connection: 'close' },
+    );
     return null;
   }
+  if (bodyResult.status === 'aborted') {
+    return null;
+  }
+  const rawBody = bodyResult.body;
   if (rawBody.length === 0) {
     writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
     return null;
@@ -305,26 +314,63 @@ async function readJsonBody(context: RequestContext): Promise<unknown | null> {
   }
 }
 
-function readRequestBody(request: IncomingMessage, maxBodyBytes: number): Promise<Buffer | null> {
+function readRequestBody(request: IncomingMessage, maxBodyBytes: number): Promise<RequestBodyResult> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    let tooLarge = false;
+    let settled = false;
 
-    request.on('data', (chunk: Buffer) => {
+    const cleanup = () => {
+      request.off('data', onData);
+      request.off('error', onError);
+      request.off('end', onEnd);
+      request.off('aborted', onAborted);
+      request.off('close', onClose);
+    };
+
+    const settle = (result: RequestBodyResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onData = (chunk: Buffer) => {
       size += chunk.length;
       if (size > maxBodyBytes) {
-        tooLarge = true;
+        request.resume();
+        settle({ status: 'too_large' });
         return;
       }
-      if (!tooLarge) {
-        chunks.push(chunk);
+      chunks.push(chunk);
+    };
+    const onError = (error: Error) => {
+      fail(error);
+    };
+    const onEnd = () => {
+      settle({ status: 'ok', body: Buffer.concat(chunks) });
+    };
+    const onAborted = () => {
+      settle({ status: 'aborted' });
+    };
+    const onClose = () => {
+      if (!request.complete) {
+        settle({ status: 'aborted' });
       }
-    });
-    request.on('error', reject);
-    request.on('end', () => {
-      resolve(tooLarge ? null : Buffer.concat(chunks));
-    });
+    };
+
+    request.on('data', onData);
+    request.on('error', onError);
+    request.on('end', onEnd);
+    request.on('aborted', onAborted);
+    request.on('close', onClose);
   });
 }
 
@@ -337,8 +383,8 @@ function writeEndpointError(response: ServerResponse, error: unknown): void {
   throw error;
 }
 
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+function writeJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(JSON.stringify(body));
 }
 
@@ -346,6 +392,11 @@ interface ScopedRequest {
   readonly storage: PosthornStorage;
   readonly tenant: AuthenticatedTenant;
 }
+
+type RequestBodyResult =
+  | { readonly status: 'ok'; readonly body: Buffer }
+  | { readonly status: 'too_large' }
+  | { readonly status: 'aborted' };
 
 function listen(server: Server, host: string, port: number): Promise<GatewayAddress> {
   return new Promise((resolve, reject) => {

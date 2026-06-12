@@ -270,13 +270,19 @@ function isPrivateIpv4(hostname: string): boolean {
 
 function isPrivateIpv6(hostname: string): boolean {
   if (hostname === '::' || hostname === '::1') return true;
-  if (hostname.startsWith('fe80:') || hostname.startsWith('fc') || hostname.startsWith('fd')) return true;
   if (hostname.startsWith('::ffff:')) {
     const mappedIpv4 = hostname.slice('::ffff:'.length);
     return isIP(mappedIpv4) === 4 ? isPrivateIpv4(mappedIpv4) : true;
   }
 
-  return false;
+  const firstHextet = parseInt(hostname.split(':')[0] ?? '', 16);
+  if (!Number.isFinite(firstHextet)) return true;
+
+  return (
+    (firstHextet & 0xfe00) === 0xfc00 ||
+    (firstHextet & 0xffc0) === 0xfe80 ||
+    (firstHextet & 0xff00) === 0xff00
+  );
 }
 
 function parseEventTypes(input: unknown): readonly string[] | null {
