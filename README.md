@@ -15,7 +15,7 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 This checkout is in the product-foundation phase: it has the public TypeScript entry point,
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
-queue creation, the importable retry delivery worker, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
+queue creation, idempotent message retries, the importable retry delivery worker, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the target Posthorn product contract being built through `roadmap/features.json`;
 not every listed route or client method is implemented yet.
 
@@ -376,7 +376,7 @@ bash scripts/verify.sh
 **Supported Node:** Posthorn targets **Node ≥ 22.13**. The current foundation includes the product
 entry point, configuration loading, a SQLite-backed storage initializer, health/readiness HTTP
 endpoints, Standard Webhooks signing/verification utilities, tenant endpoint CRUD, message intake
-with pending fanout queue creation, an importable retry delivery worker, build, lint, and Vitest wiring.
+with pending fanout queue creation, idempotent message retries, an importable retry delivery worker, build, lint, and Vitest wiring.
 
 ## Contributing & automation
 
