@@ -5,6 +5,7 @@ import type { PosthornStorage } from './storage';
 export type MessageValidationErrorCode = 'invalid_request';
 export type MessageConflictErrorCode = 'idempotency_conflict';
 export type DeliveryStatus = 'pending' | 'delivering' | 'succeeded' | 'dead_letter';
+export type DeliveryAttemptAuditOutcome = 'succeeded' | 'failed' | 'dead_letter';
 
 export interface MessageRecord {
   readonly id: string;
@@ -21,6 +22,29 @@ export interface DeliveryTaskRecord {
   readonly attemptCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface DeliveryAttemptAuditRecord {
+  readonly id: string;
+  readonly deliveryId: string;
+  readonly messageId: string;
+  readonly endpointId: string;
+  readonly attemptNumber: number;
+  readonly outcome: DeliveryAttemptAuditOutcome;
+  readonly attemptedAt: string;
+  readonly durationMs: number | null;
+  readonly responseStatus: number | null;
+  readonly failureReason: string | null;
+}
+
+export interface MessageAttemptsPage {
+  readonly data: readonly DeliveryAttemptAuditRecord[];
+  readonly nextCursor: string | null;
+}
+
+export interface ListMessageAttemptsOptions {
+  readonly limit?: unknown;
+  readonly cursor?: unknown;
 }
 
 export interface MessageFanout {
@@ -60,6 +84,8 @@ const EVENT_TYPE_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const MAX_PAYLOAD_DEPTH = 64;
 const MAX_PAYLOAD_NODES = 10_000;
+const DEFAULT_ATTEMPTS_PAGE_LIMIT = 50;
+const MAX_ATTEMPTS_PAGE_LIMIT = 100;
 
 export function acceptMessage(
   storage: PosthornStorage,
@@ -177,6 +203,63 @@ export function listDeliveriesForMessage(
     .all(appId, messageId) as unknown as DeliveryRow[];
 
   return rows.map(deliveryFromRow);
+}
+
+export function listMessageAttempts(
+  storage: PosthornStorage,
+  appId: string,
+  messageId: string,
+  options: ListMessageAttemptsOptions = {},
+): MessageAttemptsPage | null {
+  if (!messageBelongsToTenant(storage, appId, messageId)) return null;
+
+  const limit = parseAttemptsLimit(options.limit);
+  const cursor = parseAttemptsCursor(options.cursor);
+  const cursorClause =
+    cursor === null
+      ? ''
+      : `
+        AND (
+          delivery_attempts.attempted_at < ?
+          OR (delivery_attempts.attempted_at = ? AND delivery_attempts.id < ?)
+        )
+      `;
+  const params: Array<string | number> = [appId, messageId];
+  if (cursor !== null) {
+    params.push(cursor.attemptedAt, cursor.attemptedAt, cursor.id);
+  }
+  params.push(limit + 1);
+
+  const rows = storage.db
+    .prepare(
+      `
+        SELECT delivery_attempts.id,
+               delivery_attempts.delivery_id,
+               deliveries.message_id,
+               deliveries.endpoint_id,
+               delivery_attempts.attempt_number,
+               delivery_attempts.outcome,
+               delivery_attempts.response_status,
+               delivery_attempts.duration_ms,
+               delivery_attempts.failure_reason,
+               delivery_attempts.attempted_at
+        FROM delivery_attempts
+        INNER JOIN deliveries ON deliveries.id = delivery_attempts.delivery_id
+        INNER JOIN messages ON messages.id = deliveries.message_id
+        WHERE messages.app_id = ?
+          AND messages.id = ?
+          ${cursorClause}
+        ORDER BY delivery_attempts.attempted_at DESC, delivery_attempts.id DESC
+        LIMIT ?
+      `,
+    )
+    .all(...params) as unknown as DeliveryAttemptAuditRow[];
+
+  const pageRows = rows.slice(0, limit);
+  return {
+    data: pageRows.map(deliveryAttemptAuditFromRow),
+    nextCursor: rows.length > limit ? encodeAttemptsCursor(pageRows[pageRows.length - 1]) : null,
+  };
 }
 
 function listMatchingEnabledEndpoints(
@@ -399,6 +482,95 @@ function parseDeliveryStatus(value: unknown): DeliveryStatus {
   return 'pending';
 }
 
+function parseDeliveryAttemptOutcome(value: unknown): DeliveryAttemptAuditOutcome {
+  const outcome = String(value);
+  if (outcome === 'succeeded' || outcome === 'failed' || outcome === 'dead_letter') {
+    return outcome;
+  }
+
+  return 'failed';
+}
+
+function parseAttemptsLimit(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_ATTEMPTS_PAGE_LIMIT;
+  if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) {
+    throw new MessageValidationError('limit must be an integer between 1 and 100.');
+  }
+
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_ATTEMPTS_PAGE_LIMIT) {
+    throw new MessageValidationError('limit must be an integer between 1 and 100.');
+  }
+
+  return limit;
+}
+
+function parseAttemptsCursor(value: unknown): AttemptsCursor | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new MessageValidationError('cursor is invalid.');
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('cursor payload must be an object.');
+    }
+    const cursor = parsed as Partial<AttemptsCursor>;
+    if (typeof cursor.attemptedAt !== 'string' || typeof cursor.id !== 'string') {
+      throw new Error('cursor fields are invalid.');
+    }
+    if (Number.isNaN(Date.parse(cursor.attemptedAt)) || cursor.id.trim() === '') {
+      throw new Error('cursor values are invalid.');
+    }
+
+    return { attemptedAt: cursor.attemptedAt, id: cursor.id };
+  } catch {
+    throw new MessageValidationError('cursor is invalid.');
+  }
+}
+
+function encodeAttemptsCursor(row: Pick<DeliveryAttemptAuditRow, 'attempted_at' | 'id'>): string {
+  return Buffer.from(
+    JSON.stringify({
+      attemptedAt: String(row.attempted_at),
+      id: String(row.id),
+    }),
+    'utf8',
+  ).toString('base64url');
+}
+
+function messageBelongsToTenant(storage: PosthornStorage, appId: string, messageId: string): boolean {
+  const row = storage.db
+    .prepare(
+      `
+        SELECT 1
+        FROM messages
+        WHERE app_id = ? AND id = ?
+        LIMIT 1
+      `,
+    )
+    .get(appId, messageId) as { readonly 1: unknown } | undefined;
+
+  return row !== undefined;
+}
+
+function deliveryAttemptAuditFromRow(row: DeliveryAttemptAuditRow): DeliveryAttemptAuditRecord {
+  return {
+    id: String(row.id),
+    deliveryId: String(row.delivery_id),
+    messageId: String(row.message_id),
+    endpointId: String(row.endpoint_id),
+    attemptNumber: Number(row.attempt_number),
+    outcome: parseDeliveryAttemptOutcome(row.outcome),
+    attemptedAt: String(row.attempted_at),
+    durationMs: row.duration_ms === null || row.duration_ms === undefined ? null : Number(row.duration_ms),
+    responseStatus:
+      row.response_status === null || row.response_status === undefined ? null : Number(row.response_status),
+    failureReason: row.failure_reason === null || row.failure_reason === undefined ? null : String(row.failure_reason),
+  };
+}
+
 interface MatchingEndpoint {
   readonly id: string;
 }
@@ -439,4 +611,22 @@ interface DeliveryRow {
   readonly attempt_count: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
+}
+
+interface AttemptsCursor {
+  readonly attemptedAt: string;
+  readonly id: string;
+}
+
+interface DeliveryAttemptAuditRow {
+  readonly id: unknown;
+  readonly delivery_id: unknown;
+  readonly message_id: unknown;
+  readonly endpoint_id: unknown;
+  readonly attempt_number: unknown;
+  readonly outcome: unknown;
+  readonly response_status: unknown;
+  readonly duration_ms: unknown;
+  readonly failure_reason: unknown;
+  readonly attempted_at: unknown;
 }

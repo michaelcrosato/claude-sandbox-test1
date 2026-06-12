@@ -15,10 +15,14 @@ export type { Gateway, GatewayAddress, GatewayConfig, GatewayDependencies } from
 export { createGateway } from './gateway';
 export type {
   AcceptMessageResult,
+  DeliveryAttemptAuditOutcome,
+  DeliveryAttemptAuditRecord,
   DeliveryStatus,
   DeliveryTaskRecord,
   JsonValue,
+  ListMessageAttemptsOptions,
   MessageConflictErrorCode,
+  MessageAttemptsPage,
   MessageFanout,
   MessageRecord,
   MessageValidationErrorCode,
@@ -27,6 +31,7 @@ export {
   acceptMessage,
   getMessage,
   listDeliveriesForMessage,
+  listMessageAttempts,
   MessageConflictError,
   MessageValidationError,
 } from './messages';
