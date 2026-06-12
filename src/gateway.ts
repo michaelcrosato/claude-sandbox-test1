@@ -14,6 +14,7 @@ import {
 } from './admin';
 import { authenticateAdminToken, authenticateApiKey, type AuthenticatedTenant } from './auth';
 import type { PosthornConfig } from './config';
+import { DeliveryListingValidationError, listDeliveries } from './deliveries';
 import {
   archiveEventType,
   createEventType,
@@ -299,6 +300,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
+  if (url.pathname === '/v1/deliveries') {
+    await handleDeliveryRequest(context, url);
+    return;
+  }
+
   if (url.pathname === '/v1/event-types' || eventTypeIdFromPath(url.pathname) !== null) {
     await handleEventTypeRequest(context, url);
     return;
@@ -479,6 +485,28 @@ async function handleUsageRequest(context: RequestContext): Promise<void> {
   }
 
   writeJson(context.response, 200, { usage });
+}
+
+async function handleDeliveryRequest(context: RequestContext, url: URL): Promise<void> {
+  if (context.request.method !== 'GET') {
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  const scoped = authenticateTenantRequest(context);
+  if (scoped === null) return;
+  try {
+    writeJson(context.response, 200, listDeliveries(scoped.storage, scoped.tenant.appId, {
+      limit: url.searchParams.get('limit'),
+      cursor: url.searchParams.get('cursor'),
+      status: url.searchParams.get('status'),
+      endpointId: url.searchParams.get('endpointId'),
+      eventType: url.searchParams.get('eventType'),
+      failureReason: url.searchParams.get('failureReason'),
+    }));
+  } catch (error) {
+    writeDeliveryListingError(context.response, error);
+  }
 }
 
 async function handlePortalSessionRequest(context: RequestContext): Promise<void> {
@@ -1100,6 +1128,15 @@ function writeEndpointTestError(response: ServerResponse, error: unknown): void 
 
 function writeEndpointObservabilityError(response: ServerResponse, error: unknown): void {
   if (error instanceof EndpointObservabilityValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeDeliveryListingError(response: ServerResponse, error: unknown): void {
+  if (error instanceof DeliveryListingValidationError) {
     writeJson(response, 400, { error: { code: error.code, message: error.message } });
     return;
   }
