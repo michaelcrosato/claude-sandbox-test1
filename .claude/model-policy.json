@@ -1,0 +1,23 @@
+{
+  "_comment": "Single source of truth for tier→model mapping (AI_OPERATIONS_PLAN §2.2). Only /research may change a mapping, after verifying the official model catalog. The hygiene routine syncs agent frontmatter from this file. No other file may hardcode a model name.",
+  "tiers": {
+    "reasoning": {
+      "model": "opus",
+      "effort": "high",
+      "last_verified": "2026-06-09",
+      "notes": "Orchestrator, planner, evaluator, security-reviewer, db-engineer. Fable 5 (claude-fable-5) is a valid upgrade for the hardest planning/evaluation passes; usage-credit pricing applies after 2026-06-22."
+    },
+    "builder": {
+      "model": "sonnet",
+      "effort": "high",
+      "last_verified": "2026-06-09",
+      "notes": "Routine implementation of one well-briefed feature. Sonnet 4.6 at ~60% of Opus per-token price."
+    },
+    "fast": {
+      "model": "haiku",
+      "effort": "medium",
+      "last_verified": "2026-06-09",
+      "notes": "Explorer/search/triage fan-out. Returns conclusions, never file dumps."
+    }
+  }
+}

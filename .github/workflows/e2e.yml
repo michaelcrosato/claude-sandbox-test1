@@ -1,0 +1,58 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      [
+        "src/**",
+        "tests/**",
+        "e2e/**",
+        "playwright.config.*",
+        "cypress.config.*",
+        "package.json",
+        "package-lock.json",
+        ".github/workflows/e2e.yml",
+      ]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # assertion-shield diffs against origin/develop (same as ci.yml)
+
+      - uses: actions/setup-node@v6
+        with:
+          # 24 matches ci.yml and the development environment — this job runs the
+          # same verify.sh gate, so the runtimes must not diverge (DECISIONS 2026-06-10)
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Install actionlint (pinned v1.7.12, checksum-verified)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o /tmp/actionlint.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -C "$HOME/.local/bin" -xzf /tmp/actionlint.tar.gz actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: E2E suite (skips with notice until the product defines an e2e script)
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.e2e ? 0 : 1)"; then
+            bash scripts/verify.sh --e2e
+          else
+            echo "No e2e script defined yet (pre-Phase-3). Skipping."
+          fi

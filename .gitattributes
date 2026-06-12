@@ -1,0 +1,8 @@
+# Shell scripts must stay LF — CRLF silently breaks hooks and gates on Windows
+# checkouts (bash parses \r as part of commands). Discovered via hook contract tests.
+* text=auto
+*.sh text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf

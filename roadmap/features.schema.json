@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FeaturesBacklog",
+  "type": "object",
+  "required": ["features"],
+  "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "epic",
+          "title",
+          "spec_ref",
+          "description",
+          "acceptance",
+          "authorized_paths",
+          "forbidden_paths",
+          "priority",
+          "status",
+          "passes",
+          "evidence",
+          "attempts",
+          "blocked_reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^F-\\d{4}$"
+          },
+          "epic": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "spec_ref": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authorized_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "forbidden_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^F-\\d{4}$"
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "blocked", "done"]
+          },
+          "passes": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked_reason": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

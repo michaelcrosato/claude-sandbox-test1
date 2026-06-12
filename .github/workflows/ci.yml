@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # assertion-shield diffs against origin/develop
+
+      - uses: actions/setup-node@v6
+        with:
+          # 24 matches the development environment — Node 20/24 --test arg
+          # handling already diverged once (DECISIONS 2026-06-10)
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Install actionlint (pinned v1.7.12, checksum-verified)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o /tmp/actionlint.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -C "$HOME/.local/bin" -xzf /tmp/actionlint.tar.gz actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify (typecheck + lint + tests + static analysis + state validation + shield)
+        run: bash scripts/verify.sh
+
+      - name: Secret-shaped string scan
+        run: |
+          # Deterministic leak check (plan §7.2): fail if tracked files contain key-shaped strings.
+          ! git grep -nE "(sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}\b)" -- ':!.claude/security-patterns.json' ':!.github/workflows/ci.yml' \
+            || { echo "::error::Secret-shaped string found in tracked files"; exit 1; }
+
+      - name: Trust-widening tripwire (F-0009)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Fail PRs that widen workflow trust or smuggle MCP config (mirrors
+          # claude-code-action's non-write-users-check; plan section 7.2).
+          # Key-shape anchored (key followed by ':' or '=') so pattern strings
+          # quoted in scripts/docs cannot self-trip the check (evaluator finding).
+          git fetch -q origin "${{ github.base_ref }}" --depth=50
+          if git diff "origin/${{ github.base_ref }}...HEAD" -- .github | grep -nE '^\+\s*(allowed_non_write_users|allowed_bots)\s*[:=]'; then
+            echo "::error::PR adds a trust-widening workflow key (allowed_non_write_users / allowed_bots)"; exit 1
+          fi
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -E '(^|/)\.mcp\.json$'; then
+            echo "::error::PR changes .mcp.json — MCP config changes require explicit security review (GHSA-8q5r-mmjf-575q class)"; exit 1
+          fi
+          if git diff "origin/${{ github.base_ref }}...HEAD" -- .claude/settings.json .github | grep -nE '^\+\s*("mcpServers"|--mcp-config)'; then
+            echo "::error::PR introduces MCP server config — requires a tool-registry entry + security review first (plan section 2.3)"; exit 1
+          fi
+          echo "tripwire clean"

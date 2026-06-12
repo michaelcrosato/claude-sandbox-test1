@@ -1,0 +1,51 @@
+{
+  "patterns": [
+    {
+      "rule_name": "private_key_block",
+      "regex": "-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----",
+      "reminder": "Private key material in a tracked file. Remove it and rotate the key; secrets live only in environment configuration or provider dashboards (CLAUDE.md section 7)."
+    },
+    {
+      "rule_name": "anthropic_api_key",
+      "regex": "sk-ant-[A-Za-z0-9_-]{20,}",
+      "reminder": "Anthropic API key detected. Remove it and rotate; keys belong in the cloud environment env-var screen or CI secrets, never in code."
+    },
+    {
+      "rule_name": "github_token",
+      "regex": "\\b(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}\\b",
+      "reminder": "GitHub token detected. Remove it and rotate; use the GitHub App integration or CI secrets instead."
+    },
+    {
+      "rule_name": "aws_access_key",
+      "regex": "\\bAKIA[0-9A-Z]{16}\\b",
+      "reminder": "AWS access key ID detected. Remove it and rotate; cloud credentials never live in tracked files."
+    },
+    {
+      "rule_name": "generic_secret_assignment",
+      "regex": "(?i)\\b(api[_-]?key|secret|password|passwd|token)\\b\\s*[:=]\\s*['\"][^'\"\\s]{12,}['\"]",
+      "reminder": "Hardcoded secret-shaped assignment. Load this value from environment configuration; if it is a real credential, rotate it.",
+      "exclude_paths": ["**/*.test.*", "**/*.spec.*", "**/tests/**"]
+    },
+    {
+      "rule_name": "connection_string_with_password",
+      "regex": "(?i)\\b(postgres|postgresql|mysql|mongodb(\\+srv)?|redis)://[^/\\s:]+:[^@\\s]+@",
+      "reminder": "Database URL with embedded credentials. Use env vars for connection strings; if this is a real credential, rotate it. Production connection strings must never appear anywhere agents can read."
+    },
+    {
+      "rule_name": "pipe_to_shell",
+      "regex": "(curl|wget)[^|\\n]*\\|\\s*(sudo\\s+)?(ba)?sh\\b",
+      "reminder": "Piping a download into a shell is prohibited (CLAUDE.md section 7). Download, inspect, then execute."
+    },
+    {
+      "rule_name": "dotenv_read",
+      "regex": "(cat|less|more|head|tail|type|Get-Content)\\s+[^\\n]*\\.env\\b",
+      "reminder": "Reading .env files is prohibited for agents (secrets boundary, CLAUDE.md section 7)."
+    },
+    {
+      "rule_name": "assertion_shield_bypass",
+      "substrings": ["ASSERTION_SHIELD_BYPASS"],
+      "reminder": "Setting ASSERTION_SHIELD_BYPASS is prohibited for agents; restore the deleted assertions instead (CLAUDE.md section 7).",
+      "exclude_paths": ["**/scripts/assertion-shield.ts", "**/scripts/test-hooks.sh", "**/.claude/hooks/guard-bash.sh", "**/.claude/security-patterns.json"]
+    }
+  ]
+}
