@@ -2,11 +2,11 @@
 
 ## Shipped this week
 
-The first product scaffold and SQLite storage foundation are merged. Posthorn now has a tested TypeScript entry point, configuration loading, and database initialization.
+The first product scaffold, SQLite storage foundation, and health/readiness HTTP server are merged. Posthorn now has a tested TypeScript entry point, configuration loading, database initialization, and basic liveness/readiness probes.
 
 ## Ready for your QA
 
-F-0003 is ready in PR #32. It adds the first HTTP server with health and readiness checks. There is still no customer-facing screen; the proof is the green automated check on the pull request.
+F-0005 is ready in PR #33. It adds Standard Webhooks signing and verification utilities with deterministic tests and green CI. There is still no customer-facing screen; the proof is the green automated check on the pull request.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-✅ Automated checks passed on PR #32. The latest local product checks passed with 26 tests.
+✅ Automated checks passed on PR #33. The latest local product checks passed with 47 tests.

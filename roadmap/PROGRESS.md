@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0005 done (Standard Webhooks utilities)
+
+**What:** Added dependency-free Standard Webhooks signing and verification utilities with `whsec_` HMAC-SHA256 secrets, raw-body signing, replay-window enforcement, case-insensitive header parsing, and multi-signature rotation support.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0005/verify.log`. Fresh-context evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npm test` (47 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails in Windows Git Bash for the known native-`node` hook-fixture issue, so Ubuntu CI remains the authoritative full-gate evidence.
+
+**Next step:** Merge PR #33 after the final state commit goes green, then start F-0004 (tenant endpoint management CRUD).
+
+---
+
 ## 2026-06-12 — F-0003 done (health/readiness HTTP server)
 
 **What:** Added a zero-dependency Node HTTP gateway with `start()`/`stop()`, unauthenticated `/healthz`, storage-backed `/readyz`, and in-memory HTTP integration tests. Security review blocked the first version for malformed request crashes and concurrent-start listener leaks; both were fixed with regression tests. A later review noted failed-listen cleanup, which was also fixed before merge.

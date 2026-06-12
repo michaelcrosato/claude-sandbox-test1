@@ -179,8 +179,8 @@
       "dependencies": [
         "F-0001"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "done",
+      "passes": true,
       "evidence": [
         "roadmap/evidence/F-0005/verify.log"
       ],
