@@ -973,9 +973,11 @@
       "dependencies": [
         "F-0022"
       ],
-      "status": "in_progress",
-      "passes": false,
-      "evidence": [],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0023/verify.log"
+      ],
       "attempts": 0,
       "blocked_reason": null,
       "forbidden_paths": [
