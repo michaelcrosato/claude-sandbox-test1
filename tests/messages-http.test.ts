@@ -59,6 +59,24 @@ interface AttemptsPageJson {
   readonly nextCursor: string | null;
 }
 
+type BatchItemJson =
+  | {
+      readonly ok: true;
+      readonly message: MessageJson;
+      readonly fanout: FanoutJson;
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+      };
+    };
+
+interface BatchJson {
+  readonly results: readonly BatchItemJson[];
+}
+
 interface ErrorJson {
   readonly error: {
     readonly code: string;
@@ -347,6 +365,134 @@ describe('message intake HTTP route', () => {
     expect(countDeliveries(storage, 'app_a')).toBe(1);
   });
 
+  it('rejects malformed batch envelopes and oversized batches', async () => {
+    const { address } = await startSeededGateway();
+
+    const nonArray = await requestJson<ErrorJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: {},
+    });
+    const empty = await requestJson<ErrorJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, []);
+    const oversized = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      '/v1/messages/batch',
+      TENANT_A_KEY,
+      Array.from({ length: 101 }, (_, index) => ({
+        eventType: 'user.created',
+        payload: { index },
+      })),
+    );
+
+    expect(nonArray.status).toBe(400);
+    expect(nonArray.body.error.code).toBe('invalid_request');
+    expect(empty.status).toBe(400);
+    expect(empty.body.error.code).toBe('invalid_request');
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.error.code).toBe('invalid_request');
+  });
+
+  it('accepts a full 100 item batch', async () => {
+    const { address, storage } = await startSeededGateway();
+
+    const batch = await requestJson<BatchJson>(
+      address,
+      'POST',
+      '/v1/messages/batch',
+      TENANT_A_KEY,
+      Array.from({ length: 100 }, (_, index) => ({
+        eventType: 'batch.created',
+        payload: { index },
+      })),
+    );
+
+    expect(batch.status).toBe(200);
+    expect(batch.body.results).toHaveLength(100);
+    expect(batch.body.results.every((result) => result.ok)).toBe(true);
+    expect(countMessages(storage, 'app_a')).toBe(100);
+  });
+
+  it('returns per-item results for mixed success and validation failures', async () => {
+    const { address, storage } = await startSeededGateway();
+    const endpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/batch-mixed',
+      eventTypes: ['user.created'],
+    }).endpoint;
+
+    const batch = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, [
+      { eventType: 'user.created', payload: { id: 20 } },
+      { payload: { id: 21 } },
+      { eventType: 'invoice.paid', payload: { id: 'inv_20' } },
+    ]);
+
+    expect(batch.status).toBe(200);
+    const first = expectBatchOk(batch.body.results[0]);
+    const second = expectBatchError(batch.body.results[1]);
+    const third = expectBatchOk(batch.body.results[2]);
+    expect(first.message).toMatchObject({ eventType: 'user.created', payload: { id: 20 } });
+    expect(first.fanout).toMatchObject({ matched: 1, endpointIds: [endpoint.id] });
+    expect(second.error.code).toBe('invalid_request');
+    expect(third.message).toMatchObject({ eventType: 'invoice.paid', payload: { id: 'inv_20' } });
+    expect(third.fanout).toMatchObject({ matched: 0, endpointIds: [] });
+    expect(countMessages(storage, 'app_a')).toBe(2);
+  });
+
+  it('applies idempotency within a batch without duplicate fanout', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/batch-idempotent',
+      eventTypes: ['user.created'],
+    });
+
+    const batch = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, [
+      { eventType: 'user.created', payload: { id: 30 }, idempotencyKey: 'batch-same-key' },
+      { eventType: 'user.created', payload: { id: 30 }, idempotencyKey: 'batch-same-key' },
+      { eventType: 'user.created', payload: { id: 31 }, idempotencyKey: 'batch-same-key' },
+    ]);
+
+    expect(batch.status).toBe(200);
+    const first = expectBatchOk(batch.body.results[0]);
+    const second = expectBatchOk(batch.body.results[1]);
+    const third = expectBatchError(batch.body.results[2]);
+    expect(second).toEqual(first);
+    expect(third.error).toEqual({
+      code: 'idempotency_conflict',
+      message: 'idempotencyKey was reused with a different request body.',
+    });
+    expect(countMessages(storage, 'app_a')).toBe(1);
+    expect(countDeliveries(storage, 'app_a')).toBe(1);
+  });
+
+  it('keeps batch retry fanout stable when endpoints change after the first send', async () => {
+    const { address, storage } = await startSeededGateway();
+    const originalEndpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/batch-original',
+      eventTypes: ['payment.created'],
+    }).endpoint;
+    const body = [
+      {
+        eventType: 'payment.created',
+        payload: { id: 'pay_batch_1' },
+        idempotencyKey: 'batch-stable-fanout',
+      },
+    ];
+
+    const first = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, body);
+    const laterEndpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/batch-later',
+      eventTypes: ['payment.created'],
+    }).endpoint;
+    const retry = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, body);
+
+    expect(first.status).toBe(200);
+    expect(retry.status).toBe(200);
+    expect(retry.body).toEqual(first.body);
+    const firstResult = expectBatchOk(first.body.results[0]);
+    expect(firstResult.fanout.endpointIds).toEqual([originalEndpoint.id]);
+    expect(firstResult.fanout.endpointIds).not.toContain(laterEndpoint.id);
+    expect(countDeliveries(storage, 'app_a')).toBe(1);
+  });
+
   it('returns successful delivery attempts for the authenticated tenant', async () => {
     const { address, storage } = await startSeededGateway();
     const endpoint = createEndpoint(storage, 'app_a', {
@@ -584,6 +730,18 @@ async function expectMessageError(address: GatewayAddress, body: Record<string, 
   const response = await requestJson<ErrorJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, body);
   expect(response.status).toBe(400);
   expect(response.body.error.code).toBe('invalid_request');
+}
+
+function expectBatchOk(result: BatchItemJson | undefined): Extract<BatchItemJson, { readonly ok: true }> {
+  expect(result).toBeDefined();
+  expect(result?.ok).toBe(true);
+  return result as Extract<BatchItemJson, { readonly ok: true }>;
+}
+
+function expectBatchError(result: BatchItemJson | undefined): Extract<BatchItemJson, { readonly ok: false }> {
+  expect(result).toBeDefined();
+  expect(result?.ok).toBe(false);
+  return result as Extract<BatchItemJson, { readonly ok: false }>;
 }
 
 function deeplyNestedPayload(): Record<string, unknown> {

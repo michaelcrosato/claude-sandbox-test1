@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import type { PosthornStorage } from './storage';
-import { assertMessageQuotaAvailable, incrementAcceptedMessages } from './usage';
+import { assertMessageQuotaAvailable, incrementAcceptedMessages, UsageQuotaExceededError } from './usage';
 
 export type MessageValidationErrorCode = 'invalid_request';
 export type MessageConflictErrorCode = 'idempotency_conflict';
+export type BatchMessageErrorCode = MessageValidationErrorCode | MessageConflictErrorCode | 'quota_exceeded';
 export type DeliveryStatus = 'pending' | 'delivering' | 'succeeded' | 'dead_letter';
 export type DeliveryAttemptAuditOutcome = 'succeeded' | 'failed' | 'dead_letter';
 
@@ -57,6 +58,20 @@ export interface MessageFanout {
 export interface AcceptMessageResult {
   readonly message: MessageRecord;
   readonly fanout: MessageFanout;
+}
+
+export type BatchMessageItemResult =
+  | ({ readonly ok: true } & AcceptMessageResult)
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: BatchMessageErrorCode;
+        readonly message: string;
+      };
+    };
+
+export interface AcceptMessageBatchResult {
+  readonly results: readonly BatchMessageItemResult[];
 }
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -168,6 +183,41 @@ export function acceptMessage(
       endpointIds: matchingEndpoints.map((endpoint) => endpoint.id),
     },
   };
+}
+
+export function acceptMessageBatch(
+  storage: PosthornStorage,
+  appId: string,
+  input: unknown,
+  now = new Date(),
+): AcceptMessageBatchResult {
+  const items = parseBatchItems(input);
+  const results = items.map((item): BatchMessageItemResult => {
+    try {
+      return {
+        ok: true,
+        ...acceptMessage(storage, appId, item, now),
+      };
+    } catch (error) {
+      if (
+        error instanceof MessageValidationError ||
+        error instanceof MessageConflictError ||
+        error instanceof UsageQuotaExceededError
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: error.code,
+            message: error.message,
+          },
+        };
+      }
+
+      throw error;
+    }
+  });
+
+  return { results };
 }
 
 export function getMessage(storage: PosthornStorage, appId: string, messageId: string): MessageRecord | null {
@@ -291,6 +341,17 @@ function endpointMatchesEventType(row: EndpointFanoutRow, eventType: string): bo
   if (row.event_types_json === null || row.event_types_json === undefined) return true;
   const parsed = JSON.parse(String(row.event_types_json)) as unknown;
   return Array.isArray(parsed) && parsed.includes(eventType);
+}
+
+function parseBatchItems(input: unknown): readonly unknown[] {
+  if (!Array.isArray(input)) {
+    throw new MessageValidationError('Expected a JSON array of 1 to 100 message objects.');
+  }
+  if (input.length < 1 || input.length > 100) {
+    throw new MessageValidationError('Batch must contain between 1 and 100 messages.');
+  }
+
+  return input;
 }
 
 function requireObject(input: unknown): Record<string, unknown> {

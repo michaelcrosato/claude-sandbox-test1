@@ -33,6 +33,24 @@ interface AcceptedMessageJson {
   };
 }
 
+type BatchItemJson =
+  | {
+      readonly ok: true;
+      readonly message: AcceptedMessageJson['message'];
+      readonly fanout: AcceptedMessageJson['fanout'];
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+      };
+    };
+
+interface BatchJson {
+  readonly results: readonly BatchItemJson[];
+}
+
 interface UsageJson {
   readonly usage: {
     readonly appId: string;
@@ -138,6 +156,47 @@ describe('usage HTTP routes and quota enforcement', () => {
         exceeded: false,
       },
     });
+  });
+
+  it('returns per-item quota_exceeded results after earlier batch items consume remaining quota', async () => {
+    const { address, storage } = await startSeededGateway({ monthlyMessageQuota: 1 });
+    createEndpoint(storage, 'app_usage', {
+      url: 'https://example.com/hooks/batch-quota',
+      eventTypes: ['user.created'],
+    });
+
+    const firstBatch = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_KEY, [
+      { eventType: 'user.created', payload: { id: 101 }, idempotencyKey: 'batch-quota-first' },
+      { eventType: 'user.created', payload: { id: 102 } },
+    ]);
+    const usageAfterFirstBatch = await requestJson<UsageJson>(address, 'GET', '/v1/usage', TENANT_KEY);
+    const retryBatch = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_KEY, [
+      { eventType: 'user.created', payload: { id: 101 }, idempotencyKey: 'batch-quota-first' },
+      { eventType: 'user.created', payload: { id: 103 } },
+    ]);
+
+    expect(firstBatch.status).toBe(200);
+    const firstAccepted = expectBatchOk(firstBatch.body.results[0]);
+    const firstRejected = expectBatchError(firstBatch.body.results[1]);
+    expect(firstAccepted.fanout.matched).toBe(1);
+    expect(firstRejected.error).toEqual({
+      code: 'quota_exceeded',
+      message: 'Monthly message quota exceeded.',
+    });
+    expect(usageAfterFirstBatch.body.usage).toMatchObject({
+      messagesAccepted: 1,
+      quota: {
+        monthlyMessageQuota: 1,
+        remaining: 0,
+        exceeded: true,
+      },
+    });
+
+    expect(retryBatch.status).toBe(200);
+    expect(expectBatchOk(retryBatch.body.results[0])).toEqual(firstAccepted);
+    expect(expectBatchError(retryBatch.body.results[1]).error.code).toBe('quota_exceeded');
+    expect(countMessages(storage, 'app_usage')).toBe(1);
+    expect(countDeliveries(storage, 'app_usage')).toBe(1);
   });
 
   it('meters each recorded delivery attempt as a delivery operation', async () => {
@@ -352,6 +411,18 @@ function countDeliveries(storage: PosthornStorage, appId: string): number {
     )
     .get(appId) as unknown as { readonly count: number };
   return Number(row.count);
+}
+
+function expectBatchOk(result: BatchItemJson | undefined): Extract<BatchItemJson, { readonly ok: true }> {
+  expect(result).toBeDefined();
+  expect(result?.ok).toBe(true);
+  return result as Extract<BatchItemJson, { readonly ok: true }>;
+}
+
+function expectBatchError(result: BatchItemJson | undefined): Extract<BatchItemJson, { readonly ok: false }> {
+  expect(result).toBeDefined();
+  expect(result?.ok).toBe(false);
+  return result as Extract<BatchItemJson, { readonly ok: false }>;
 }
 
 async function requestJson<T>(

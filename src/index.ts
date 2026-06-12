@@ -33,6 +33,9 @@ export type { Gateway, GatewayAddress, GatewayConfig, GatewayDependencies } from
 export { createGateway } from './gateway';
 export type {
   AcceptMessageResult,
+  AcceptMessageBatchResult,
+  BatchMessageErrorCode,
+  BatchMessageItemResult,
   DeliveryAttemptAuditOutcome,
   DeliveryAttemptAuditRecord,
   DeliveryStatus,
@@ -47,6 +50,7 @@ export type {
 } from './messages';
 export {
   acceptMessage,
+  acceptMessageBatch,
   getMessage,
   listDeliveriesForMessage,
   listMessageAttempts,
