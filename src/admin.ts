@@ -142,44 +142,65 @@ export function rotateAdminAppSystemSecret(
 ): RotateAdminAppSystemSecretResult | null {
   const body = input === undefined ? {} : requireObject(input);
   const overlapSeconds = parseOverlapSeconds(body.overlapSeconds);
-  const current = getAdminAppSystemSecret(storage, appId);
-  if (current === null) return null;
+  let rotation: { readonly secret: string; readonly previousSecretExpiresAt: string | null } | null = null;
 
-  const secret = createWebhookSecret();
-  const protectedSecret = protectEndpointSecret(storage, secret, now);
-  const previousSecretExpiresAt =
-    current.system_signing_secret_ciphertext === null
-      ? null
-      : new Date(now.getTime() + overlapSeconds * 1000).toISOString();
+  storage.db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = getAdminAppSystemSecret(storage, appId);
+    if (current === null) {
+      storage.db.exec('ROLLBACK');
+      return null;
+    }
 
-  storage.db
-    .prepare(
-      `
-        UPDATE apps
-        SET previous_system_signing_secret_ciphertext = ?,
-            previous_system_signing_secret_key_version = ?,
-            previous_system_signing_secret_nonce = ?,
-            previous_system_signing_secret_expires_at = ?,
-            system_signing_secret_ciphertext = ?,
-            system_signing_secret_key_version = ?,
-            system_signing_secret_nonce = ?
-        WHERE id = ?
-      `,
-    )
-    .run(
-      current.system_signing_secret_ciphertext,
-      current.system_signing_secret_key_version,
-      current.system_signing_secret_nonce,
-      previousSecretExpiresAt,
-      protectedSecret.ciphertext,
-      protectedSecret.keyVersion,
-      protectedSecret.nonce,
-      appId,
-    );
+    const secret = createWebhookSecret();
+    const protectedSecret = protectEndpointSecret(storage, secret, now);
+    const previousSecretExpiresAt =
+      current.system_signing_secret_ciphertext === null
+        ? null
+        : new Date(now.getTime() + overlapSeconds * 1000).toISOString();
+
+    const result = storage.db
+      .prepare(
+        `
+          UPDATE apps
+          SET previous_system_signing_secret_ciphertext = ?,
+              previous_system_signing_secret_key_version = ?,
+              previous_system_signing_secret_nonce = ?,
+              previous_system_signing_secret_expires_at = ?,
+              system_signing_secret_ciphertext = ?,
+              system_signing_secret_key_version = ?,
+              system_signing_secret_nonce = ?
+          WHERE id = ?
+        `,
+      )
+      .run(
+        current.system_signing_secret_ciphertext,
+        current.system_signing_secret_key_version,
+        current.system_signing_secret_nonce,
+        previousSecretExpiresAt,
+        protectedSecret.ciphertext,
+        protectedSecret.keyVersion,
+        protectedSecret.nonce,
+        appId,
+      );
+    if (result.changes === 0) {
+      storage.db.exec('ROLLBACK');
+      return null;
+    }
+    rotation = { secret, previousSecretExpiresAt };
+    storage.db.exec('COMMIT');
+  } catch (error) {
+    storage.db.exec('ROLLBACK');
+    throw error;
+  }
+
+  if (rotation === null) {
+    throw new Error('App system secret rotation did not produce a secret.');
+  }
 
   const app = getAdminApp(storage, appId);
   if (app === null) throw new Error('Rotated app could not be read back.');
-  return { app, secret, previousSecretExpiresAt };
+  return { app, secret: rotation.secret, previousSecretExpiresAt: rotation.previousSecretExpiresAt };
 }
 
 export function createAdminApiKey(

@@ -1,8 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createGateway, loadConfig, openStorage, type Gateway, type GatewayAddress, type PosthornStorage } from '../src/index';
+import {
+  createGateway,
+  loadConfig,
+  openStorage,
+  rotateAdminAppSystemSecret,
+  type Gateway,
+  type GatewayAddress,
+  type PosthornStorage,
+} from '../src/index';
 
 const ADMIN_TOKEN = '0123456789abcdef';
+const NOW = new Date('2026-06-12T12:00:00.000Z');
 
 const activeGateways: Gateway[] = [];
 
@@ -93,11 +102,23 @@ describe('admin HTTP routes', () => {
     const invalid = await requestJson<ErrorJson>(address, 'GET', '/v1/admin/apps', 'wrong-admin-token');
     const invalidUnsupportedMethod = await requestJson<ErrorJson>(
       address,
+      'POST',
+      '/v1/admin/keys/ak_missing',
+      'wrong-admin-token',
+    );
+    const validUnsupportedMethod = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      '/v1/admin/keys/ak_missing',
+      ADMIN_TOKEN,
+    );
+    const invalidRotateUnsupportedMethod = await requestJson<ErrorJson>(
+      address,
       'GET',
       '/v1/admin/apps/app_missing/rotate-system-secret',
       'wrong-admin-token',
     );
-    const validUnsupportedMethod = await requestJson<ErrorJson>(
+    const validRotateUnsupportedMethod = await requestJson<ErrorJson>(
       address,
       'GET',
       '/v1/admin/apps/app_missing/rotate-system-secret',
@@ -114,6 +135,14 @@ describe('admin HTTP routes', () => {
     });
     expect(validUnsupportedMethod.status).toBe(405);
     expect(validUnsupportedMethod.body).toEqual({
+      error: { code: 'method_not_allowed', message: 'Method not allowed.' },
+    });
+    expect(invalidRotateUnsupportedMethod.status).toBe(401);
+    expect(invalidRotateUnsupportedMethod.body).toEqual({
+      error: { code: 'unauthorized', message: 'Invalid bearer token.' },
+    });
+    expect(validRotateUnsupportedMethod.status).toBe(405);
+    expect(validRotateUnsupportedMethod.body).toEqual({
       error: { code: 'method_not_allowed', message: 'Method not allowed.' },
     });
   });
@@ -304,6 +333,33 @@ describe('admin HTTP routes', () => {
     expect(invalidOverlap.status).toBe(400);
     expect(invalidOverlap.body.error.code).toBe('invalid_request');
   });
+
+  it('rolls back generated system secret key material when app rotation fails', async () => {
+    const { address, storage } = await startGateway({ adminToken: ADMIN_TOKEN });
+    const created = await requestJson<AppReadJson>(address, 'POST', '/v1/admin/apps', ADMIN_TOKEN, {
+      name: 'Rollback Tenant',
+    });
+
+    expect(readLocalSecretKeyCount(storage)).toBe(0);
+    storage.db.exec(`
+      CREATE TEMP TRIGGER abort_system_secret_update
+      BEFORE UPDATE OF system_signing_secret_ciphertext ON apps
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic rotation failure');
+      END;
+    `);
+
+    expect(() => rotateAdminAppSystemSecret(storage, created.body.app.id, {}, NOW)).toThrow(
+      /synthetic rotation failure/,
+    );
+
+    const row = readSystemSecretRow(storage, created.body.app.id);
+    expect(row.system_signing_secret_ciphertext).toBeNull();
+    expect(row.system_signing_secret_key_version).toBeNull();
+    expect(row.system_signing_secret_nonce).toBeNull();
+    expect(row.previous_system_signing_secret_ciphertext).toBeNull();
+    expect(readLocalSecretKeyCount(storage)).toBe(0);
+  });
 });
 
 async function startGateway(
@@ -376,6 +432,13 @@ function readSystemSecretRow(storage: PosthornStorage, appId: string): SystemSec
     .get(appId) as SystemSecretRow | undefined;
   if (row === undefined) throw new Error(`Missing app ${appId}.`);
   return row;
+}
+
+function readLocalSecretKeyCount(storage: PosthornStorage): number {
+  const row = storage.db.prepare('SELECT COUNT(*) AS count FROM local_secret_keys').get() as
+    | { readonly count: unknown }
+    | undefined;
+  return Number(row?.count ?? 0);
 }
 
 interface SystemSecretRow {
