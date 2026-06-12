@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0023 done (TypeScript SDK parity for implemented tenant routes)
+
+**What:** Expanded the TypeScript tenant SDK so implemented routes no longer require raw HTTP: message listing, endpoint secret rotation, endpoint delivery history/stats, app-wide delivery listing, event type CRUD, endpoint test-send, and portal session creation. SDK route coverage now pins every helper to an implemented OpenAPI route.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0023/verify.log`. Evaluator returned NEEDS_WORK for two `unknown`-typed SDK option inputs, then PASS after client-facing types and compile-time assertions were added. Security reviewer returned NEEDS_WORK for generic query serialization of unexpected option keys, then APPROVE after per-helper query allowlists and regression coverage. Local checks passed: `npx vitest run tests/client.test.ts`, `npm run typecheck`, `npm test` (143 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, wait for PR #52 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0022 done (Python SDK and webhook verification helper)
 
 **What:** Added the README-promised dependency-free Python SDK in `clients/python`. Python producers can create/list endpoints, send single and batch messages, read message status, retry messages, list attempts, read usage, inspect endpoint delivery history/stats, and list app-wide deliveries with filters. Python receivers can verify Posthorn Standard Webhooks signatures with replay-window and multi-signature checks.

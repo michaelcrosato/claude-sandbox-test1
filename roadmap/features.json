@@ -968,6 +968,48 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0022"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0023/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0023",
+      "epic": "clients",
+      "title": "TypeScript SDK parity for implemented tenant routes",
+      "spec_ref": "README.md#typescript-sdk",
+      "description": "Expand the TypeScript SDK so it covers the implemented tenant routes that are currently HTTP/OpenAPI-only: message listing, endpoint secret rotation, endpoint delivery history/stats, app-wide delivery listing, event type catalog, endpoint test-send, and portal sessions.",
+      "acceptance": [
+        "PosthornClient exposes typed helpers for message listing, endpoint secret rotation, endpoint delivery history, endpoint stats, app-wide delivery listing with filters, event type CRUD, endpoint test-send, and portal session creation.",
+        "POSTHORN_CLIENT_ROUTES includes every new helper and the existing route coverage test proves each helper maps to an implemented OpenAPI route.",
+        "Client tests exercise representative successful calls for the new helpers against the in-process gateway, including pagination/filter query arguments where applicable.",
+        "Client tests cover at least one stable API error path for a new helper without weakening existing API error behavior.",
+        "README TypeScript SDK documentation reflects the implemented helper surface and no longer says these tenant helper routes are planned."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0023.md",
+        "roadmap/evidence/F-0023/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

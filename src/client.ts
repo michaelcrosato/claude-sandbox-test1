@@ -1,12 +1,22 @@
-import type { CreateEndpointResult, EndpointRecord } from './endpoints';
+import type { DeliveryListPage } from './deliveries';
+import type {
+  EndpointDeliveriesPage,
+  EndpointDeliveryStats,
+} from './endpoint-observability';
+import type { EndpointTestResult } from './endpoint-tests';
+import type { CreateEndpointResult, EndpointRecord, RotateEndpointSecretInput, RotateEndpointSecretResult } from './endpoints';
+import type { CreateEventTypeResult, EventTypeRecord } from './event-types';
 import type {
   AcceptMessageBatchResult,
   AcceptMessageResult,
+  DeliveryStatus,
   JsonValue,
+  MessageListPage,
   MessageAttemptsPage,
   MessageStatusResult,
   RetryMessageResult,
 } from './messages';
+import type { CreatePortalSessionResult } from './portal-sessions';
 import { API_ERROR_CODES, type ApiErrorCode, type HttpMethod } from './openapi';
 import type { UsageSummary } from './usage';
 
@@ -40,6 +50,52 @@ export interface ListMessageAttemptsInput {
   readonly cursor?: string;
 }
 
+export interface ListMessagesInput {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ListDeliveriesInput {
+  readonly status?: DeliveryStatus;
+  readonly endpointId?: string;
+  readonly eventType?: string;
+  readonly failureReason?: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface ListEndpointDeliveriesInput {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface GetEndpointStatsInput {
+  readonly days?: number;
+}
+
+export type CreateEventTypeInput = (
+  | { readonly eventType: string; readonly name?: never }
+  | { readonly name: string; readonly eventType?: never }
+) & {
+  readonly description?: string | null;
+  readonly schemaExample?: JsonValue;
+};
+
+export interface UpdateEventTypeInput {
+  readonly description?: string | null;
+  readonly schemaExample?: JsonValue | null;
+}
+
+export interface EndpointTestInput {
+  readonly eventType?: string;
+  readonly payload?: JsonValue;
+}
+
+export interface CreatePortalSessionInput {
+  readonly endpointId?: string;
+  readonly expiresInSeconds?: number;
+}
+
 export interface EndpointListResult {
   readonly data: readonly EndpointRecord[];
 }
@@ -50,6 +106,22 @@ export interface EndpointReadResult {
 
 export interface UsageReadResult {
   readonly usage: UsageSummary;
+}
+
+export interface EventTypeListResult {
+  readonly data: readonly EventTypeRecord[];
+}
+
+export interface EventTypeReadResult {
+  readonly eventType: EventTypeRecord;
+}
+
+export interface EndpointStatsReadResult {
+  readonly stats: EndpointDeliveryStats;
+}
+
+export interface EndpointTestReadResult {
+  readonly test: EndpointTestResult;
 }
 
 export interface ClientRouteMapping {
@@ -64,12 +136,24 @@ export const POSTHORN_CLIENT_ROUTES: readonly ClientRouteMapping[] = Object.free
   clientRoute('getEndpoint', 'get', '/v1/endpoints/{id}'),
   clientRoute('updateEndpoint', 'patch', '/v1/endpoints/{id}'),
   clientRoute('deleteEndpoint', 'delete', '/v1/endpoints/{id}'),
+  clientRoute('rotateEndpointSecret', 'post', '/v1/endpoints/{id}/rotate-secret'),
+  clientRoute('testEndpoint', 'post', '/v1/endpoints/{id}/test'),
+  clientRoute('listEndpointDeliveries', 'get', '/v1/endpoints/{id}/deliveries'),
+  clientRoute('getEndpointStats', 'get', '/v1/endpoints/{id}/stats'),
+  clientRoute('listDeliveries', 'get', '/v1/deliveries'),
+  clientRoute('listEventTypes', 'get', '/v1/event-types'),
+  clientRoute('createEventType', 'post', '/v1/event-types'),
+  clientRoute('getEventType', 'get', '/v1/event-types/{id}'),
+  clientRoute('updateEventType', 'patch', '/v1/event-types/{id}'),
+  clientRoute('deleteEventType', 'delete', '/v1/event-types/{id}'),
   clientRoute('sendMessage', 'post', '/v1/messages'),
   clientRoute('sendMessageBatch', 'post', '/v1/messages/batch'),
+  clientRoute('listMessages', 'get', '/v1/messages'),
   clientRoute('getMessage', 'get', '/v1/messages/{id}'),
   clientRoute('retryMessage', 'post', '/v1/messages/{id}/retry'),
   clientRoute('listMessageAttempts', 'get', '/v1/messages/{id}/attempts'),
   clientRoute('getUsage', 'get', '/v1/usage'),
+  clientRoute('createPortalSession', 'post', '/v1/portal/sessions'),
 ]);
 
 export class PosthornApiError extends Error {
@@ -117,12 +201,60 @@ export class PosthornClient {
     return this.request('delete', `/v1/endpoints/${pathSegment(id)}`);
   }
 
+  rotateEndpointSecret(id: string, input: RotateEndpointSecretInput = {}): Promise<RotateEndpointSecretResult> {
+    return this.request('post', `/v1/endpoints/${pathSegment(id)}/rotate-secret`, input);
+  }
+
+  testEndpoint(id: string, input: EndpointTestInput = {}): Promise<EndpointTestReadResult> {
+    return this.request('post', `/v1/endpoints/${pathSegment(id)}/test`, input);
+  }
+
+  listEndpointDeliveries(id: string, input: ListEndpointDeliveriesInput = {}): Promise<EndpointDeliveriesPage> {
+    return this.request('get', `/v1/endpoints/${pathSegment(id)}/deliveries${queryString(input, ['limit', 'cursor'])}`);
+  }
+
+  getEndpointStats(id: string, input: GetEndpointStatsInput = {}): Promise<EndpointStatsReadResult> {
+    return this.request('get', `/v1/endpoints/${pathSegment(id)}/stats${queryString(input, ['days'])}`);
+  }
+
+  listDeliveries(input: ListDeliveriesInput = {}): Promise<DeliveryListPage> {
+    return this.request(
+      'get',
+      `/v1/deliveries${queryString(input, ['status', 'endpointId', 'eventType', 'failureReason', 'limit', 'cursor'])}`,
+    );
+  }
+
+  listEventTypes(): Promise<EventTypeListResult> {
+    return this.request('get', '/v1/event-types');
+  }
+
+  createEventType(input: CreateEventTypeInput): Promise<CreateEventTypeResult> {
+    const { name, ...rest } = input;
+    return this.request('post', '/v1/event-types', { ...rest, eventType: input.eventType ?? name });
+  }
+
+  getEventType(id: string): Promise<EventTypeReadResult> {
+    return this.request('get', `/v1/event-types/${pathSegment(id)}`);
+  }
+
+  updateEventType(id: string, input: UpdateEventTypeInput): Promise<EventTypeReadResult> {
+    return this.request('patch', `/v1/event-types/${pathSegment(id)}`, input);
+  }
+
+  deleteEventType(id: string): Promise<void> {
+    return this.request('delete', `/v1/event-types/${pathSegment(id)}`);
+  }
+
   sendMessage(input: SendMessageInput): Promise<AcceptMessageResult> {
     return this.request('post', '/v1/messages', input);
   }
 
   sendMessageBatch(items: readonly SendMessageInput[]): Promise<AcceptMessageBatchResult> {
     return this.request('post', '/v1/messages/batch', items);
+  }
+
+  listMessages(input: ListMessagesInput = {}): Promise<MessageListPage> {
+    return this.request('get', `/v1/messages${queryString(input, ['limit', 'cursor'])}`);
   }
 
   getMessage(id: string): Promise<MessageStatusResult> {
@@ -134,15 +266,15 @@ export class PosthornClient {
   }
 
   listMessageAttempts(id: string, input: ListMessageAttemptsInput = {}): Promise<MessageAttemptsPage> {
-    const params = new URLSearchParams();
-    if (input.limit !== undefined) params.set('limit', String(input.limit));
-    if (input.cursor !== undefined) params.set('cursor', input.cursor);
-    const query = params.size === 0 ? '' : `?${params.toString()}`;
-    return this.request('get', `/v1/messages/${pathSegment(id)}/attempts${query}`);
+    return this.request('get', `/v1/messages/${pathSegment(id)}/attempts${queryString(input, ['limit', 'cursor'])}`);
   }
 
   getUsage(): Promise<UsageReadResult> {
     return this.request('get', '/v1/usage');
+  }
+
+  createPortalSession(input: CreatePortalSessionInput = {}): Promise<CreatePortalSessionResult> {
+    return this.request('post', '/v1/portal/sessions', input);
   }
 
   private async request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
@@ -187,6 +319,17 @@ function requireNonEmpty(value: string, name: string): string {
 
 function pathSegment(value: string): string {
   return encodeURIComponent(requireNonEmpty(value, 'id'));
+}
+
+function queryString(input: object, allowedKeys: readonly string[]): string {
+  const params = new URLSearchParams();
+  const record = input as Record<string, unknown>;
+  for (const key of allowedKeys) {
+    const value = record[key];
+    if (value !== undefined && value !== null) params.set(key, String(value));
+  }
+
+  return params.size === 0 ? '' : `?${params.toString()}`;
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
