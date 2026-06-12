@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0025 done (Auto-disable persistently failing endpoints)
+
+**What:** Implemented the documented endpoint auto-disable behavior. The delivery worker now disables an endpoint after a configured window of historical failed or dead-letter attempts with no recent success, and normal server startup passes `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` into the background worker. Disabled endpoints already fall out of new message fanout and worker claims.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0025/verify.log`. Evaluator returned PASS. Security reviewer returned NEEDS_WORK for a small-window single-dead-letter DoS edge case, then APPROVE after the current attempt was excluded from historical-failure evidence and regression-covered. Local checks passed: `npx vitest run tests/worker.test.ts` (18 tests), `npm run typecheck`, `npm test` (150 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** A tiny auto-disable window could let the current dead-letter count as the old failure if record time moved far enough past attempt start; the fix requires the qualifying historical failure to predate the current attempt. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, wait for PR #54 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0024 done (TypeScript admin client)
 
 **What:** Added the README-promised TypeScript admin/control-plane client. Operators can now create/list/read/update/delete tenant apps, read current-month app usage, and create/list/revoke tenant API keys through exported package helpers. Admin client route coverage pins the helper surface to implemented OpenAPI admin routes.
