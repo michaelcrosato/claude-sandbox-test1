@@ -5,3 +5,4 @@
 {"date":"2026-06-12","feature":"F-0004","attempts":1,"evaluator":"NEEDS_WORK->PASS","security":"BLOCK->APPROVE","findings_fixed":3,"pr":34,"notes":"tenant endpoint CRUD; SSRF URL normalization and oversized body handling hardened"}
 {"date":"2026-06-12","feature":"F-0006","attempts":1,"evaluator":"PASS","security":"APPROVE","findings_fixed":2,"pr":35,"notes":"message intake and pending fanout queue; payload depth validation and ordering stability hardened"}
 {"date":"2026-06-12","feature":"F-0007","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"BLOCK->APPROVE","findings_fixed":3,"pr":36,"notes":"crash-safe retry worker; redirect safety, response-body cancellation, and secret recovery compatibility hardened"}
+{"date":"2026-06-12","feature":"F-0008","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":1,"pr":37,"notes":"idempotent message intake; raw idempotency key control-character validation hardened"}
