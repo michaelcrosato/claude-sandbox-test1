@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0004 done (tenant endpoint management CRUD)
+
+**What:** Added bearer-authenticated endpoint create/list/read/update/delete routes, tenant-scoped API-key auth helpers, endpoint validation, one-time `whsec_` create responses, and protected signing-secret persistence. Security review found SSRF edge cases in trailing-dot hostnames and IPv6 internal literals plus delayed oversized-body responses; all were fixed with regression tests.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0004/verify.log`. Fresh-context evaluator returned NEEDS_WORK then PASS after URL/body hardening. Security reviewer returned BLOCK then APPROVE after the same hardening fixes. Local checks passed: `npm run typecheck`, `npm test` (53 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** URL policy needed DNS root-dot normalization and numeric IPv6 range checks; prefix checks alone were not enough.
+
+**Next step:** Merge PR #34 after the final state commit goes green, then start F-0010 (admin tenant and API-key management).
+
+---
+
 ## 2026-06-12 — F-0005 done (Standard Webhooks utilities)
 
 **What:** Added dependency-free Standard Webhooks signing and verification utilities with `whsec_` HMAC-SHA256 secrets, raw-body signing, replay-window enforcement, case-insensitive header parsing, and multi-signature rotation support.
