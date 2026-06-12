@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 
-import { afterEach, describe, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   createGateway,
@@ -194,6 +195,47 @@ except WebhookVerificationError as exc:
       {},
     );
   });
+
+  it('does not forward bearer tokens across API redirects', async () => {
+    const python = findPython();
+    let captureRequests = 0;
+    let capturedAuthorization: string | undefined;
+    const captureServer = createServer((request, response) => {
+      captureRequests += 1;
+      capturedAuthorization = request.headers.authorization;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"data":[]}');
+    });
+    const captureUrl = await listen(captureServer);
+    const redirectServer = createServer((_request, response) => {
+      response.writeHead(307, { location: `${captureUrl}/v1/endpoints` });
+      response.end();
+    });
+    const redirectUrl = await listen(redirectServer);
+
+    try {
+      await runPython(
+        python,
+        `
+from posthorn import PosthornApiError, PosthornClient
+
+client = PosthornClient("${redirectUrl}", "phk_secret_redirect_test")
+try:
+    client.list_endpoints()
+    raise AssertionError("expected redirect response to raise")
+except PosthornApiError as exc:
+    assert exc.status == 307
+    assert exc.code == "http_error"
+        `,
+        {},
+      );
+      expect(captureRequests).toBe(0);
+      expect(capturedAuthorization).toBeUndefined();
+    } finally {
+      await closeServer(redirectServer);
+      await closeServer(captureServer);
+    }
+  });
 });
 
 async function startSeededGateway(): Promise<{ readonly address: GatewayAddress; readonly storage: PosthornStorage }> {
@@ -275,6 +317,33 @@ function runPython(python: string, script: string, env: Record<string, string>):
       }
 
       resolve(stdout);
+    });
+  });
+}
+
+function listen(server: Server): Promise<string> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        reject(new Error('Expected TCP server address.'));
+        return;
+      }
+      resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
     });
   });
 }

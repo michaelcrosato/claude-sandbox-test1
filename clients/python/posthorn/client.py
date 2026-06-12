@@ -127,7 +127,7 @@ class PosthornClient:
 
         req = request.Request(url, data=data, headers=headers, method=method)
         try:
-            with request.urlopen(req, timeout=self.timeout) as response:
+            with _NO_REDIRECT_OPENER.open(req, timeout=self.timeout) as response:
                 status = response.status
                 payload = response.read()
                 if status == 204:
@@ -190,3 +190,11 @@ def _api_error(status: int, body: Any) -> PosthornApiError:
             if isinstance(code, str) and isinstance(message, str):
                 return PosthornApiError(status, code, message, body)
     return PosthornApiError(status, "http_error", f"HTTP {status} from Posthorn API.", body)
+
+
+class _NoRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(self, req: request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
+
+
+_NO_REDIRECT_OPENER = request.build_opener(_NoRedirectHandler)
