@@ -1,5 +1,16 @@
+export type { AuthenticatedTenant } from './auth';
+export { API_KEY_PREFIX, authenticateApiKey, createApiKeySecret, hashApiKey } from './auth';
 export type { PosthornConfig, WorkerConfig } from './config';
 export { loadConfig } from './config';
+export type { CreateEndpointResult, EndpointRecord, EndpointValidationErrorCode } from './endpoints';
+export {
+  createEndpoint,
+  deleteEndpoint,
+  EndpointValidationError,
+  getEndpoint,
+  listEndpoints,
+  updateEndpoint,
+} from './endpoints';
 export type { Gateway, GatewayAddress, GatewayConfig, GatewayDependencies } from './gateway';
 export { createGateway } from './gateway';
 export type { PosthornStorage, StorageOptions } from './storage';

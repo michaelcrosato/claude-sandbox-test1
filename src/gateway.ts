@@ -1,7 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { authenticateApiKey, type AuthenticatedTenant } from './auth';
 import type { PosthornConfig } from './config';
+import {
+  createEndpoint,
+  deleteEndpoint,
+  EndpointValidationError,
+  getEndpoint,
+  listEndpoints,
+  updateEndpoint,
+} from './endpoints';
 import { openStorage, type PosthornStorage } from './storage';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
@@ -88,13 +97,20 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
     }
 
     server = createServer((request, response) => {
-      handleRequest({
+      void handleRequest({
         request,
         response,
         serviceName: normalizedConfig.serviceName ?? 'posthorn',
+        maxBodyBytes: normalizedConfig.maxBodyBytes ?? 1_000_000,
         getStorage: () => storage,
         getReadinessError: () => readinessError,
         readinessProbe,
+      }).catch((error: unknown) => {
+        if (!response.headersSent) {
+          writeJson(response, 500, { error: { code: 'internal_error', message: 'Internal server error.' } });
+          return;
+        }
+        response.destroy(asError(error));
       });
     });
 
@@ -121,12 +137,13 @@ interface RequestContext {
   readonly request: IncomingMessage;
   readonly response: ServerResponse;
   readonly serviceName: string;
+  readonly maxBodyBytes: number;
   readonly getStorage: () => PosthornStorage | null;
   readonly getReadinessError: () => Error | null;
   readonly readinessProbe: (storage: PosthornStorage) => void;
 }
 
-function handleRequest(context: RequestContext): void {
+async function handleRequest(context: RequestContext): Promise<void> {
   let url: URL;
   try {
     url = new URL(context.request.url ?? '/', 'http://localhost');
@@ -163,13 +180,223 @@ function handleRequest(context: RequestContext): void {
     return;
   }
 
+  if (url.pathname === '/v1/endpoints' || endpointIdFromPath(url.pathname) !== null) {
+    await handleEndpointRequest(context, url);
+    return;
+  }
+
   writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
 }
 
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
+  const endpointId = endpointIdFromPath(url.pathname);
+  if (url.pathname === '/v1/endpoints') {
+    if (context.request.method === 'GET') {
+      const scoped = authenticateEndpointRequest(context);
+      if (scoped === null) return;
+      writeJson(context.response, 200, { data: listEndpoints(scoped.storage, scoped.tenant.appId) });
+      return;
+    }
+    if (context.request.method === 'POST') {
+      const scoped = authenticateEndpointRequest(context);
+      if (scoped === null) return;
+      const body = await readJsonBody(context);
+      if (body === null) return;
+      try {
+        writeJson(context.response, 201, createEndpoint(scoped.storage, scoped.tenant.appId, body));
+      } catch (error) {
+        writeEndpointError(context.response, error);
+      }
+      return;
+    }
+
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  if (endpointId === null) {
+    writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+    return;
+  }
+
+  if (context.request.method === 'GET') {
+    const scoped = authenticateEndpointRequest(context);
+    if (scoped === null) return;
+    const endpoint = getEndpoint(scoped.storage, scoped.tenant.appId, endpointId);
+    if (endpoint === null) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    writeJson(context.response, 200, { endpoint });
+    return;
+  }
+
+  if (context.request.method === 'PATCH') {
+    const scoped = authenticateEndpointRequest(context);
+    if (scoped === null) return;
+    const body = await readJsonBody(context);
+    if (body === null) return;
+    try {
+      const endpoint = updateEndpoint(scoped.storage, scoped.tenant.appId, endpointId, body);
+      if (endpoint === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { endpoint });
+    } catch (error) {
+      writeEndpointError(context.response, error);
+    }
+    return;
+  }
+
+  if (context.request.method === 'DELETE') {
+    const scoped = authenticateEndpointRequest(context);
+    if (scoped === null) return;
+    if (!deleteEndpoint(scoped.storage, scoped.tenant.appId, endpointId)) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    context.response.writeHead(204);
+    context.response.end();
+    return;
+  }
+
+  writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+}
+
+function authenticateEndpointRequest(context: RequestContext): ScopedRequest | null {
+  const storage = context.getStorage();
+  const readinessError = context.getReadinessError();
+  if (storage === null || readinessError !== null) {
+    writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
+    return null;
+  }
+
+  const tenant = authenticateApiKey(storage, context.request.headers.authorization);
+  if (tenant === null) {
+    writeJson(context.response, 401, { error: { code: 'unauthorized', message: 'Invalid bearer token.' } });
+    return null;
+  }
+
+  return { storage, tenant };
+}
+
+function endpointIdFromPath(pathname: string): string | null {
+  const match = /^\/v1\/endpoints\/([^/]+)$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
+async function readJsonBody(context: RequestContext): Promise<unknown | null> {
+  const bodyResult = await readRequestBody(context.request, context.maxBodyBytes);
+  if (bodyResult.status === 'too_large') {
+    writeJson(
+      context.response,
+      413,
+      { error: { code: 'payload_too_large', message: 'Request body is too large.' } },
+      { connection: 'close' },
+    );
+    return null;
+  }
+  if (bodyResult.status === 'aborted') {
+    return null;
+  }
+  const rawBody = bodyResult.body;
+  if (rawBody.length === 0) {
+    writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawBody.toString('utf8')) as unknown;
+  } catch {
+    writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
+    return null;
+  }
+}
+
+function readRequestBody(request: IncomingMessage, maxBodyBytes: number): Promise<RequestBodyResult> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      request.off('data', onData);
+      request.off('error', onError);
+      request.off('end', onEnd);
+      request.off('aborted', onAborted);
+      request.off('close', onClose);
+    };
+
+    const settle = (result: RequestBodyResult) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBodyBytes) {
+        request.resume();
+        settle({ status: 'too_large' });
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onError = (error: Error) => {
+      fail(error);
+    };
+    const onEnd = () => {
+      settle({ status: 'ok', body: Buffer.concat(chunks) });
+    };
+    const onAborted = () => {
+      settle({ status: 'aborted' });
+    };
+    const onClose = () => {
+      if (!request.complete) {
+        settle({ status: 'aborted' });
+      }
+    };
+
+    request.on('data', onData);
+    request.on('error', onError);
+    request.on('end', onEnd);
+    request.on('aborted', onAborted);
+    request.on('close', onClose);
+  });
+}
+
+function writeEndpointError(response: ServerResponse, error: unknown): void {
+  if (error instanceof EndpointValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(JSON.stringify(body));
 }
+
+interface ScopedRequest {
+  readonly storage: PosthornStorage;
+  readonly tenant: AuthenticatedTenant;
+}
+
+type RequestBodyResult =
+  | { readonly status: 'ok'; readonly body: Buffer }
+  | { readonly status: 'too_large' }
+  | { readonly status: 'aborted' };
 
 function listen(server: Server, host: string, port: number): Promise<GatewayAddress> {
   return new Promise((resolve, reject) => {
