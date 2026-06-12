@@ -67,6 +67,40 @@ describe('openStorage', () => {
     }
   });
 
+  it('keeps app system signing secrets protected and migrates legacy app tables', () => {
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE apps (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          monthly_message_quota INTEGER,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO apps (id, name, monthly_message_quota, created_at)
+        VALUES ('app_legacy', 'Legacy App', NULL, '2026-06-12T00:00:00.000Z');
+      `);
+
+      initializeSchema(db);
+      initializeSchema(db);
+
+      const columns = db
+        .prepare('PRAGMA table_info(apps)')
+        .all()
+        .map((row) => String(row.name));
+      expect(columns.filter((name) => name === 'system_signing_secret_ciphertext')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'system_signing_secret_key_version')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'system_signing_secret_nonce')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_system_signing_secret_ciphertext')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_system_signing_secret_key_version')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_system_signing_secret_nonce')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_system_signing_secret_expires_at')).toHaveLength(1);
+      expect(db.prepare('SELECT name FROM apps WHERE id = ?').get('app_legacy')).toEqual({ name: 'Legacy App' });
+    } finally {
+      db.close();
+    }
+  });
+
   it('adds endpoint rotation columns idempotently for existing SQLite files', () => {
     const db = new DatabaseSync(':memory:');
     try {

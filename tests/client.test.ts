@@ -377,6 +377,12 @@ describe('PosthornClient', () => {
         remaining: null,
       },
     });
+    const rotatedSystemSecret = await admin.rotateAppSystemSecret(created.app.id, { overlapSeconds: 120 });
+    expect(rotatedSystemSecret).toEqual({
+      app: updated.app,
+      secret: expect.stringMatching(/^whsec_/),
+      previousSecretExpiresAt: null,
+    });
 
     await admin.revokeApiKey(key.apiKey.id);
     expect((await admin.listApiKeys(created.app.id)).data[0]).toMatchObject({
@@ -454,6 +460,7 @@ describe('PosthornClient', () => {
         'PATCH /v1/admin/apps/{id}',
         'DELETE /v1/admin/apps/{id}',
         'GET /v1/admin/apps/{id}/usage',
+        'POST /v1/admin/apps/{id}/rotate-system-secret',
         'GET /v1/admin/apps/{id}/keys',
         'POST /v1/admin/apps/{id}/keys',
         'DELETE /v1/admin/keys/{id}',

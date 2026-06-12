@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 
 import { createApiKeySecret, hashApiKey } from './auth';
+import { protectEndpointSecret } from './secret-protection';
 import type { PosthornStorage } from './storage';
+import { createWebhookSecret } from './webhooks';
 
 export type AdminValidationErrorCode = 'invalid_request';
 
@@ -29,6 +31,12 @@ export interface CreateAdminApiKeyResult {
   readonly secret: string;
 }
 
+export interface RotateAdminAppSystemSecretResult {
+  readonly app: AdminAppRecord;
+  readonly secret: string;
+  readonly previousSecretExpiresAt: string | null;
+}
+
 export class AdminValidationError extends Error {
   readonly code: AdminValidationErrorCode = 'invalid_request';
 
@@ -41,6 +49,9 @@ export class AdminValidationError extends Error {
 const APP_ID_PREFIX = 'app_';
 const API_KEY_ID_PREFIX = 'ak_';
 const MAX_NAME_LENGTH = 200;
+const DEFAULT_SYSTEM_SECRET_OVERLAP_SECONDS = 86_400;
+const MIN_SYSTEM_SECRET_OVERLAP_SECONDS = 60;
+const MAX_SYSTEM_SECRET_OVERLAP_SECONDS = 2_592_000;
 
 export function createAdminApp(
   storage: PosthornStorage,
@@ -121,6 +132,54 @@ export function updateAdminApp(
 export function deleteAdminApp(storage: PosthornStorage, appId: string): boolean {
   const result = storage.db.prepare('DELETE FROM apps WHERE id = ?').run(appId);
   return result.changes > 0;
+}
+
+export function rotateAdminAppSystemSecret(
+  storage: PosthornStorage,
+  appId: string,
+  input: unknown = {},
+  now = new Date(),
+): RotateAdminAppSystemSecretResult | null {
+  const body = input === undefined ? {} : requireObject(input);
+  const overlapSeconds = parseOverlapSeconds(body.overlapSeconds);
+  const current = getAdminAppSystemSecret(storage, appId);
+  if (current === null) return null;
+
+  const secret = createWebhookSecret();
+  const protectedSecret = protectEndpointSecret(storage, secret, now);
+  const previousSecretExpiresAt =
+    current.system_signing_secret_ciphertext === null
+      ? null
+      : new Date(now.getTime() + overlapSeconds * 1000).toISOString();
+
+  storage.db
+    .prepare(
+      `
+        UPDATE apps
+        SET previous_system_signing_secret_ciphertext = ?,
+            previous_system_signing_secret_key_version = ?,
+            previous_system_signing_secret_nonce = ?,
+            previous_system_signing_secret_expires_at = ?,
+            system_signing_secret_ciphertext = ?,
+            system_signing_secret_key_version = ?,
+            system_signing_secret_nonce = ?
+        WHERE id = ?
+      `,
+    )
+    .run(
+      current.system_signing_secret_ciphertext,
+      current.system_signing_secret_key_version,
+      current.system_signing_secret_nonce,
+      previousSecretExpiresAt,
+      protectedSecret.ciphertext,
+      protectedSecret.keyVersion,
+      protectedSecret.nonce,
+      appId,
+    );
+
+  const app = getAdminApp(storage, appId);
+  if (app === null) throw new Error('Rotated app could not be read back.');
+  return { app, secret, previousSecretExpiresAt };
 }
 
 export function createAdminApiKey(
@@ -223,6 +282,20 @@ function parseMonthlyMessageQuota(input: unknown): number | null {
   return input;
 }
 
+function parseOverlapSeconds(input: unknown): number {
+  if (input === undefined || input === null) return DEFAULT_SYSTEM_SECRET_OVERLAP_SECONDS;
+  if (
+    typeof input !== 'number' ||
+    !Number.isSafeInteger(input) ||
+    input < MIN_SYSTEM_SECRET_OVERLAP_SECONDS ||
+    input > MAX_SYSTEM_SECRET_OVERLAP_SECONDS
+  ) {
+    throw new AdminValidationError('overlapSeconds must be an integer between 60 and 2592000.');
+  }
+
+  return input;
+}
+
 function containsControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -234,6 +307,28 @@ function containsControlCharacter(value: string): boolean {
 
 function generateId(prefix: string): string {
   return `${prefix}${randomBytes(16).toString('base64url')}`;
+}
+
+function getAdminAppSystemSecret(storage: PosthornStorage, appId: string): AdminAppSystemSecretRow | null {
+  const row = storage.db
+    .prepare(
+      `
+        SELECT system_signing_secret_ciphertext,
+               system_signing_secret_key_version,
+               system_signing_secret_nonce
+        FROM apps
+        WHERE id = ?
+        LIMIT 1
+      `,
+    )
+    .get(appId) as AdminAppSystemSecretRow | undefined;
+
+  if (row === undefined) return null;
+  return {
+    system_signing_secret_ciphertext: nullableString(row.system_signing_secret_ciphertext),
+    system_signing_secret_key_version: nullableString(row.system_signing_secret_key_version),
+    system_signing_secret_nonce: nullableString(row.system_signing_secret_nonce),
+  };
 }
 
 function adminAppFromRow(row: AdminAppRow): AdminAppRecord {
@@ -258,11 +353,21 @@ function adminApiKeyFromRow(row: AdminApiKeyRow): AdminApiKeyRecord {
   };
 }
 
+function nullableString(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
+}
+
 interface AdminAppRow {
   readonly id: unknown;
   readonly name: unknown;
   readonly monthly_message_quota: unknown;
   readonly created_at: unknown;
+}
+
+interface AdminAppSystemSecretRow {
+  readonly system_signing_secret_ciphertext: string | null;
+  readonly system_signing_secret_key_version: string | null;
+  readonly system_signing_secret_nonce: string | null;
 }
 
 interface AdminApiKeyRow {

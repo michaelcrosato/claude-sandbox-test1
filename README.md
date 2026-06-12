@@ -18,8 +18,7 @@ Webhooks signing/verification utilities, tenant endpoint CRUD, message intake wi
 queue creation, idempotent message retries, the importable retry delivery worker, the per-attempt
 audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
 batch message intake, Python SDK, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
-below describe the target Posthorn product contract being built through `roadmap/features.json`;
-not every listed route or client method is implemented yet.
+below describe the implemented Posthorn product contract being built through `roadmap/features.json`.
 
 ## Quick Start
 
@@ -126,7 +125,7 @@ Key capabilities:
 | GET | `/v1/admin/apps` | Admin | implemented | List tenants. |
 | GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | implemented | Read / update / delete a tenant. |
 | GET | `/v1/admin/apps/:id/usage` | Admin | implemented | Per-tenant usage (billing read model). |
-| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | planned | Rotate the app's system webhook signing secret. |
+| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | implemented | Rotate the app's system webhook signing secret (`201`; new secret shown once, previous secret kept for overlap). |
 | POST/GET | `/v1/admin/apps/:id/keys` | Admin | implemented | Mint / list API keys. |
 | DELETE | `/v1/admin/keys/:id` | Admin | implemented | Revoke an API key. |
 
@@ -343,6 +342,8 @@ usage.usage.deliveryAttempts;  // delivery attempts this month
 
 // List/revoke keys and off-board tenants:
 const keys = await admin.listApiKeys(app.id);
+const rotatedSystem = await admin.rotateAppSystemSecret(app.id, { overlapSeconds: 3600 });
+rotatedSystem.secret; // whsec_... shown once; previous secret remains valid during overlap
 await admin.revokeApiKey(apiKey.id);
 await admin.deleteApp(app.id);
 ```

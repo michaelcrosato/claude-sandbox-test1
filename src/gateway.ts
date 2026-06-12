@@ -10,6 +10,7 @@ import {
   listAdminApiKeys,
   listAdminApps,
   revokeAdminApiKey,
+  rotateAdminAppSystemSecret,
   updateAdminApp,
 } from './admin';
 import { authenticateAdminToken, authenticateApiKey, type AuthenticatedTenant } from './auth';
@@ -397,6 +398,27 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
       return;
     }
     writeJson(context.response, 200, { usage });
+    return;
+  }
+
+  if (appPath.route === 'rotateSystemSecret') {
+    if (context.request.method !== 'POST') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const body = await readOptionalJsonBody(context);
+    if (body === BODY_READ_FAILED) return;
+    try {
+      const result = rotateAdminAppSystemSecret(scoped.storage, appPath.appId, body, context.now());
+      if (result === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 201, result);
+    } catch (error) {
+      writeAdminError(context.response, error);
+    }
     return;
   }
 
@@ -936,6 +958,10 @@ function authenticateAdminRequest(context: RequestContext): AdminScopedRequest |
 function adminAppPathFromPath(pathname: string): AdminAppPath | null {
   const usageMatch = /^\/v1\/admin\/apps\/([^/]+)\/usage$/.exec(pathname);
   if (usageMatch !== null) return { appId: usageMatch[1], route: 'usage' };
+  const rotateSystemSecretMatch = /^\/v1\/admin\/apps\/([^/]+)\/rotate-system-secret$/.exec(pathname);
+  if (rotateSystemSecretMatch !== null) {
+    return { appId: rotateSystemSecretMatch[1], route: 'rotateSystemSecret' };
+  }
   const keysMatch = /^\/v1\/admin\/apps\/([^/]+)\/keys$/.exec(pathname);
   if (keysMatch !== null) return { appId: keysMatch[1], route: 'keys' };
   const appMatch = /^\/v1\/admin\/apps\/([^/]+)$/.exec(pathname);
@@ -1216,7 +1242,7 @@ interface AdminScopedRequest {
 
 interface AdminAppPath {
   readonly appId: string;
-  readonly route: 'app' | 'keys' | 'usage';
+  readonly route: 'app' | 'keys' | 'usage' | 'rotateSystemSecret';
 }
 
 type RequestBodyResult =
