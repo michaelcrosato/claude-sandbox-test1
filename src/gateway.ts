@@ -34,6 +34,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
   let server: Server | null = null;
   let storage: PosthornStorage | null = null;
   let address: GatewayAddress | null = null;
+  let startPromise: Promise<GatewayAddress> | null = null;
   let readinessError: Error | null = null;
 
   const storageFactory = dependencies.openStorage ?? openStorage;
@@ -48,42 +49,56 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
     config: normalizedConfig,
     async start() {
       if (address !== null) return address;
+      if (startPromise !== null) return startPromise;
 
-      readinessError = null;
+      startPromise = startGateway();
       try {
-        storage = storageFactory({ dataDir: normalizedConfig.dataDir ?? './posthorn-data' });
-      } catch (error) {
-        readinessError = asError(error);
+        return await startPromise;
+      } finally {
+        startPromise = null;
       }
-
-      server = createServer((request, response) => {
-        handleRequest({
-          request,
-          response,
-          serviceName: normalizedConfig.serviceName ?? 'posthorn',
-          getStorage: () => storage,
-          getReadinessError: () => readinessError,
-          readinessProbe,
-        });
-      });
-
-      const host = normalizedConfig.host ?? '0.0.0.0';
-      const port = normalizedConfig.port ?? 3000;
-      address = await listen(server, host, port);
-      return address;
     },
     async stop() {
+      if (startPromise !== null) {
+        await startPromise;
+      }
       const activeServer = server;
       const activeStorage = storage;
       server = null;
       storage = null;
       address = null;
+      startPromise = null;
       readinessError = null;
 
       await closeServer(activeServer);
       activeStorage?.close();
     },
   });
+
+  async function startGateway(): Promise<GatewayAddress> {
+    readinessError = null;
+    try {
+      storage = storageFactory({ dataDir: normalizedConfig.dataDir ?? './posthorn-data' });
+    } catch (error) {
+      readinessError = asError(error);
+    }
+
+    server = createServer((request, response) => {
+      handleRequest({
+        request,
+        response,
+        serviceName: normalizedConfig.serviceName ?? 'posthorn',
+        getStorage: () => storage,
+        getReadinessError: () => readinessError,
+        readinessProbe,
+      });
+    });
+
+    const host = normalizedConfig.host ?? '0.0.0.0';
+    const port = normalizedConfig.port ?? 3000;
+    address = await listen(server, host, port);
+    return address;
+  }
 }
 
 interface RequestContext {
@@ -96,7 +111,13 @@ interface RequestContext {
 }
 
 function handleRequest(context: RequestContext): void {
-  const url = new URL(context.request.url ?? '/', 'http://localhost');
+  let url: URL;
+  try {
+    url = new URL(context.request.url ?? '/', 'http://localhost');
+  } catch {
+    writeJson(context.response, 400, { error: { code: 'invalid_request', message: 'Invalid request target.' } });
+    return;
+  }
   if (url.pathname === '/healthz') {
     if (context.request.method !== 'GET') {
       writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });

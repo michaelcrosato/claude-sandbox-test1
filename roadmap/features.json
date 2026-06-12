@@ -99,7 +99,7 @@
       "evidence": [
         "roadmap/evidence/F-0003/verify.log"
       ],
-      "attempts": 0,
+      "attempts": 1,
       "blocked_reason": null,
       "forbidden_paths": [
         ".claude/**",
