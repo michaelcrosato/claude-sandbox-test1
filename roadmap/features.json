@@ -49,10 +49,12 @@
       "dependencies": [
         "F-0001"
       ],
-      "status": "pending",
-      "passes": false,
-      "evidence": [],
-      "attempts": 0,
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0002/verify.log"
+      ],
+      "attempts": 1,
       "blocked_reason": null,
       "forbidden_paths": [
         ".claude/**",
