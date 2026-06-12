@@ -10,6 +10,12 @@ Posthorn handles the hard parts of sending webhooks to your customers — signed
 observable — with the operational simplicity that Svix and Convoy lack: a single process backed
 by SQLite by default, durable queue built in, zero runtime dependencies.
 
+## Implementation Status
+
+This checkout is at the first product-scaffold milestone. The API, SDK, dashboard, and deployment
+sections below describe the target Posthorn product contract being built through
+`roadmap/features.json`; not every listed route or client method is implemented yet.
+
 ## Quick Start
 
 ```bash
@@ -357,16 +363,15 @@ Set `POSTHORN_ADMIN_TOKEN` to unlock a browser UI at `/dashboard`:
 
 ```bash
 npm install
-npm test            # vitest (~2060 tests)
 npm run typecheck
+npm test
 npm run build
+bash scripts/verify.sh
 ```
 
-**Supported Node:** Posthorn requires **Node ≥ 22.13** (the `engines` floor). Its default
-datastore is the built-in `node:sqlite`, which is flag-free from 22.13 but still pre-stable — a
-release candidate on Node 24 and in active development on Node 22. The API is unlikely to change
-under a running deployment; if you want a stable-API datastore, run the
-[PostgreSQL backend](docs/DEPLOY.md#postgresql-backend) instead.
+**Supported Node:** Posthorn targets **Node ≥ 22.13**. The current scaffold has only the product
+entry point, build, lint, and Vitest wiring; the SQLite-backed datastore lands in the next storage
+feature.
 
 ## Contributing & automation
 

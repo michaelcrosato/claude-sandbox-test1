@@ -9,5 +9,5 @@
     "noUnusedLocals": true,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["scripts/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }

@@ -4,18 +4,21 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
+    "build": "tsc --outDir dist",
     "verify": "bash scripts/verify.sh",
     "shield": "ts-node scripts/assertion-shield.ts",
     "state": "ts-node scripts/update-state.ts",
     "state:validate": "ts-node scripts/update-state.ts --validate",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint scripts"
+    "test": "vitest run",
+    "lint": "biome lint scripts src tests vitest.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
     "@types/node": "^25.9.2",
     "shellcheck": "^4.1.0",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }
