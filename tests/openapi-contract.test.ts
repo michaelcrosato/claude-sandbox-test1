@@ -97,6 +97,34 @@ describe('OpenAPI contract', () => {
         url: 'http://127.0.0.1/webhook',
       }),
     );
+    const eventType = await requestJson(address, 'POST', '/v1/event-types', TENANT_KEY, {
+      eventType: 'contract.created',
+      schemaExample: { id: 1 },
+    });
+    expect(eventType.status).toBe(201);
+    await collectErrorCode(
+      emitted,
+      await requestJson(address, 'POST', '/v1/event-types', TENANT_KEY, {
+        eventType: 'contract.created',
+        schemaExample: { id: 2 },
+      }),
+    );
+    const endpoint = await requestJson(address, 'POST', '/v1/endpoints', TENANT_KEY, {
+      url: 'https://example.com/disabled-test',
+    });
+    expect(endpoint.status).toBe(201);
+    const endpointBody = (await endpoint.json()) as { readonly endpoint: { readonly id: string } };
+    const disabled = await requestJson(address, 'PATCH', `/v1/endpoints/${endpointBody.endpoint.id}`, TENANT_KEY, {
+      enabled: false,
+    });
+    expect(disabled.status).toBe(200);
+    await collectErrorCode(
+      emitted,
+      await requestJson(address, 'POST', `/v1/endpoints/${endpointBody.endpoint.id}/test`, TENANT_KEY, {
+        eventType: 'contract.created',
+        payload: { id: 1 },
+      }),
+    );
 
     const first = await requestJson(address, 'POST', '/v1/messages', TENANT_KEY, {
       eventType: 'contract.conflict',

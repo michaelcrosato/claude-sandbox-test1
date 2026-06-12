@@ -2,6 +2,9 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import type { PosthornStorage } from './storage';
 import { assertMessageQuotaAvailable, incrementAcceptedMessages, UsageQuotaExceededError } from './usage';
+import { containsControlCharacter, isJsonValue, isValidEventTypeIdentifier, type JsonValue } from './validation';
+
+export type { JsonValue } from './validation';
 
 export type MessageValidationErrorCode = 'invalid_request';
 export type MessageConflictErrorCode = 'idempotency_conflict';
@@ -83,8 +86,6 @@ export interface AcceptMessageBatchResult {
   readonly results: readonly BatchMessageItemResult[];
 }
 
-export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
-
 export class MessageValidationError extends Error {
   readonly code: MessageValidationErrorCode = 'invalid_request';
 
@@ -105,10 +106,7 @@ export class MessageConflictError extends Error {
 
 const MESSAGE_ID_PREFIX = 'msg_';
 const DELIVERY_ID_PREFIX = 'del_';
-const EVENT_TYPE_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
-const MAX_PAYLOAD_DEPTH = 64;
-const MAX_PAYLOAD_NODES = 10_000;
 const DEFAULT_ATTEMPTS_PAGE_LIMIT = 50;
 const MAX_ATTEMPTS_PAGE_LIMIT = 100;
 
@@ -415,7 +413,7 @@ function requireObject(input: unknown): Record<string, unknown> {
 }
 
 function parseEventType(value: unknown): string {
-  if (typeof value !== 'string' || !EVENT_TYPE_PATTERN.test(value)) {
+  if (typeof value !== 'string' || !isValidEventTypeIdentifier(value)) {
     throw new MessageValidationError('eventType must be a valid event type identifier.');
   }
 
@@ -451,52 +449,6 @@ function parseIdempotencyKey(value: unknown): string | null {
   }
 
   return idempotencyKey;
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
-  let nodes = 0;
-
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (current === undefined) continue;
-    nodes += 1;
-    if (nodes > MAX_PAYLOAD_NODES || current.depth > MAX_PAYLOAD_DEPTH) return false;
-
-    const currentValue = current.value;
-    if (currentValue === null || typeof currentValue === 'string' || typeof currentValue === 'boolean') {
-      continue;
-    }
-    if (typeof currentValue === 'number') {
-      if (!Number.isFinite(currentValue)) return false;
-      continue;
-    }
-    if (Array.isArray(currentValue)) {
-      for (const child of currentValue) {
-        stack.push({ value: child, depth: current.depth + 1 });
-      }
-      continue;
-    }
-    if (typeof currentValue === 'object') {
-      for (const child of Object.values(currentValue)) {
-        stack.push({ value: child, depth: current.depth + 1 });
-      }
-      continue;
-    }
-
-    return false;
-  }
-
-  return true;
-}
-
-function containsControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || code === 127) return true;
-  }
-
-  return false;
 }
 
 function generateId(prefix: string): string {

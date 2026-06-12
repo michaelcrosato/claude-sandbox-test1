@@ -98,6 +98,38 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   attempted_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS event_types (
+  id TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  description TEXT,
+  schema_example_json TEXT,
+  archived_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS event_types_active_unique
+ON event_types(app_id, event_type)
+WHERE archived_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS event_types_app_active_created_idx
+ON event_types(app_id, archived_at, created_at);
+
+CREATE TABLE IF NOT EXISTS portal_sessions (
+  id TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  endpoint_id TEXT REFERENCES endpoints(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS portal_sessions_app_expires_idx
+ON portal_sessions(app_id, expires_at);
+
 CREATE TABLE IF NOT EXISTS usage_months (
   app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
   month TEXT NOT NULL,

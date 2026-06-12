@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0017 done (Event type catalog and consumer portal sessions)
+
+**What:** Added tenant-scoped event type catalog routes, active-name conflict handling, archive semantics, synchronous endpoint test sends with explicit or `schemaExample` payloads, and short-lived portal session tokens stored only as hashes. OpenAPI and README route/error tables now mark event types, endpoint test-send, portal sessions, `conflict`, and `endpoint_disabled` as implemented.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0017/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/event-types-http.test.ts tests/endpoint-test-http.test.ts tests/portal-sessions-http.test.ts tests/openapi-contract.test.ts tests/storage.test.ts`, `npm test` (118 tests), `npm run lint`, `npm run build`, and `npm run state:validate`.
+
+**Surprises:** Endpoint test-send needed a gateway-level injectable delivery fetch so tests could verify signing, headers, manual redirects, and failure results without real outbound network calls. README route rows also had to split the combined event-types row so the existing OpenAPI sync parser could match implemented operations exactly.
+
+**Next step:** Merge PR #46 after the final evidence/state commit goes green, then start the last unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0016 done (Docker and production compose reference)
 
 **What:** Added the single-container Docker deployment path: a compiled `node dist/src/server.js` production entrypoint, non-root runtime image with `/data` persistence, in-process gateway plus delivery worker, loopback-bound Docker Compose reference, and Prometheus scrape config. README and deployment docs now use implemented HTTP admin routes and register an endpoint before sending the first message.

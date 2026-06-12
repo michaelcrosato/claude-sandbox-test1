@@ -716,9 +716,11 @@
         "F-0007",
         "F-0010"
       ],
-      "status": "pending",
-      "passes": false,
-      "evidence": [],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0017/verify.log"
+      ],
       "attempts": 0,
       "blocked_reason": null,
       "forbidden_paths": [

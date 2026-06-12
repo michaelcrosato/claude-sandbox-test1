@@ -110,13 +110,17 @@ Key capabilities:
 | PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint. |
 | DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | planned | Rotate signing secret, zero-downtime. |
-| POST | `/v1/endpoints/:id/test` | Bearer | planned | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
+| POST | `/v1/endpoints/:id/test` | Bearer | implemented | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
 | GET | `/v1/endpoints/:id/deliveries` | Bearer | planned | Endpoint delivery history (paginated). |
 | GET | `/v1/endpoints/:id/stats` | Bearer | planned | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
 | GET | `/v1/deliveries` | Bearer | planned | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |
 | GET | `/v1/usage` | Bearer | implemented | Tenant's own message + delivery usage and current-month quota status. |
-| POST | `/v1/portal/sessions` | Bearer | planned | Mint a consumer portal session token. |
-| GET/POST/PATCH/DELETE | `/v1/event-types` / `/v1/event-types/:id` | Bearer | planned | Event type catalog (create, list, update, archive). |
+| POST | `/v1/portal/sessions` | Bearer | implemented | Mint a short-lived consumer portal session token for endpoint management. |
+| GET | `/v1/event-types` | Bearer | implemented | List active event types. |
+| POST | `/v1/event-types` | Bearer | implemented | Create an event type with an optional schema example. |
+| GET | `/v1/event-types/:id` | Bearer | implemented | Fetch one active event type. |
+| PATCH | `/v1/event-types/:id` | Bearer | implemented | Update an event type description or schema example. |
+| DELETE | `/v1/event-types/:id` | Bearer | implemented | Archive an event type. |
 | POST | `/v1/admin/apps` | Admin | implemented | Create a tenant. |
 | GET | `/v1/admin/apps` | Admin | implemented | List tenants. |
 | GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | implemented | Read / update / delete a tenant. |
@@ -142,11 +146,11 @@ they cannot drift). In the SDK, `PosthornApiError.code` is typed as the union `A
 | `invalid_request` | 400 | implemented | Malformed request: a validation failure, a bad query parameter, or a missing/non-object body. |
 | `invalid_json` | 400 | implemented | The request body is not valid JSON. |
 | `url_not_allowed` | 400 | implemented | The endpoint URL targets a private/internal address (SSRF guard). |
-| `endpoint_disabled` | 400 | planned | The target endpoint is disabled (e.g. a test-send to it). |
+| `endpoint_disabled` | 400 | implemented | The target endpoint is disabled (e.g. a test-send to it). |
 | `unauthorized` | 401 | implemented | Missing, invalid, or revoked credential (API key, or admin token on a control-plane route). |
 | `not_found` | 404 | implemented | No such resource for your tenant, no route, or a disabled (hidden) feature surface. |
 | `method_not_allowed` | 405 | implemented | The path exists, but not for this HTTP method. |
-| `conflict` | 409 | planned | A uniqueness/state conflict (e.g. an event type that already exists). |
+| `conflict` | 409 | implemented | A uniqueness/state conflict (e.g. an event type that already exists). |
 | `idempotency_conflict` | 409 | implemented | An idempotency key reused with a different payload. |
 | `payload_too_large` | 413 | implemented | The request body exceeded the configured maximum size. |
 | `quota_exceeded` | 429 | implemented | Your monthly message quota is reached. |
@@ -204,8 +208,10 @@ const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-Endpoint secret rotation and message listing are planned future SDK methods; the
-current SDK only exposes routes that exist in `GET /openapi.json`.
+Endpoint secret rotation and message listing are planned future SDK methods. The
+event type catalog, endpoint test-send, and portal session routes are available
+over HTTP/OpenAPI now; typed SDK helpers for them can be added without changing
+the wire contract.
 
 ### Receiving webhooks
 

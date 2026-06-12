@@ -1,0 +1,507 @@
+verify	Set up job	﻿2026-06-12T20:14:05.2799162Z Current runner version: '2.335.1'
+verify	Set up job	2026-06-12T20:14:05.2832980Z ##[group]Runner Image Provisioner
+verify	Set up job	2026-06-12T20:14:05.2834325Z Hosted Compute Agent
+verify	Set up job	2026-06-12T20:14:05.2835413Z Version: 20260527.539
+verify	Set up job	2026-06-12T20:14:05.2836504Z Commit: a891dd388383b896fa6ac04a82c0b75cec981078
+verify	Set up job	2026-06-12T20:14:05.2838110Z Build Date: 2026-05-27T21:39:57Z
+verify	Set up job	2026-06-12T20:14:05.2839297Z Worker ID: {30f527b9-117a-4f21-8b15-27a14c5c716b}
+verify	Set up job	2026-06-12T20:14:05.2840543Z Azure Region: eastus
+verify	Set up job	2026-06-12T20:14:05.2841516Z ##[endgroup]
+verify	Set up job	2026-06-12T20:14:05.2843922Z ##[group]Operating System
+verify	Set up job	2026-06-12T20:14:05.2845137Z Ubuntu
+verify	Set up job	2026-06-12T20:14:05.2846033Z 24.04.4
+verify	Set up job	2026-06-12T20:14:05.2846858Z LTS
+verify	Set up job	2026-06-12T20:14:05.2848159Z ##[endgroup]
+verify	Set up job	2026-06-12T20:14:05.2849083Z ##[group]Runner Image
+verify	Set up job	2026-06-12T20:14:05.2850203Z Image: ubuntu-24.04
+verify	Set up job	2026-06-12T20:14:05.2851104Z Version: 20260607.184.1
+verify	Set up job	2026-06-12T20:14:05.2853139Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260607.184/images/ubuntu/Ubuntu2404-Readme.md
+verify	Set up job	2026-06-12T20:14:05.2856086Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260607.184
+verify	Set up job	2026-06-12T20:14:05.2858122Z ##[endgroup]
+verify	Set up job	2026-06-12T20:14:05.2859909Z ##[group]GITHUB_TOKEN Permissions
+verify	Set up job	2026-06-12T20:14:05.2862610Z Contents: read
+verify	Set up job	2026-06-12T20:14:05.2863658Z Metadata: read
+verify	Set up job	2026-06-12T20:14:05.2864665Z ##[endgroup]
+verify	Set up job	2026-06-12T20:14:05.2867933Z Secret source: Actions
+verify	Set up job	2026-06-12T20:14:05.2869195Z Prepare workflow directory
+verify	Set up job	2026-06-12T20:14:05.3335755Z Prepare all required actions
+verify	Set up job	2026-06-12T20:14:05.3392776Z Getting action download info
+verify	Set up job	2026-06-12T20:14:05.5723613Z Download action repository 'actions/checkout@v6' (SHA:df4cb1c069e1874edd31b4311f1884172cec0e10)
+verify	Set up job	2026-06-12T20:14:05.7483681Z Download action repository 'actions/setup-node@v6' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+verify	Set up job	2026-06-12T20:14:05.9665235Z Complete job name: verify
+verify	Run actions/checkout@v6	﻿2026-06-12T20:14:06.0434708Z ##[group]Run actions/checkout@v6
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0435643Z with:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0436127Z   fetch-depth: 0
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0436720Z   repository: michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0441632Z   token: ***
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0442115Z   ssh-strict: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0442598Z   ssh-user: git
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0443082Z   persist-credentials: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0443616Z   clean: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0444103Z   sparse-checkout-cone-mode: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0444673Z   fetch-tags: false
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0445147Z   show-progress: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0445631Z   lfs: false
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0446080Z   submodules: false
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0446595Z   set-safe-directory: true
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.0447535Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1399051Z Syncing repository: michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1401465Z ##[group]Getting Git version info
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1402423Z Working directory is '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1'
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1403731Z [command]/usr/bin/git version
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1490551Z git version 2.54.0
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1546786Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1562100Z Temporarily overriding HOME='/home/runner/work/_temp/7ca57ec1-c51b-4362-bff0-f3e76010d537' before making global git config changes
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1564232Z Adding repository directory to the temporary git global config as a safe directory
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1568182Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1626379Z Deleting the contents of '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1'
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1630495Z ##[group]Determining repository object format
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1633061Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1633912Z ##[group]Initializing the repository
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1638920Z [command]/usr/bin/git init /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1754583Z hint: Using 'master' as the name for the initial branch. This default branch name
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1756101Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1757411Z hint: to use in all of your new repositories, which will suppress this warning,
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1758474Z hint: call:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1759047Z hint:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1759725Z hint: 	git config --global init.defaultBranch <name>
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1760535Z hint:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1761629Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1763186Z hint: 'development'. The just-created branch can be renamed via this command:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1764632Z hint:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1765477Z hint: 	git branch -m <name>
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1766400Z hint:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1767871Z hint: Disable this message with "git config set advice.defaultBranchName false"
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1769993Z Initialized empty Git repository in /home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1774146Z [command]/usr/bin/git remote add origin https://github.com/michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1822018Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1823383Z ##[group]Disabling automatic garbage collection
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1826267Z [command]/usr/bin/git config --local gc.auto 0
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1855174Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1856584Z ##[group]Setting up auth
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1857868Z Removing SSH command configuration
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1863323Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.1898947Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2261504Z Removing HTTP extra header
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2267487Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2298648Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2521824Z Removing includeIf entries pointing to credentials config files
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2528826Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2558604Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2784207Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2825896Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2856510Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2891028Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2922408Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2952292Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2954018Z ##[group]Fetching the repository
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.2960473Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/* +d6fe5a63cfbed09eec5d6df1da614119a271700b:refs/remotes/pull/46/merge
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7243406Z From https://github.com/michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7249907Z  * [new branch]      develop                                  -> origin/develop
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7251578Z  * [new branch]      feat/F-0017                              -> origin/feat/F-0017
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7253663Z  * [new branch]      fix-secure-cookies-12621239021464708045  -> origin/fix-secure-cookies-12621239021464708045
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7256300Z  * [new branch]      fix-testing-gap-9769365040422560746      -> origin/fix-testing-gap-9769365040422560746
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7259404Z  * [new branch]      fix/cookie-secure-attribute-9649095602443010258 -> origin/fix/cookie-secure-attribute-9649095602443010258
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7262762Z  * [new branch]      fix/n-plus-one-query-tenant-dashboard-7585570271790670955 -> origin/fix/n-plus-one-query-tenant-dashboard-7585570271790670955
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7266239Z  * [new branch]      jules-12633352851970186916-85cc8dc4      -> origin/jules-12633352851970186916-85cc8dc4
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7269438Z  * [new branch]      jules-14114376179219540410-9e6a39ce      -> origin/jules-14114376179219540410-9e6a39ce
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7272694Z  * [new branch]      jules-15744721551443159625-6373e1e8      -> origin/jules-15744721551443159625-6373e1e8
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7275484Z  * [new branch]      jules-16093478213463828521               -> origin/jules-16093478213463828521
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7278486Z  * [new branch]      jules-3616429161098162028-5b310ee4       -> origin/jules-3616429161098162028-5b310ee4
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7281231Z  * [new branch]      jules-5287189669532334063-b24b1fe2       -> origin/jules-5287189669532334063-b24b1fe2
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7284203Z  * [new branch]      jules-5876443510078069307-ff8a6bca       -> origin/jules-5876443510078069307-ff8a6bca
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7288469Z  * [new branch]      jules-add-systemEventTransportFrom-tests-17576351816775455343 -> origin/jules-add-systemEventTransportFrom-tests-17576351816775455343
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7293234Z  * [new branch]      jules-optimize-cancel-message-9113223768473199127 -> origin/jules-optimize-cancel-message-9113223768473199127
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7297308Z  * [new branch]      jules-optimize-tenant-handler-17752217191181656008 -> origin/jules-optimize-tenant-handler-17752217191181656008
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7301051Z  * [new branch]      jules-perf-optimize-retries-10420574192359177556 -> origin/jules-perf-optimize-retries-10420574192359177556
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7303732Z  * [new branch]      main                                     -> origin/main
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7306117Z  * [new branch]      perf-retry-message-17142870735697212356  -> origin/perf-retry-message-17142870735697212356
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7310302Z  * [new branch]      performance-improve-queue-retry-concurrency-13574057378926878238 -> origin/performance-improve-queue-retry-concurrency-13574057378926878238
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7314327Z  * [new branch]      test-billing-provider-1867712393725636274 -> origin/test-billing-provider-1867712393725636274
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7317831Z  * [new tag]         archive/add-tests-usage-report-5882049586409978497 -> archive/add-tests-usage-report-5882049586409978497
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7320818Z  * [new tag]         archive/cursor/cloud-dev-env-docs-7e1c   -> archive/cursor/cloud-dev-env-docs-7e1c
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7324539Z  * [new tag]         archive/fix-missing-secure-attribute-on-session-cookies-12656376876899540371 -> archive/fix-missing-secure-attribute-on-session-cookies-12656376876899540371
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7328985Z  * [new tag]         archive/fix-portal-cookie-secure-4807980669564717116 -> archive/fix-portal-cookie-secure-4807980669564717116
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7332135Z  * [new tag]         archive/fix-secure-cookies-12621239021464708045 -> archive/fix-secure-cookies-12621239021464708045
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7335096Z  * [new tag]         archive/fix-secure-cookies-6908223813514403416 -> archive/fix-secure-cookies-6908223813514403416
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7338233Z  * [new tag]         archive/fix-testing-gap-9769365040422560746 -> archive/fix-testing-gap-9769365040422560746
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7341821Z  * [new tag]         archive/fix/cookie-secure-attribute-9649095602443010258 -> archive/fix/cookie-secure-attribute-9649095602443010258
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7345678Z  * [new tag]         archive/fix/n-plus-one-query-tenant-dashboard-7585570271790670955 -> archive/fix/n-plus-one-query-tenant-dashboard-7585570271790670955
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7349287Z  * [new tag]         archive/jules-12063469622865446951-d6c9d038 -> archive/jules-12063469622865446951-d6c9d038
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7351921Z  * [new tag]         archive/jules-12633352851970186916-85cc8dc4 -> archive/jules-12633352851970186916-85cc8dc4
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7354572Z  * [new tag]         archive/jules-12886355537722753111-2b7a6689 -> archive/jules-12886355537722753111-2b7a6689
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7361520Z  * [new tag]         archive/jules-14114376179219540410-9e6a39ce -> archive/jules-14114376179219540410-9e6a39ce
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7364402Z  * [new tag]         archive/jules-14488570772810190490-3c152e68 -> archive/jules-14488570772810190490-3c152e68
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7367339Z  * [new tag]         archive/jules-15744721551443159625-6373e1e8 -> archive/jules-15744721551443159625-6373e1e8
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7369844Z  * [new tag]         archive/jules-16093478213463828521       -> archive/jules-16093478213463828521
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7372309Z  * [new tag]         archive/jules-3616429161098162028-5b310ee4 -> archive/jules-3616429161098162028-5b310ee4
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7374930Z  * [new tag]         archive/jules-5287189669532334063-b24b1fe2 -> archive/jules-5287189669532334063-b24b1fe2
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7378109Z  * [new tag]         archive/jules-5876443510078069307-ff8a6bca -> archive/jules-5876443510078069307-ff8a6bca
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7385078Z  * [new tag]         archive/jules-6793574749816983955-95105f6d -> archive/jules-6793574749816983955-95105f6d
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7389381Z  * [new tag]         archive/jules-add-error-codes-test-15793405527436340862 -> archive/jules-add-error-codes-test-15793405527436340862
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7393768Z  * [new tag]         archive/jules-add-systemEventTransportFrom-tests-17576351816775455343 -> archive/jules-add-systemEventTransportFrom-tests-17576351816775455343
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7398436Z  * [new tag]         archive/jules-optimize-cancel-message-9113223768473199127 -> archive/jules-optimize-cancel-message-9113223768473199127
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7402495Z  * [new tag]         archive/jules-optimize-tenant-handler-17752217191181656008 -> archive/jules-optimize-tenant-handler-17752217191181656008
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7406647Z  * [new tag]         archive/jules-perf-optimize-retries-10420574192359177556 -> archive/jules-perf-optimize-retries-10420574192359177556
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7410183Z  * [new tag]         archive/maint/iter-0115                  -> archive/maint/iter-0115
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7413266Z  * [new tag]         archive/optimize-n1-dashboard-10055649552144261545 -> archive/optimize-n1-dashboard-10055649552144261545
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7417477Z  * [new tag]         archive/perf-retry-message-17142870735697212356 -> archive/perf-retry-message-17142870735697212356
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7422044Z  * [new tag]         archive/performance-improve-queue-retry-concurrency-13574057378926878238 -> archive/performance-improve-queue-retry-concurrency-13574057378926878238
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7426689Z  * [new tag]         archive/test-billing-provider-1867712393725636274 -> archive/test-billing-provider-1867712393725636274
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7429824Z  * [new tag]         pre-purge-20260609                       -> pre-purge-20260609
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7431889Z  * [new ref]         d6fe5a63cfbed09eec5d6df1da614119a271700b -> pull/46/merge
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7435446Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7438369Z ##[group]Determining the checkout info
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7440657Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7442653Z [command]/usr/bin/git sparse-checkout disable
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7458342Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7478505Z ##[group]Checking out the ref
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7482075Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/46/merge
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7638825Z Note: switching to 'refs/remotes/pull/46/merge'.
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7640176Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7641180Z You are in 'detached HEAD' state. You can look around, make experimental
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7643668Z changes and commit them, and you can discard any commits you make in this
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7645735Z state without impacting any branches by switching back to a branch.
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7648126Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7648751Z If you want to create a new branch to retain commits you create, you may
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7650250Z do so (now or later) by using -c with the switch command. Example:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7651217Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7651759Z   git switch -c <new-branch-name>
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7652562Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7652928Z Or undo this operation with:
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7653485Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7653813Z   git switch -
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7654223Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7655077Z Turn off this advice by setting config variable advice.detachedHead to false
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7656626Z 
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7658517Z HEAD is now at d6fe5a6 Merge 31864eefa6b2d9ea11cb870a447c483adc91794d into eb4ee86ce55aa43e0b89288dd4dffa94137e4aa2
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7662539Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7695642Z [command]/usr/bin/git log -1 --format=%H
+verify	Run actions/checkout@v6	2026-06-12T20:14:06.7720125Z d6fe5a63cfbed09eec5d6df1da614119a271700b
+verify	Run actions/setup-node@v6	﻿2026-06-12T20:14:06.8146886Z ##[group]Run actions/setup-node@v6
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8148302Z with:
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8149160Z   node-version: 24
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8150077Z   cache: npm
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8150969Z   check-latest: false
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8164070Z   token: ***
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8165026Z   package-manager-cache: true
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.8166100Z ##[endgroup]
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.9769667Z Found in cache @ /opt/hostedtoolcache/node/24.16.0/x64
+verify	Run actions/setup-node@v6	2026-06-12T20:14:06.9773757Z ##[group]Environment details
+verify	Run actions/setup-node@v6	2026-06-12T20:14:07.7585027Z node: v24.16.0
+verify	Run actions/setup-node@v6	2026-06-12T20:14:07.7585661Z npm: 11.13.0
+verify	Run actions/setup-node@v6	2026-06-12T20:14:07.7586139Z yarn: 1.22.22
+verify	Run actions/setup-node@v6	2026-06-12T20:14:07.7587744Z ##[endgroup]
+verify	Run actions/setup-node@v6	2026-06-12T20:14:07.7610872Z [command]/opt/hostedtoolcache/node/24.16.0/x64/bin/npm config get cache
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.0000923Z /home/runner/.npm
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.0901169Z Cache hit for: node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.4046398Z Received 42148325 of 42148325 (100.0%), 147.2 MBs/sec
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.4047726Z Cache Size: ~40 MB (42148325 B)
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.4081107Z [command]/usr/bin/tar -xf /home/runner/work/_temp/e5d6f89f-f1d3-4c7a-9a25-2176fbf378c9/cache.tzst -P -C /home/runner/work/claude-sandbox-test1/claude-sandbox-test1 --use-compress-program unzstd
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.5126387Z Cache restored successfully
+verify	Run actions/setup-node@v6	2026-06-12T20:14:08.5158095Z Cache restored from key: node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5
+verify	Install	﻿2026-06-12T20:14:08.5364453Z ##[group]Run npm ci --no-audit --no-fund
+verify	Install	2026-06-12T20:14:08.5364905Z ^[[36;1mnpm ci --no-audit --no-fund^[[0m
+verify	Install	2026-06-12T20:14:08.5579670Z shell: /usr/bin/bash -e {0}
+verify	Install	2026-06-12T20:14:08.5580031Z ##[endgroup]
+verify	Install	2026-06-12T20:14:10.6485244Z npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+verify	Install	2026-06-12T20:14:11.0479021Z 
+verify	Install	2026-06-12T20:14:11.0479777Z added 194 packages in 2s
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	﻿2026-06-12T20:14:11.1011129Z ##[group]Run mkdir -p "$HOME/.local/bin"
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1011527Z ^[[36;1mmkdir -p "$HOME/.local/bin"^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1012217Z ^[[36;1mcurl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o /tmp/actionlint.tar.gz^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1013178Z ^[[36;1mecho "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1013873Z ^[[36;1mtar -C "$HOME/.local/bin" -xzf /tmp/actionlint.tar.gz actionlint^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1014529Z ^[[36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1048537Z shell: /usr/bin/bash -e {0}
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.1048825Z ##[endgroup]
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T20:14:11.2209896Z /tmp/actionlint.tar.gz: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	﻿2026-06-12T20:14:11.2667742Z ##[group]Run bash scripts/verify.sh
+^[[36;1mbash scripts/verify.sh^[[0m
+shell: /usr/bin/bash -e {0}
+##[endgroup]
+
+──── verify: typecheck ────
+──── typecheck: OK
+
+──── verify: lint ────
+Checked 45 files in 88ms. No fixes applied.
+──── lint: OK
+
+──── verify: unit tests ────
+
+^[[1m^[[30m^[[46m RUN ^[[49m^[[39m^[[22m ^[[36mv4.1.8 ^[[39m^[[90m/home/runner/work/claude-sandbox-test1/claude-sandbox-test1^[[39m
+
+ ^[[32m✓^[[39m tests/usage-http.test.ts ^[[2m(^[[22m^[[2m5 tests^[[22m^[[2m)^[[22m^[[32m 233^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/messages-http.test.ts ^[[2m(^[[22m^[[2m20 tests^[[22m^[[2m)^[[22m^[[33m 376^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/worker.test.ts ^[[2m(^[[22m^[[2m10 tests^[[22m^[[2m)^[[22m^[[33m 388^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/openapi-contract.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 213^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/metrics-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 160^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/endpoints-http.test.ts ^[[2m(^[[22m^[[2m6 tests^[[22m^[[2m)^[[22m^[[32m 197^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/webhooks.test.ts ^[[2m(^[[22m^[[2m21 tests^[[22m^[[2m)^[[22m^[[32m 17^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/admin-http.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 145^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/endpoint-test-http.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 101^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/event-types-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 119^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/cli.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 72^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/client.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 142^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/portal-sessions-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 68^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/deployment-artifacts.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 12^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/gateway-http.test.ts ^[[2m(^[[22m^[[2m8 tests^[[22m^[[2m)^[[22m^[[32m 83^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/storage.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 38^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/config.test.ts ^[[2m(^[[22m^[[2m14 tests^[[22m^[[2m)^[[22m^[[32m 13^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/server.test.ts ^[[2m(^[[22m^[[2m1 test^[[22m^[[2m)^[[22m^[[32m 155^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/index.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 5^[[2mms^[[22m^[[39m
+
+^[[2m Test Files ^[[22m ^[[1m^[[32m19 passed^[[39m^[[22m^[[90m (19)^[[39m
+^[[2m      Tests ^[[22m ^[[1m^[[32m118 passed^[[39m^[[22m^[[90m (118)^[[39m
+^[[2m   Start at ^[[22m 20:14:14
+^[[2m   Duration ^[[22m 2.77s^[[2m (transform 665ms, setup 0ms, import 2.22s, tests 2.54s, environment 3ms)^[[22m
+
+──── unit tests: OK
+
+──── verify: build ────
+──── build: OK
+──── test coverage guard: OK (every src test file is wired into npm test)
+──── placeholder check: OK
+
+──── verify: features.json schema + invariants ────
+[update-state] valid: 18 features, 16 passing (evidence re-verified).
+──── features.json schema + invariants: OK
+
+──── verify: assertion shield ────
+^[[32m[Assertion Shield] Check passed. No deleted assertions detected in test files.^[[0m
+──── assertion shield: OK
+
+──── verify: engine lint (biome) ────
+Checked 4 files in 10ms. No fixes applied.
+──── engine lint (biome): OK
+
+──── verify: shellcheck (hooks + gate scripts) ────
+[INFO ] ShellCheck binary not found or invalid, downloading to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+[INFO ] Downloading 'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' to '/tmp/nsnquh/shellcheck.download'
+[INFO ] Extracting '/tmp/nsnquh/shellcheck.download' to '/tmp/nsnquh'
+[INFO ] Copying '/tmp/nsnquh/shellcheck' to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+[INFO ] ShellCheck binary successfully downloaded to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+──── shellcheck (hooks + gate scripts): OK
+
+──── verify: actionlint (workflows) ────
+──── actionlint (workflows): OK
+
+──── verify: hook contract tests ────
+── guard-bash.sh
+  [PASS] blocks push to main
+  [PASS] blocks push to master
+  [PASS] blocks refspec push to main
+  [PASS] blocks refs/heads refspec
+  [PASS] blocks bare refs/heads dst
+  [PASS] blocks -C flag push to main
+  [PASS] blocks -c flag push to main
+  [PASS] blocks force push
+  [PASS] blocks -C force push
+  [PASS] blocks +refspec to main
+  [PASS] blocks +refs/heads refspec
+  [PASS] blocks -C +refspec to main
+  [PASS] blocks +refspec force (any branch)
+  [PASS] blocks --work-tree push to main
+  [PASS] blocks --git-dir= push to main
+  [PASS] blocks .env read
+  [PASS] blocks .env.local read
+  [PASS] blocks pipe-to-shell
+  [PASS] blocks npm publish
+  [PASS] blocks shield bypass
+  [PASS] blocks rm -rf on root
+  [PASS] blocks exfil POST (key-shaped data)
+  [PASS] blocks exfil upload (env secret ref)
+  [PASS] blocks exfil form (github token)
+  [PASS] blocks wget --post-data exfil
+  [PASS] blocks curl -T secret upload
+  [PASS] allows gh api read
+  [PASS] allows harmless POST
+  [PASS] allows gh api POST of plain refs
+  [PASS] allows push to develop
+  [PASS] allows -C push to develop
+  [PASS] allows feature branch push
+  [PASS] allows scoped rm
+  [PASS] allows plain git commit
+── guard-bash.sh kill switch
+  [PASS] AGENT_STOP halts all commands
+── verify-gate.sh
+  [PASS] blocks features.json (posix path)
+  [PASS] blocks features.json (rel path)
+  [PASS] blocks features.json (backslash path)
+  [PASS] blocks features.json (dot segment)
+  [PASS] blocks features.json (double slash)
+  [PASS] blocks features.json (parent re-entry)
+  [PASS] allows other files
+  [PASS] allows other features.json outside roadmap
+  [PASS] allows file mentioning it in content only
+── verify-gate.sh degraded environment (no jq, no node → sed fallback)
+  [PASS] fail-closed without jq/node (sed branch)
+  [PASS] sed branch ignores decoy file_path in content
+  [PASS] sed branch still allows other files
+── commit-on-stop.sh
+  [PASS] blocks stop on dirty tree
+  [PASS] allows stop on clean tree
+  [PASS] kill switch overrides dirty block
+── session-brief.sh
+  [PASS] exits 0
+  [PASS] emits brief content
+── update-state.ts (fixture: tmp/hook-tests)
+  [PASS] validate accepts valid fixture
+  [PASS] validate exits 0 despite stale policy
+  [PASS] validate warns on stale model-policy
+  [PASS] validate accepts well-formed metrics
+  [PASS] validate rejects malformed metrics line
+  [PASS] validate rejects metrics missing date
+  [PASS] validate rejects oversized metrics record
+  [PASS] add rejects malformed JSON
+  [PASS] add rejects passes:true at birth
+  [PASS] add rejects dangling dependency
+  [PASS] add accepts valid feature
+  [PASS] add refuses reserved F-9xxx range on real backlog
+  [PASS] reserved-range refusal wrote nothing to real backlog
+  [PASS] status rejects unknown id
+  [PASS] status rejects invalid enum
+  [PASS] status blocked requires+stores reason
+  [PASS] paths rejects non-array
+  [PASS] paths rejects empty array
+  [PASS] paths rejects guardrail surface .claude
+  [PASS] paths rejects guardrail surface scripts
+  [PASS] paths rejects guardrail surface .github
+  [PASS] paths rejects catch-all glob
+  [PASS] paths rejects parent traversal
+  [PASS] paths replaces authorized_paths
+  [PASS] passes refuses without evidence
+  [PASS] evidence refuses missing file
+  [PASS] evidence accepts existing file
+  [PASS] passes rejects QUOTED marker in failed log
+  [PASS] passes accepts green verify log (exact line)
+  [PASS] validate rejects corrupt backlog
+── assertion-shield.ts (fixture repo)
+  [PASS] shield catches STAGED assertion deletion
+  [PASS] shield catches deleted test FILE
+  [PASS] shield passes on clean tree
+  [PASS] shield catches ADDED test.skip
+  [PASS] shield catches ADDED it.only
+  [PASS] shield allows ADDED healthy test
+── seed.ts delegating shim
+  [PASS] template mode (no src, no seed script) exits 0
+  [PASS] refuses prod DATABASE_URL
+  [PASS] product mode without seed script fails
+  [PASS] delegates to seed script (success)
+  [PASS] propagates seed script failure
+  [PASS] circular delegation fails fast
+── update-state.ts invariants (fixture: tmp/hook-tests)
+  [PASS] status:done without passes is rejected
+  [PASS] dependency cycle is rejected
+  [PASS] validate audits evidence of passing features (missing file rejected)
+── install-into.sh
+  [PASS] refusal: missing arg exits 1
+  [PASS] refusal: template root exits 1
+  [PASS] refusal: ancestor of template root exits 1
+  [PASS] exclusion: no src/ copied
+  [PASS] exclusion: no package-lock.json
+  [PASS] exclusion: no docs/feedback-2-verification
+  [PASS] exclusion: no docs/feedback-2-verdicts
+  [PASS] exclusion: no roadmap/briefs/F-0012.md
+  [PASS] exclusion: no roadmap/evidence/F-0001
+  [PASS] exclusion: features.json has empty array
+  [PASS] fresh pkg: no test script
+  [PASS] fresh pkg: lint is biome lint scripts
+  [PASS] fresh pkg: name is not ai-operations-template
+  [PASS] fresh pkg: devDep @biomejs/biome present
+  [PASS] fresh pkg: devDep @types/node present
+  [PASS] fresh pkg: devDep shellcheck present
+  [PASS] fresh pkg: devDep ts-node present
+  [PASS] fresh pkg: devDep typescript present
+  [PASS] merge pkg: name preserved
+  [PASS] merge pkg: test script preserved
+  [PASS] merge pkg: lint script preserved
+  [PASS] merge pkg: verify script added
+  [PASS] merge pkg: shield script added
+  [PASS] merge pkg: state script added
+  [PASS] merge pkg: devDep @biomejs/biome added
+  [PASS] merge pkg: devDep @types/node added
+  [PASS] merge pkg: devDep shellcheck added
+  [PASS] merge pkg: devDep ts-node added
+  [PASS] merge pkg: devDep typescript added
+  [PASS] idempotent: marker feature survives re-run
+  [PASS] idempotent: engine-owned scripts/verify.sh present after re-run
+  [PASS] product-mode warning: present when src/ exists
+  [PASS] product-mode warning: absent when no src/
+  [PASS] seeded features.json validates against schema
+  [PASS] merge-copy: adopter scripts/custom.sh survives install
+  [PASS] merge-copy: adopter .github/workflows/deploy.yml survives
+  [PASS] merge-copy: adopter .claude/settings.local.json survives
+  [PASS] merge-copy: engine scripts/verify.sh present after install
+── workflow lane parity (F-0014)
+  [PASS] lane parity: every verify.sh workflow conforms
+  [PASS] lane parity: refs extracted from ci.yml
+  [PASS] lane parity: broken fixture workflow rejected
+  [PASS] e2e.yml triggers on its own changes
+
+hook contract tests: 139 passed, 0 failed
+──── hook contract tests: OK
+
+VERIFY-COMMIT: d6fe5a63cfbed09eec5d6df1da614119a271700b @ 2026-06-12T20:15:24Z
+VERIFY: PASS (exit 0)
+verify	Secret-shaped string scan	﻿2026-06-12T20:15:24.9196527Z ##[group]Run # Deterministic leak check (plan §7.2): fail if tracked files contain key-shaped strings.
+verify	Secret-shaped string scan	2026-06-12T20:15:24.9197745Z ^[[36;1m# Deterministic leak check (plan §7.2): fail if tracked files contain key-shaped strings.^[[0m
+verify	Secret-shaped string scan	2026-06-12T20:15:24.9198837Z ^[[36;1m! git grep -nE "(sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}\b)" -- ':!.claude/security-patterns.json' ':!.github/workflows/ci.yml' \^[[0m
+verify	Secret-shaped string scan	2026-06-12T20:15:24.9199826Z ^[[36;1m  || { echo "::error::Secret-shaped string found in tracked files"; exit 1; }^[[0m
+verify	Secret-shaped string scan	2026-06-12T20:15:24.9231964Z shell: /usr/bin/bash -e {0}
+verify	Secret-shaped string scan	2026-06-12T20:15:24.9232245Z ##[endgroup]
+verify	Trust-widening tripwire (F-0009)	﻿2026-06-12T20:15:24.9506705Z ##[group]Run # Fail PRs that widen workflow trust or smuggle MCP config (mirrors
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9507794Z ^[[36;1m# Fail PRs that widen workflow trust or smuggle MCP config (mirrors^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9508353Z ^[[36;1m# claude-code-action's non-write-users-check; plan section 7.2).^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9508871Z ^[[36;1m# Key-shape anchored (key followed by ':' or '=') so pattern strings^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9509400Z ^[[36;1m# quoted in scripts/docs cannot self-trip the check (evaluator finding).^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9509856Z ^[[36;1mgit fetch -q origin "develop" --depth=50^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9510433Z ^[[36;1mif git diff "origin/develop...HEAD" -- .github | grep -nE '^\+\s*(allowed_non_write_users|allowed_bots)\s*[:=]'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9511201Z ^[[36;1m  echo "::error::PR adds a trust-widening workflow key (allowed_non_write_users / allowed_bots)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9511695Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9512070Z ^[[36;1mif git diff --name-only "origin/develop...HEAD" | grep -E '(^|/)\.mcp\.json$'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9512870Z ^[[36;1m  echo "::error::PR changes .mcp.json — MCP config changes require explicit security review (GHSA-8q5r-mmjf-575q class)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9513475Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9513978Z ^[[36;1mif git diff "origin/develop...HEAD" -- .claude/settings.json .github | grep -nE '^\+\s*("mcpServers"|--mcp-config)'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9514885Z ^[[36;1m  echo "::error::PR introduces MCP server config — requires a tool-registry entry + security review first (plan section 2.3)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9515482Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9515696Z ^[[36;1mecho "tripwire clean"^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9544768Z shell: /usr/bin/bash -e {0}
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:24.9545046Z ##[endgroup]
+verify	Trust-widening tripwire (F-0009)	2026-06-12T20:15:25.2987233Z tripwire clean
+verify	Post Run actions/setup-node@v6	﻿2026-06-12T20:15:25.3082510Z Post job cleanup.
+verify	Post Run actions/setup-node@v6	2026-06-12T20:15:25.4230389Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5, not saving cache.
+verify	Post Run actions/checkout@v6	﻿2026-06-12T20:15:25.4367628Z Post job cleanup.
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5179632Z [command]/usr/bin/git version
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5215963Z git version 2.54.0
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5255469Z Temporarily overriding HOME='/home/runner/work/_temp/3d53a1eb-dc55-45b1-8e31-8afc8a97f9d3' before making global git config changes
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5256510Z Adding repository directory to the temporary git global config as a safe directory
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5260420Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5291259Z Removing SSH command configuration
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5298017Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5331637Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5581445Z Removing HTTP extra header
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5586330Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5618275Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5833765Z Removing includeIf entries pointing to credentials config files
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5840512Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5867258Z includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5868255Z includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5868936Z includeif.gitdir:/github/workspace/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5869443Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5876008Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5896056Z /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5906143Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5940558Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5961681Z /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.5970664Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6003333Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6025733Z /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6034193Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6065491Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6086935Z /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6096355Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6129042Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verify	Post Run actions/checkout@v6	2026-06-12T20:15:25.6366886Z Removing credentials config '/home/runner/work/_temp/git-credentials-893aa77d-87d9-4679-b748-9be132ed7983.config'
+verify	Complete job	﻿2026-06-12T20:15:25.6504899Z Cleaning up orphan processes

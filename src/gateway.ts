@@ -15,6 +15,15 @@ import {
 import { authenticateAdminToken, authenticateApiKey, type AuthenticatedTenant } from './auth';
 import type { PosthornConfig } from './config';
 import {
+  archiveEventType,
+  createEventType,
+  EventTypeConflictError,
+  EventTypeValidationError,
+  getEventType,
+  listEventTypes,
+  updateEventType,
+} from './event-types';
+import {
   createEndpoint,
   deleteEndpoint,
   EndpointValidationError,
@@ -22,6 +31,7 @@ import {
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
+import { EndpointTestError, sendEndpointTest } from './endpoint-tests';
 import {
   acceptMessage,
   acceptMessageBatch,
@@ -33,8 +43,10 @@ import {
 } from './messages';
 import { renderPrometheusMetrics } from './metrics';
 import { createOpenApiDocument } from './openapi';
+import { createPortalSession, PortalSessionValidationError } from './portal-sessions';
 import { openStorage, type PosthornStorage } from './storage';
 import { getUsageSummary, UsageQuotaExceededError } from './usage';
+import type { DeliveryFetch } from './worker';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
   readonly serviceName?: string;
@@ -49,6 +61,7 @@ export interface GatewayAddress {
 export interface GatewayDependencies {
   readonly openStorage?: (options: { readonly dataDir: string }) => PosthornStorage;
   readonly readinessProbe?: (storage: PosthornStorage) => void;
+  readonly deliveryFetch?: DeliveryFetch;
   readonly now?: () => Date;
 }
 
@@ -72,6 +85,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
 
   const storageFactory = dependencies.openStorage ?? openStorage;
   const now = dependencies.now ?? (() => new Date());
+  const deliveryFetch = dependencies.deliveryFetch ?? ((url, init) => fetch(url, init));
   const startedAt = now();
   const readinessProbe =
     dependencies.readinessProbe ??
@@ -128,10 +142,12 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
         response,
         serviceName: normalizedConfig.serviceName ?? 'posthorn',
         maxBodyBytes: normalizedConfig.maxBodyBytes ?? 1_000_000,
+        deliveryRequestTimeoutMs: normalizedConfig.worker?.requestTimeoutMs ?? 10_000,
         adminToken: normalizeAdminToken(normalizedConfig.adminToken),
         getStorage: () => storage,
         getReadinessError: () => readinessError,
         readinessProbe,
+        deliveryFetch,
         now,
         startedAt,
       }).catch((error: unknown) => {
@@ -167,10 +183,12 @@ interface RequestContext {
   readonly response: ServerResponse;
   readonly serviceName: string;
   readonly maxBodyBytes: number;
+  readonly deliveryRequestTimeoutMs: number;
   readonly adminToken: string | null;
   readonly getStorage: () => PosthornStorage | null;
   readonly getReadinessError: () => Error | null;
   readonly readinessProbe: (storage: PosthornStorage) => void;
+  readonly deliveryFetch: DeliveryFetch;
   readonly now: () => Date;
   readonly startedAt: Date;
 }
@@ -254,7 +272,21 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
-  if (url.pathname === '/v1/endpoints' || endpointIdFromPath(url.pathname) !== null) {
+  if (url.pathname === '/v1/portal/sessions') {
+    await handlePortalSessionRequest(context);
+    return;
+  }
+
+  if (url.pathname === '/v1/event-types' || eventTypeIdFromPath(url.pathname) !== null) {
+    await handleEventTypeRequest(context, url);
+    return;
+  }
+
+  if (
+    url.pathname === '/v1/endpoints' ||
+    endpointIdFromPath(url.pathname) !== null ||
+    endpointTestPathFromPath(url.pathname) !== null
+  ) {
     await handleEndpointRequest(context, url);
     return;
   }
@@ -424,7 +456,127 @@ async function handleUsageRequest(context: RequestContext): Promise<void> {
   writeJson(context.response, 200, { usage });
 }
 
+async function handlePortalSessionRequest(context: RequestContext): Promise<void> {
+  const scoped = authenticateTenantRequest(context);
+  if (scoped === null) return;
+
+  if (context.request.method !== 'POST') {
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  const body = await readOptionalJsonBody(context);
+  if (body === null) return;
+  try {
+    const result = createPortalSession(scoped.storage, scoped.tenant.appId, body, context.now());
+    if (result === null) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    writeJson(context.response, 201, result);
+  } catch (error) {
+    writePortalSessionError(context.response, error);
+  }
+}
+
+async function handleEventTypeRequest(context: RequestContext, url: URL): Promise<void> {
+  const scoped = authenticateTenantRequest(context);
+  if (scoped === null) return;
+
+  const eventTypeId = eventTypeIdFromPath(url.pathname);
+  if (url.pathname === '/v1/event-types') {
+    if (context.request.method === 'GET') {
+      writeJson(context.response, 200, { data: listEventTypes(scoped.storage, scoped.tenant.appId) });
+      return;
+    }
+    if (context.request.method === 'POST') {
+      const body = await readJsonBody(context);
+      if (body === null) return;
+      try {
+        writeJson(context.response, 201, createEventType(scoped.storage, scoped.tenant.appId, body, context.now()));
+      } catch (error) {
+        writeEventTypeError(context.response, error);
+      }
+      return;
+    }
+
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  if (eventTypeId === null) {
+    writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+    return;
+  }
+
+  if (context.request.method === 'GET') {
+    const eventType = getEventType(scoped.storage, scoped.tenant.appId, eventTypeId);
+    if (eventType === null) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    writeJson(context.response, 200, { eventType });
+    return;
+  }
+
+  if (context.request.method === 'PATCH') {
+    const body = await readJsonBody(context);
+    if (body === null) return;
+    try {
+      const eventType = updateEventType(scoped.storage, scoped.tenant.appId, eventTypeId, body, context.now());
+      if (eventType === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { eventType });
+    } catch (error) {
+      writeEventTypeError(context.response, error);
+    }
+    return;
+  }
+
+  if (context.request.method === 'DELETE') {
+    if (!archiveEventType(scoped.storage, scoped.tenant.appId, eventTypeId, context.now())) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    context.response.writeHead(204);
+    context.response.end();
+    return;
+  }
+
+  writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+}
+
 async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
+  const testEndpointId = endpointTestPathFromPath(url.pathname);
+  if (testEndpointId !== null) {
+    if (context.request.method !== 'POST') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+    const body = await readJsonBody(context);
+    if (body === null) return;
+    try {
+      const result = await sendEndpointTest(scoped.storage, scoped.tenant.appId, testEndpointId, body, {
+        fetch: context.deliveryFetch,
+        requestTimeoutMs: context.deliveryRequestTimeoutMs,
+        now: context.now,
+      });
+      if (result === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { test: result });
+    } catch (error) {
+      writeEndpointTestError(context.response, error);
+    }
+    return;
+  }
+
   const endpointId = endpointIdFromPath(url.pathname);
   if (url.pathname === '/v1/endpoints') {
     if (context.request.method === 'GET') {
@@ -650,6 +802,16 @@ function endpointIdFromPath(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function endpointTestPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/endpoints\/([^/]+)\/test$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
+function eventTypeIdFromPath(pathname: string): string | null {
+  const match = /^\/v1\/event-types\/([^/]+)$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
 function messageAttemptsPathFromPath(pathname: string): string | null {
   const match = /^\/v1\/messages\/([^/]+)\/attempts$/.exec(pathname);
   return match?.[1] ?? null;
@@ -785,6 +947,37 @@ function readRequestBody(request: IncomingMessage, maxBodyBytes: number): Promis
 
 function writeEndpointError(response: ServerResponse, error: unknown): void {
   if (error instanceof EndpointValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeEndpointTestError(response: ServerResponse, error: unknown): void {
+  if (error instanceof EndpointTestError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeEventTypeError(response: ServerResponse, error: unknown): void {
+  if (error instanceof EventTypeConflictError) {
+    writeJson(response, 409, { error: { code: error.code, message: error.message } });
+    return;
+  }
+  if (error instanceof EventTypeValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writePortalSessionError(response: ServerResponse, error: unknown): void {
+  if (error instanceof PortalSessionValidationError) {
     writeJson(response, 400, { error: { code: error.code, message: error.message } });
     return;
   }
