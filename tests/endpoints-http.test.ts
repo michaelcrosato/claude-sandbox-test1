@@ -80,9 +80,15 @@ describe('endpoint management HTTP routes', () => {
     expect(createResponse.body.secret).toMatch(/^whsec_/);
 
     const persisted = storage.db
-      .prepare('SELECT signing_secret_ciphertext FROM endpoints WHERE id = ?')
-      .get(createResponse.body.endpoint.id) as { signing_secret_ciphertext: string };
+      .prepare('SELECT signing_secret_ciphertext, signing_secret_key_version, signing_secret_nonce FROM endpoints WHERE id = ?')
+      .get(createResponse.body.endpoint.id) as {
+      signing_secret_ciphertext: string;
+      signing_secret_key_version: string;
+      signing_secret_nonce: string;
+    };
     expect(persisted.signing_secret_ciphertext).toMatch(/^sha256:/);
+    expect(persisted.signing_secret_key_version).toBe('local-aes-256-gcm-v1');
+    expect(persisted.signing_secret_nonce).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(persisted.signing_secret_ciphertext).not.toContain(createResponse.body.secret);
 
     const getResponse = await requestJson<EndpointReadJson>(

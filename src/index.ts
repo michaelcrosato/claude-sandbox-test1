@@ -26,6 +26,16 @@ export { acceptMessage, getMessage, listDeliveriesForMessage, MessageValidationE
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
 export type {
+  DeliveryAttemptOutcome,
+  DeliveryFailureReason,
+  DeliveryFetch,
+  DeliveryFetchResponse,
+  DeliveryWorker,
+  DeliveryWorkerOptions,
+  DeliveryWorkerTickSummary,
+} from './worker';
+export { calculateRetryBackoffMs, createDeliveryWorker, runDeliveryWorkerTick } from './worker';
+export type {
   SignWebhookOptions,
   VerifiedWebhook,
   VerifyWebhookOptions,

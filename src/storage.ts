@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS local_secret_keys (
+  id TEXT PRIMARY KEY,
+  key_material TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS endpoints (
   id TEXT PRIMARY KEY,
   app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
