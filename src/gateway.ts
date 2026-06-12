@@ -10,12 +10,13 @@ export interface Gateway {
 }
 
 export function createGateway(config: GatewayConfig = {}): Gateway {
-  const normalizedConfig: GatewayConfig = {
+  const normalizedConfig: GatewayConfig = Object.freeze({
+    ...config,
     serviceName: config.serviceName ?? 'posthorn',
-  };
+  });
 
   return Object.freeze({
     serviceName: normalizedConfig.serviceName ?? 'posthorn',
-    config: Object.freeze(normalizedConfig),
+    config: normalizedConfig,
   });
 }

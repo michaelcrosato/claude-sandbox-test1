@@ -56,6 +56,7 @@ describe('loadConfig', () => {
   it.each([
     ['POSTHORN_PORT', 'abc'],
     ['POSTHORN_PORT', '0'],
+    ['POSTHORN_PORT', '65536'],
     ['POSTHORN_MAX_BODY_BYTES', '-1'],
     ['POSTHORN_WORKER_BATCH_SIZE', '1.5'],
     ['POSTHORN_WORKER_CONCURRENCY', ''],

@@ -39,7 +39,7 @@ export function loadConfig(env: Env = process.env): PosthornConfig {
 
   return Object.freeze({
     host: optionalString(env.POSTHORN_HOST) ?? DEFAULTS.host,
-    port: integerEnv(env.POSTHORN_PORT, 'POSTHORN_PORT', DEFAULTS.port, { min: 1 }),
+    port: integerEnv(env.POSTHORN_PORT, 'POSTHORN_PORT', DEFAULTS.port, { min: 1, max: 65_535 }),
     dataDir: optionalString(env.POSTHORN_DATA_DIR) ?? DEFAULTS.dataDir,
     maxBodyBytes: integerEnv(env.POSTHORN_MAX_BODY_BYTES, 'POSTHORN_MAX_BODY_BYTES', DEFAULTS.maxBodyBytes, {
       min: 1,
@@ -87,7 +87,7 @@ function integerEnv(
   value: string | undefined,
   name: string,
   defaultValue: number,
-  options: { readonly min: number },
+  options: { readonly min: number; readonly max?: number },
 ): number {
   if (value === undefined) return defaultValue;
   const raw = value.trim();
@@ -101,6 +101,9 @@ function integerEnv(
   }
   if (parsed < options.min) {
     throw new Error(`${name} must be >= ${options.min}.`);
+  }
+  if (options.max !== undefined && parsed > options.max) {
+    throw new Error(`${name} must be <= ${options.max}.`);
   }
 
   return parsed;
