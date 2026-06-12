@@ -8,6 +8,8 @@ describe('Posthorn product entry point', () => {
 
     expect(gateway.serviceName).toBe('posthorn-test');
     expect(gateway.config).toEqual({ serviceName: 'posthorn-test' });
+    expect(gateway.start).toEqual(expect.any(Function));
+    expect(gateway.stop).toEqual(expect.any(Function));
   });
 
   it('keeps loaded config on the gateway shape', () => {
