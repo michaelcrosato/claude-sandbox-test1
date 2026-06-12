@@ -11,8 +11,11 @@ import {
   hashApiKey,
   listDeliveriesForMessage,
   openStorage,
+  rotateEndpointSecret,
   runDeliveryWorkerTick,
   verifyWebhook,
+  WEBHOOK_SIGNATURE_HEADER,
+  WebhookVerificationError,
   type DeliveryFetch,
   type PosthornStorage,
 } from '../src/index';
@@ -122,6 +125,113 @@ describe('delivery worker', () => {
       }),
     ]);
     expect(readAttempts(storage, message.fanout.deliveryIds[0])[0]?.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('signs deliveries with current and previous endpoint secrets during rotation overlap', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/rotation-overlap');
+    const rotated = rotateEndpointSecret(storage, APP_ID, endpoint.endpoint.id, { overlapSeconds: 120 }, NOW);
+    expect(rotated).not.toBeNull();
+    if (rotated === null) throw new Error('Expected endpoint rotation.');
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 10 },
+    });
+    const attemptedAt = new Date(NOW.getTime() + 60_000);
+    const captured = createCapturingFetch();
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => attemptedAt,
+      fetch: captured.fetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(captured.request).not.toBeNull();
+    if (captured.request === null) throw new Error('Expected captured delivery request.');
+    const request = captured.request;
+    expect(request.headers[WEBHOOK_SIGNATURE_HEADER]?.split(' ')).toHaveLength(2);
+    verifyWebhook(rotated.secret, request.headers, request.body, {
+      nowSeconds: Math.floor(attemptedAt.getTime() / 1000),
+    });
+    verifyWebhook(endpoint.secret, request.headers, request.body, {
+      nowSeconds: Math.floor(attemptedAt.getTime() / 1000),
+    });
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
+  it('stops signing with the previous endpoint secret after the rotation overlap expires', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/rotation-expired');
+    const rotated = rotateEndpointSecret(storage, APP_ID, endpoint.endpoint.id, { overlapSeconds: 120 }, NOW);
+    expect(rotated).not.toBeNull();
+    if (rotated === null) throw new Error('Expected endpoint rotation.');
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 11 },
+    });
+    const attemptedAt = new Date(NOW.getTime() + 121_000);
+    const captured = createCapturingFetch();
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => attemptedAt,
+      fetch: captured.fetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(captured.request).not.toBeNull();
+    if (captured.request === null) throw new Error('Expected captured delivery request.');
+    const request = captured.request;
+    expect(request.headers[WEBHOOK_SIGNATURE_HEADER]?.split(' ')).toHaveLength(1);
+    verifyWebhook(rotated.secret, request.headers, request.body, {
+      nowSeconds: Math.floor(attemptedAt.getTime() / 1000),
+    });
+    expect(() =>
+      verifyWebhook(endpoint.secret, request.headers, request.body, {
+        nowSeconds: Math.floor(attemptedAt.getTime() / 1000),
+      }),
+    ).toThrow(WebhookVerificationError);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
+  it('fails closed when an active previous endpoint secret cannot be revealed', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/rotation-corrupt-previous');
+    const rotated = rotateEndpointSecret(storage, APP_ID, endpoint.endpoint.id, { overlapSeconds: 120 }, NOW);
+    expect(rotated).not.toBeNull();
+    storage.db
+      .prepare(
+        `
+          UPDATE endpoints
+          SET previous_signing_secret_ciphertext = ?,
+              previous_signing_secret_key_version = ?,
+              previous_signing_secret_nonce = ?
+          WHERE id = ?
+        `,
+      )
+      .run('sha256:legacy', 'sha256-v1', '', endpoint.endpoint.id);
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 12 },
+    });
+    const attemptedAt = new Date(NOW.getTime() + 60_000);
+    let fetchCalled = false;
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => attemptedAt,
+      attemptBudget: 1,
+      fetch: async () => {
+        fetchCalled = true;
+        return { status: 204 };
+      },
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(fetchCalled).toBe(false);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0])).toMatchObject({
+      status: 'dead_letter',
+      attempt_count: 1,
+      last_error: 'signing_secret_unavailable',
+    });
   });
 
   it('does not let concurrent ticks process the same active lease', async () => {
@@ -435,6 +545,26 @@ function createLocalEndpoint(
   });
   storage.db.prepare('UPDATE endpoints SET url = ? WHERE id = ?').run(url, endpoint.endpoint.id);
   return endpoint;
+}
+
+function createCapturingFetch(): {
+  readonly fetch: DeliveryFetch;
+  request: { readonly headers: Readonly<Record<string, string>>; readonly body: string } | null;
+} {
+  const captured: {
+    readonly fetch: DeliveryFetch;
+    request: { readonly headers: Readonly<Record<string, string>>; readonly body: string } | null;
+  } = {
+    request: null,
+    fetch: async (_url, init) => {
+      captured.request = {
+        headers: init.headers,
+        body: init.body,
+      };
+      return { status: 204 };
+    },
+  };
+  return captured;
 }
 
 async function startReceiver(

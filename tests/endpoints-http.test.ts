@@ -32,6 +32,12 @@ interface EndpointCreateJson {
   readonly secret: string;
 }
 
+interface EndpointRotateJson {
+  readonly endpoint: EndpointJson;
+  readonly secret: string;
+  readonly previousSecretExpiresAt: string;
+}
+
 interface EndpointReadJson {
   readonly endpoint: EndpointJson;
 }
@@ -188,6 +194,151 @@ describe('endpoint management HTTP routes', () => {
     expect(tenantAGet.status).toBe(200);
   });
 
+  it('rotates endpoint signing secrets once and preserves the previous secret for overlap signing', async () => {
+    const rotationNow = new Date('2026-06-12T12:30:00.000Z');
+    const { address, storage } = await startSeededGateway({ now: () => rotationNow });
+    const created = await createEndpoint(address, TENANT_A_KEY, {
+      url: 'https://example.com/hooks/rotate',
+      headers: { 'X-Trace-Id': 'rotate' },
+    });
+    const before = readEndpointSecretColumns(storage, created.endpoint.id);
+
+    const rotated = await requestJson<EndpointRotateJson>(
+      address,
+      'POST',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      TENANT_A_KEY,
+      { overlapSeconds: 120 },
+    );
+
+    expect(rotated.status).toBe(201);
+    expect(rotated.body.endpoint).toMatchObject({
+      id: created.endpoint.id,
+      url: created.endpoint.url,
+      headers: { 'X-Trace-Id': 'rotate' },
+      enabled: true,
+    });
+    expect(rotated.body.endpoint).not.toHaveProperty('secret');
+    expect(rotated.body.secret).toMatch(/^whsec_/);
+    expect(rotated.body.secret).not.toBe(created.secret);
+    expect(rotated.body.previousSecretExpiresAt).toBe('2026-06-12T12:32:00.000Z');
+
+    const after = readEndpointSecretColumns(storage, created.endpoint.id);
+    expect(after.signing_secret_ciphertext).not.toBe(before.signing_secret_ciphertext);
+    expect(after.signing_secret_key_version).toBe('local-aes-256-gcm-v1');
+    expect(after.signing_secret_ciphertext).not.toContain(rotated.body.secret);
+    expect(after.previous_signing_secret_ciphertext).toBe(before.signing_secret_ciphertext);
+    expect(after.previous_signing_secret_key_version).toBe(before.signing_secret_key_version);
+    expect(after.previous_signing_secret_nonce).toBe(before.signing_secret_nonce);
+    expect(after.previous_signing_secret_expires_at).toBe('2026-06-12T12:32:00.000Z');
+
+    const readResponse = await requestJson<EndpointReadJson>(
+      address,
+      'GET',
+      `/v1/endpoints/${created.endpoint.id}`,
+      TENANT_A_KEY,
+    );
+    const listResponse = await requestJson<EndpointListJson>(address, 'GET', '/v1/endpoints', TENANT_A_KEY);
+    expect(JSON.stringify(readResponse.body)).not.toContain(created.secret);
+    expect(JSON.stringify(readResponse.body)).not.toContain(rotated.body.secret);
+    expect(JSON.stringify(listResponse.body)).not.toContain(created.secret);
+    expect(JSON.stringify(listResponse.body)).not.toContain(rotated.body.secret);
+  });
+
+  it('keeps rotation tenant-scoped and allows disabled endpoint credential rotation', async () => {
+    const rotationNow = new Date('2026-06-12T15:00:00.000Z');
+    const { address } = await startSeededGateway({ now: () => rotationNow });
+    const created = await createEndpoint(address, TENANT_A_KEY, {
+      url: 'https://example.com/hooks/rotate-auth',
+    });
+    const disabled = await requestJson<EndpointReadJson>(
+      address,
+      'PATCH',
+      `/v1/endpoints/${created.endpoint.id}`,
+      TENANT_A_KEY,
+      { enabled: false },
+    );
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.endpoint.enabled).toBe(false);
+
+    const tenantBRotate = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      TENANT_B_KEY,
+      {},
+    );
+    expect(tenantBRotate.status).toBe(404);
+
+    const tenantBInvalidRotate = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      TENANT_B_KEY,
+      { overlapSeconds: 59 },
+    );
+    expect(tenantBInvalidRotate.status).toBe(404);
+
+    const missingAuth = await fetch(`${address.url}/v1/endpoints/${created.endpoint.id}/rotate-secret`, {
+      method: 'POST',
+    });
+    expect(missingAuth.status).toBe(401);
+
+    const revokedAuth = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      REVOKED_KEY,
+      {},
+    );
+    expect(revokedAuth.status).toBe(401);
+
+    const wrongMethod = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      TENANT_A_KEY,
+    );
+    expect(wrongMethod.status).toBe(405);
+
+    const rotatedDisabled = await requestJson<EndpointRotateJson>(
+      address,
+      'POST',
+      `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+      TENANT_A_KEY,
+    );
+    expect(rotatedDisabled.status).toBe(201);
+    expect(rotatedDisabled.body.endpoint.enabled).toBe(false);
+    expect(rotatedDisabled.body.previousSecretExpiresAt).toBe('2026-06-13T15:00:00.000Z');
+    expect(rotatedDisabled.body.secret).toMatch(/^whsec_/);
+  });
+
+  it('validates rotation overlap bounds', async () => {
+    const { address } = await startSeededGateway();
+    const created = await createEndpoint(address, TENANT_A_KEY, {
+      url: 'https://example.com/hooks/rotate-validation',
+    });
+
+    for (const body of [
+      { overlapSeconds: 59 },
+      { overlapSeconds: 2_592_001 },
+      { overlapSeconds: 1.5 },
+      { overlapSeconds: '60' },
+      null,
+      [],
+    ]) {
+      const response = await requestJson<ErrorJson>(
+        address,
+        'POST',
+        `/v1/endpoints/${created.endpoint.id}/rotate-secret`,
+        TENANT_A_KEY,
+        body,
+      );
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('invalid_request');
+    }
+  });
+
   it('rejects missing auth, revoked keys, malformed JSON, and invalid endpoint input', async () => {
     const { address } = await startSeededGateway();
 
@@ -273,7 +424,7 @@ describe('endpoint management HTTP routes', () => {
 });
 
 async function startSeededGateway(
-  options: { readonly maxBodyBytes?: number } = {},
+  options: { readonly maxBodyBytes?: number; readonly now?: () => Date } = {},
 ): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
   const storage = openStorage({ dataDir: ':memory:' });
   seedTenant(storage, 'app_a', 'Tenant A', TENANT_A_KEY);
@@ -291,10 +442,48 @@ async function startSeededGateway(
     },
     {
       openStorage: () => storage,
+      now: options.now,
     },
   );
   activeGateways.push(gateway);
   return { address: await gateway.start(), storage };
+}
+
+function readEndpointSecretColumns(
+  storage: PosthornStorage,
+  endpointId: string,
+): {
+  readonly signing_secret_ciphertext: string;
+  readonly signing_secret_key_version: string;
+  readonly signing_secret_nonce: string;
+  readonly previous_signing_secret_ciphertext: string | null;
+  readonly previous_signing_secret_key_version: string | null;
+  readonly previous_signing_secret_nonce: string | null;
+  readonly previous_signing_secret_expires_at: string | null;
+} {
+  return storage.db
+    .prepare(
+      `
+        SELECT signing_secret_ciphertext,
+               signing_secret_key_version,
+               signing_secret_nonce,
+               previous_signing_secret_ciphertext,
+               previous_signing_secret_key_version,
+               previous_signing_secret_nonce,
+               previous_signing_secret_expires_at
+        FROM endpoints
+        WHERE id = ?
+      `,
+    )
+    .get(endpointId) as {
+    readonly signing_secret_ciphertext: string;
+    readonly signing_secret_key_version: string;
+    readonly signing_secret_nonce: string;
+    readonly previous_signing_secret_ciphertext: string | null;
+    readonly previous_signing_secret_key_version: string | null;
+    readonly previous_signing_secret_nonce: string | null;
+    readonly previous_signing_secret_expires_at: string | null;
+  };
 }
 
 function seedTenant(

@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openStorage, POSTHORN_DATABASE_FILE } from '../src/index';
+import { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from '../src/index';
 
 const tempDirs: string[] = [];
 
@@ -55,10 +56,51 @@ describe('openStorage', () => {
       expect(columns).toContain('signing_secret_ciphertext');
       expect(columns).toContain('signing_secret_key_version');
       expect(columns).toContain('signing_secret_nonce');
+      expect(columns).toContain('previous_signing_secret_ciphertext');
+      expect(columns).toContain('previous_signing_secret_key_version');
+      expect(columns).toContain('previous_signing_secret_nonce');
+      expect(columns).toContain('previous_signing_secret_expires_at');
       expect(columns).not.toContain('headers_json');
       expect(columns).not.toContain('signing_secret_hash');
     } finally {
       storage.close();
+    }
+  });
+
+  it('adds endpoint rotation columns idempotently for existing SQLite files', () => {
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE endpoints (
+          id TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL,
+          url TEXT NOT NULL,
+          event_types_json TEXT,
+          non_secret_headers_json TEXT,
+          secret_header_refs_json TEXT,
+          signing_secret_ciphertext TEXT NOT NULL,
+          signing_secret_key_version TEXT NOT NULL,
+          signing_secret_nonce TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+
+      initializeSchema(db);
+      initializeSchema(db);
+
+      const columns = db
+        .prepare('PRAGMA table_info(endpoints)')
+        .all()
+        .map((row) => String(row.name));
+
+      expect(columns.filter((name) => name === 'previous_signing_secret_ciphertext')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_signing_secret_key_version')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_signing_secret_nonce')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'previous_signing_secret_expires_at')).toHaveLength(1);
+    } finally {
+      db.close();
     }
   });
 

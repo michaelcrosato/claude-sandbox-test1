@@ -109,7 +109,7 @@ Key capabilities:
 | GET | `/v1/endpoints/:id` | Bearer | implemented | Fetch one endpoint. |
 | PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint. |
 | DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
-| POST | `/v1/endpoints/:id/rotate-secret` | Bearer | planned | Rotate signing secret, zero-downtime. |
+| POST | `/v1/endpoints/:id/rotate-secret` | Bearer | implemented | Rotate signing secret (`201`; new secret shown once, previous secret signs during overlap). |
 | POST | `/v1/endpoints/:id/test` | Bearer | implemented | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
 | GET | `/v1/endpoints/:id/deliveries` | Bearer | planned | Endpoint delivery history (paginated). |
 | GET | `/v1/endpoints/:id/stats` | Bearer | planned | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
@@ -208,8 +208,8 @@ const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-Endpoint secret rotation and typed message listing are planned future SDK methods.
-Message listing, the event type catalog, endpoint test-send, and portal session routes
+Typed SDK helpers for endpoint secret rotation and typed message listing are planned.
+Endpoint secret rotation, message listing, the event type catalog, endpoint test-send, and portal session routes
 are available over HTTP/OpenAPI now; typed SDK helpers for them can be added without
 changing the wire contract.
 

@@ -23,10 +23,24 @@ export interface CreateEndpointResult {
   readonly secret: string;
 }
 
+export interface RotateEndpointSecretInput {
+  readonly overlapSeconds?: number;
+}
+
+export interface RotateEndpointSecretResult {
+  readonly endpoint: EndpointRecord;
+  readonly secret: string;
+  readonly previousSecretExpiresAt: string;
+}
+
 export interface EndpointDeliveryTarget extends EndpointRecord {
   readonly signingSecretCiphertext: string;
   readonly signingSecretKeyVersion: string;
   readonly signingSecretNonce: string;
+  readonly previousSigningSecretCiphertext: string | null;
+  readonly previousSigningSecretKeyVersion: string | null;
+  readonly previousSigningSecretNonce: string | null;
+  readonly previousSigningSecretExpiresAt: string | null;
 }
 
 export class EndpointValidationError extends Error {
@@ -40,6 +54,9 @@ export class EndpointValidationError extends Error {
 }
 
 const ENDPOINT_ID_PREFIX = 'ep_';
+const DEFAULT_SECRET_ROTATION_OVERLAP_SECONDS = 24 * 60 * 60;
+const MIN_SECRET_ROTATION_OVERLAP_SECONDS = 60;
+const MAX_SECRET_ROTATION_OVERLAP_SECONDS = 30 * 24 * 60 * 60;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const RESERVED_HEADER_NAMES = new Set([
   'authorization',
@@ -154,7 +171,11 @@ export function getEndpointDeliveryTarget(
                updated_at,
                signing_secret_ciphertext,
                signing_secret_key_version,
-               signing_secret_nonce
+               signing_secret_nonce,
+               previous_signing_secret_ciphertext,
+               previous_signing_secret_key_version,
+               previous_signing_secret_nonce,
+               previous_signing_secret_expires_at
         FROM endpoints
         WHERE app_id = ? AND id = ?
         LIMIT 1
@@ -163,6 +184,88 @@ export function getEndpointDeliveryTarget(
     .get(appId, endpointId) as EndpointDeliveryTargetRow | undefined;
 
   return row === undefined ? null : endpointDeliveryTargetFromRow(row);
+}
+
+export function rotateEndpointSecret(
+  storage: PosthornStorage,
+  appId: string,
+  endpointId: string,
+  input: unknown = undefined,
+  now = new Date(),
+): RotateEndpointSecretResult | null {
+  let rotation: { readonly secret: string; readonly previousSecretExpiresAt: string } | null = null;
+
+  storage.db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = storage.db
+      .prepare(
+        `
+          SELECT signing_secret_ciphertext,
+                 signing_secret_key_version,
+                 signing_secret_nonce
+          FROM endpoints
+          WHERE app_id = ? AND id = ?
+          LIMIT 1
+        `,
+      )
+      .get(appId, endpointId) as EndpointSecretRotationRow | undefined;
+    if (current === undefined) {
+      storage.db.exec('ROLLBACK');
+      return null;
+    }
+
+    const overlapSeconds = parseRotationOverlapSeconds(input);
+    const updatedAt = now.toISOString();
+    const previousSecretExpiresAt = new Date(now.getTime() + overlapSeconds * 1000).toISOString();
+    const secret = createWebhookSecret();
+    const protectedSecret = protectEndpointSecret(storage, secret, now);
+    const result = storage.db
+      .prepare(
+        `
+          UPDATE endpoints
+          SET previous_signing_secret_ciphertext = ?,
+              previous_signing_secret_key_version = ?,
+              previous_signing_secret_nonce = ?,
+              previous_signing_secret_expires_at = ?,
+              signing_secret_ciphertext = ?,
+              signing_secret_key_version = ?,
+              signing_secret_nonce = ?,
+              updated_at = ?
+          WHERE app_id = ? AND id = ?
+        `,
+      )
+      .run(
+        String(current.signing_secret_ciphertext),
+        String(current.signing_secret_key_version),
+        String(current.signing_secret_nonce),
+        previousSecretExpiresAt,
+        protectedSecret.ciphertext,
+        protectedSecret.keyVersion,
+        protectedSecret.nonce,
+        updatedAt,
+        appId,
+        endpointId,
+      );
+    if (result.changes === 0) {
+      storage.db.exec('ROLLBACK');
+      return null;
+    }
+    rotation = { secret, previousSecretExpiresAt };
+    storage.db.exec('COMMIT');
+  } catch (error) {
+    storage.db.exec('ROLLBACK');
+    throw error;
+  }
+
+  if (rotation === null) {
+    throw new Error('Endpoint rotation did not produce a secret.');
+  }
+  const endpoint = getEndpoint(storage, appId, endpointId);
+  if (endpoint === null) {
+    throw new Error('Rotated endpoint could not be read back.');
+  }
+
+  return { endpoint, secret: rotation.secret, previousSecretExpiresAt: rotation.previousSecretExpiresAt };
 }
 
 export function updateEndpoint(
@@ -370,6 +473,25 @@ function parseEnabled(input: unknown): boolean {
   return input;
 }
 
+function parseRotationOverlapSeconds(input: unknown): number {
+  const body = input === undefined ? {} : requireObject(input);
+  const value = body.overlapSeconds;
+  if (value === undefined) return DEFAULT_SECRET_ROTATION_OVERLAP_SECONDS;
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < MIN_SECRET_ROTATION_OVERLAP_SECONDS ||
+    value > MAX_SECRET_ROTATION_OVERLAP_SECONDS
+  ) {
+    throw new EndpointValidationError(
+      'invalid_request',
+      `overlapSeconds must be an integer between ${MIN_SECRET_ROTATION_OVERLAP_SECONDS} and ${MAX_SECRET_ROTATION_OVERLAP_SECONDS}.`,
+    );
+  }
+
+  return value;
+}
+
 function serializeEventTypes(eventTypes: readonly string[] | null): string | null {
   return eventTypes === null ? null : JSON.stringify(eventTypes);
 }
@@ -392,7 +514,15 @@ function endpointDeliveryTargetFromRow(row: EndpointDeliveryTargetRow): Endpoint
     signingSecretCiphertext: String(row.signing_secret_ciphertext),
     signingSecretKeyVersion: String(row.signing_secret_key_version),
     signingSecretNonce: String(row.signing_secret_nonce),
+    previousSigningSecretCiphertext: nullableString(row.previous_signing_secret_ciphertext),
+    previousSigningSecretKeyVersion: nullableString(row.previous_signing_secret_key_version),
+    previousSigningSecretNonce: nullableString(row.previous_signing_secret_nonce),
+    previousSigningSecretExpiresAt: nullableString(row.previous_signing_secret_expires_at),
   };
+}
+
+function nullableString(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
 }
 
 function parseStoredEventTypes(value: unknown): readonly string[] | null {
@@ -425,6 +555,16 @@ interface EndpointRow {
 }
 
 interface EndpointDeliveryTargetRow extends EndpointRow {
+  readonly signing_secret_ciphertext: unknown;
+  readonly signing_secret_key_version: unknown;
+  readonly signing_secret_nonce: unknown;
+  readonly previous_signing_secret_ciphertext: unknown;
+  readonly previous_signing_secret_key_version: unknown;
+  readonly previous_signing_secret_nonce: unknown;
+  readonly previous_signing_secret_expires_at: unknown;
+}
+
+interface EndpointSecretRotationRow {
   readonly signing_secret_ciphertext: unknown;
   readonly signing_secret_key_version: unknown;
   readonly signing_secret_nonce: unknown;

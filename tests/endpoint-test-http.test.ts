@@ -8,7 +8,10 @@ import {
   hashApiKey,
   loadConfig,
   openStorage,
+  rotateEndpointSecret,
   updateEndpoint,
+  verifyWebhook,
+  WEBHOOK_SIGNATURE_HEADER,
   type DeliveryFetch,
   type Gateway,
   type GatewayAddress,
@@ -119,6 +122,31 @@ describe('endpoint test-send HTTP route', () => {
     expect(delivered).toHaveLength(1);
   });
 
+  it('signs test webhooks with current and previous endpoint secrets during rotation overlap', async () => {
+    const delivered: DeliveredRequest[] = [];
+    const { address, storage, endpointId, endpointSecret } = await startSeededGateway(async (url, init) => {
+      delivered.push({ url, init });
+      return { status: 204 };
+    });
+    const rotated = rotateEndpointSecret(storage, 'app_test', endpointId, { overlapSeconds: 120 }, NOW);
+    expect(rotated).not.toBeNull();
+    if (rotated === null) throw new Error('Expected endpoint rotation.');
+
+    const result = await requestJson<EndpointTestJson>(address, 'POST', `/v1/endpoints/${endpointId}/test`, TENANT_KEY, {
+      eventType: 'user.created',
+    });
+
+    expect(result.status).toBe(200);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].init.headers[WEBHOOK_SIGNATURE_HEADER]?.split(' ')).toHaveLength(2);
+    verifyWebhook(rotated.secret, delivered[0].init.headers, delivered[0].init.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    verifyWebhook(endpointSecret, delivered[0].init.headers, delivered[0].init.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+  });
+
   it('requires an active schemaExample when payload is omitted and keeps tenant isolation', async () => {
     const { address, storage, endpointId, eventTypeId } = await startSeededGateway(async () => ({ status: 204 }));
 
@@ -161,14 +189,21 @@ interface DeliveredRequest {
 
 async function startSeededGateway(
   deliveryFetch: DeliveryFetch,
-): Promise<{ address: GatewayAddress; storage: PosthornStorage; endpointId: string; eventTypeId: string }> {
+): Promise<{
+  address: GatewayAddress;
+  storage: PosthornStorage;
+  endpointId: string;
+  endpointSecret: string;
+  eventTypeId: string;
+}> {
   const storage = openStorage({ dataDir: ':memory:' });
   seedTenant(storage, 'app_test', 'Test Tenant', TENANT_KEY);
   seedTenant(storage, 'app_other', 'Other Tenant', OTHER_TENANT_KEY);
-  const endpoint = createEndpoint(storage, 'app_test', {
+  const createdEndpoint = createEndpoint(storage, 'app_test', {
     url: 'https://example.com/hooks/test',
     headers: { 'X-Customer': 'acme' },
-  }, NOW).endpoint;
+  }, NOW);
+  const endpoint = createdEndpoint.endpoint;
   const eventType = createEventType(storage, 'app_test', {
     eventType: 'user.created',
     schemaExample: { id: 1 },
@@ -188,7 +223,13 @@ async function startSeededGateway(
     },
   );
   activeGateways.push(gateway);
-  return { address: await gateway.start(), storage, endpointId: endpoint.id, eventTypeId: eventType.id };
+  return {
+    address: await gateway.start(),
+    storage,
+    endpointId: endpoint.id,
+    endpointSecret: createdEndpoint.secret,
+    eventTypeId: eventType.id,
+  };
 }
 
 function seedTenant(storage: PosthornStorage, appId: string, name: string, apiKey: string): void {

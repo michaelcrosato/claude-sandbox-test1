@@ -29,6 +29,7 @@ import {
   EndpointValidationError,
   getEndpoint,
   listEndpoints,
+  rotateEndpointSecret,
   updateEndpoint,
 } from './endpoints';
 import { EndpointTestError, sendEndpointTest } from './endpoint-tests';
@@ -301,6 +302,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (
     url.pathname === '/v1/endpoints' ||
     endpointIdFromPath(url.pathname) !== null ||
+    endpointRotateSecretPathFromPath(url.pathname) !== null ||
     endpointTestPathFromPath(url.pathname) !== null
   ) {
     await handleEndpointRequest(context, url);
@@ -352,7 +354,7 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
     }
     if (context.request.method === 'POST') {
       const body = await readJsonBody(context);
-      if (body === null) return;
+      if (body === BODY_READ_FAILED) return;
       try {
         writeJson(context.response, 201, createAdminApp(scoped.storage, body));
       } catch (error) {
@@ -397,7 +399,7 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
     }
     if (context.request.method === 'POST') {
       const body = await readOptionalJsonBody(context);
-      if (body === null) return;
+      if (body === BODY_READ_FAILED) return;
       try {
         const apiKey = createAdminApiKey(scoped.storage, appPath.appId, body);
         if (apiKey === null) {
@@ -427,7 +429,7 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
 
   if (context.request.method === 'PATCH') {
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
     try {
       const app = updateAdminApp(scoped.storage, appPath.appId, body);
       if (app === null) {
@@ -482,7 +484,7 @@ async function handlePortalSessionRequest(context: RequestContext): Promise<void
   }
 
   const body = await readOptionalJsonBody(context);
-  if (body === null) return;
+  if (body === BODY_READ_FAILED) return;
   try {
     const result = createPortalSession(scoped.storage, scoped.tenant.appId, body, context.now());
     if (result === null) {
@@ -507,7 +509,7 @@ async function handleEventTypeRequest(context: RequestContext, url: URL): Promis
     }
     if (context.request.method === 'POST') {
       const body = await readJsonBody(context);
-      if (body === null) return;
+      if (body === BODY_READ_FAILED) return;
       try {
         writeJson(context.response, 201, createEventType(scoped.storage, scoped.tenant.appId, body, context.now()));
       } catch (error) {
@@ -537,7 +539,7 @@ async function handleEventTypeRequest(context: RequestContext, url: URL): Promis
 
   if (context.request.method === 'PATCH') {
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
     try {
       const eventType = updateEventType(scoped.storage, scoped.tenant.appId, eventTypeId, body, context.now());
       if (eventType === null) {
@@ -565,6 +567,30 @@ async function handleEventTypeRequest(context: RequestContext, url: URL): Promis
 }
 
 async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
+  const rotateSecretEndpointId = endpointRotateSecretPathFromPath(url.pathname);
+  if (rotateSecretEndpointId !== null) {
+    if (context.request.method !== 'POST') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+    const body = await readOptionalJsonBody(context);
+    if (body === BODY_READ_FAILED) return;
+    try {
+      const result = rotateEndpointSecret(scoped.storage, scoped.tenant.appId, rotateSecretEndpointId, body, context.now());
+      if (result === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 201, result);
+    } catch (error) {
+      writeEndpointError(context.response, error);
+    }
+    return;
+  }
+
   const testEndpointId = endpointTestPathFromPath(url.pathname);
   if (testEndpointId !== null) {
     if (context.request.method !== 'POST') {
@@ -575,7 +601,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
     const scoped = authenticateTenantRequest(context);
     if (scoped === null) return;
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
     try {
       const result = await sendEndpointTest(scoped.storage, scoped.tenant.appId, testEndpointId, body, {
         fetch: context.deliveryFetch,
@@ -605,7 +631,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
       const scoped = authenticateTenantRequest(context);
       if (scoped === null) return;
       const body = await readJsonBody(context);
-      if (body === null) return;
+      if (body === BODY_READ_FAILED) return;
       try {
         writeJson(context.response, 201, createEndpoint(scoped.storage, scoped.tenant.appId, body));
       } catch (error) {
@@ -639,7 +665,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
     const scoped = authenticateTenantRequest(context);
     if (scoped === null) return;
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
     try {
       const endpoint = updateEndpoint(scoped.storage, scoped.tenant.appId, endpointId, body);
       if (endpoint === null) {
@@ -679,7 +705,7 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
     }
 
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
 
     try {
       writeJson(context.response, 200, acceptMessageBatch(scoped.storage, scoped.tenant.appId, body, context.now()));
@@ -711,7 +737,7 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
     }
 
     const body = await readJsonBody(context);
-    if (body === null) return;
+    if (body === BODY_READ_FAILED) return;
 
     try {
       writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body, context.now()));
@@ -841,6 +867,11 @@ function endpointTestPathFromPath(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function endpointRotateSecretPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/endpoints\/([^/]+)\/rotate-secret$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
 function eventTypeIdFromPath(pathname: string): string | null {
   const match = /^\/v1\/event-types\/([^/]+)$/.exec(pathname);
   return match?.[1] ?? null;
@@ -864,7 +895,7 @@ function normalizeAdminToken(value: string | null | undefined): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-async function readJsonBody(context: RequestContext): Promise<unknown | null> {
+async function readJsonBody(context: RequestContext): Promise<unknown> {
   const bodyResult = await readRequestBody(context.request, context.maxBodyBytes);
   if (bodyResult.status === 'too_large') {
     writeJson(
@@ -873,26 +904,26 @@ async function readJsonBody(context: RequestContext): Promise<unknown | null> {
       { error: { code: 'payload_too_large', message: 'Request body is too large.' } },
       { connection: 'close' },
     );
-    return null;
+    return BODY_READ_FAILED;
   }
   if (bodyResult.status === 'aborted') {
-    return null;
+    return BODY_READ_FAILED;
   }
   const rawBody = bodyResult.body;
   if (rawBody.length === 0) {
     writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
-    return null;
+    return BODY_READ_FAILED;
   }
 
   try {
     return JSON.parse(rawBody.toString('utf8')) as unknown;
   } catch {
     writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
-    return null;
+    return BODY_READ_FAILED;
   }
 }
 
-async function readOptionalJsonBody(context: RequestContext): Promise<unknown | null> {
+async function readOptionalJsonBody(context: RequestContext): Promise<unknown> {
   const bodyResult = await readRequestBody(context.request, context.maxBodyBytes);
   if (bodyResult.status === 'too_large') {
     writeJson(
@@ -901,10 +932,10 @@ async function readOptionalJsonBody(context: RequestContext): Promise<unknown | 
       { error: { code: 'payload_too_large', message: 'Request body is too large.' } },
       { connection: 'close' },
     );
-    return null;
+    return BODY_READ_FAILED;
   }
   if (bodyResult.status === 'aborted') {
-    return null;
+    return BODY_READ_FAILED;
   }
   const rawBody = bodyResult.body;
   if (rawBody.length === 0) {
@@ -915,7 +946,7 @@ async function readOptionalJsonBody(context: RequestContext): Promise<unknown | 
     return JSON.parse(rawBody.toString('utf8')) as unknown;
   } catch {
     writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
-    return null;
+    return BODY_READ_FAILED;
   }
 }
 
@@ -1073,6 +1104,8 @@ type RequestBodyResult =
   | { readonly status: 'ok'; readonly body: Buffer }
   | { readonly status: 'too_large' }
   | { readonly status: 'aborted' };
+
+const BODY_READ_FAILED = Symbol('body_read_failed');
 
 function listen(server: Server, host: string, port: number): Promise<GatewayAddress> {
   return new Promise((resolve, reject) => {
