@@ -144,7 +144,7 @@ export function listDeliveriesForMessage(
         FROM deliveries
         INNER JOIN messages ON messages.id = deliveries.message_id
         WHERE messages.app_id = ? AND deliveries.message_id = ?
-        ORDER BY deliveries.created_at ASC, deliveries.id ASC
+        ORDER BY deliveries.rowid ASC
       `,
     )
     .all(appId, messageId) as unknown as DeliveryRow[];
