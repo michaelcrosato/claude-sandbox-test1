@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0026 done (Message history filters)
+
+**What:** Added server-side message history filters for `GET /v1/messages`. Tenants can now combine `eventType`, `after`, `before`, `limit`, and `cursor`, with newest-first keyset pagination preserved. The TypeScript SDK allowlist, OpenAPI parameter docs, and README now reflect the implemented filter surface.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0026/verify.log`. Evaluator returned NEEDS_WORK for permissive date parsing and an OpenAPI query-parameter invariant, then PASS after strict timestamp validation and contract assertions were added. Security reviewer returned APPROVE. Local checks passed: `npx vitest run tests/messages-http.test.ts tests/client.test.ts tests/openapi-contract.test.ts` (34 tests), `npm run typecheck`, `npm test` (151 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** JavaScript `Date.parse()` accepts impossible calendar dates and local-time strings, so message history filters now use strict calendar-aware timestamp validation with explicit `Z` or numeric offset. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, wait for PR #55 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0025 done (Auto-disable persistently failing endpoints)
 
 **What:** Implemented the documented endpoint auto-disable behavior. The delivery worker now disables an endpoint after a configured window of historical failed or dead-letter attempts with no recent success, and normal server startup passes `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` into the background worker. Disabled endpoints already fall out of new message fanout and worker claims.
