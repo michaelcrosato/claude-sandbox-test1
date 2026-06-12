@@ -111,8 +111,8 @@ Key capabilities:
 | DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | implemented | Rotate signing secret (`201`; new secret shown once, previous secret signs during overlap). |
 | POST | `/v1/endpoints/:id/test` | Bearer | implemented | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
-| GET | `/v1/endpoints/:id/deliveries` | Bearer | planned | Endpoint delivery history (paginated). |
-| GET | `/v1/endpoints/:id/stats` | Bearer | planned | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
+| GET | `/v1/endpoints/:id/deliveries` | Bearer | implemented | Endpoint delivery history (keyset-paginated with `?limit=` and `?cursor=`; payloads and secrets omitted). |
+| GET | `/v1/endpoints/:id/stats` | Bearer | implemented | Endpoint delivery stats over a trailing window (`?days=`): totals, status counts, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
 | GET | `/v1/deliveries` | Bearer | planned | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |
 | GET | `/v1/usage` | Bearer | implemented | Tenant's own message + delivery usage and current-month quota status. |
 | POST | `/v1/portal/sessions` | Bearer | implemented | Mint a short-lived consumer portal session token for endpoint management. |
@@ -208,8 +208,8 @@ const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-Typed SDK helpers for endpoint secret rotation and typed message listing are planned.
-Endpoint secret rotation, message listing, the event type catalog, endpoint test-send, and portal session routes
+Typed SDK helpers for endpoint secret rotation, endpoint observability, and typed message listing are planned.
+Endpoint secret rotation, endpoint delivery history/stats, message listing, the event type catalog, endpoint test-send, and portal session routes
 are available over HTTP/OpenAPI now; typed SDK helpers for them can be added without
 changing the wire contract.
 

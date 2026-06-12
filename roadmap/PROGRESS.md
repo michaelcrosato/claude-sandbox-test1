@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0020 done (Endpoint delivery history and stats)
+
+**What:** Added endpoint-scoped observability routes. Tenants can now list one endpoint's delivery history with keyset pagination and read trailing-window endpoint stats with status counts, success rate, average successful duration, daily trend, and failure-reason breakdowns. Responses intentionally omit payloads, endpoint URLs, headers, API keys, signing secrets, protected secret metadata, and response bodies.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0020/verify.log`. Evaluator returned NEEDS_WORK, then PASS after aligning `byStatus.dead_letter` with the brief. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/endpoint-observability-http.test.ts tests/openapi-contract.test.ts`, `npm test` (135 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** The stats response initially used camel-case `deadLetter`, but the brief and existing delivery status enum use `dead_letter`; the API, OpenAPI schema, and tests now use the snake-case key.
+
+**Next step:** Push the evidence/state record, wait for PR #49 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0019 done (Endpoint signing secret rotation)
 
 **What:** Added zero-downtime endpoint signing secret rotation. Tenants can call `POST /v1/endpoints/:id/rotate-secret` to receive a new one-time `whsec_` secret, while the previous encrypted endpoint secret remains usable for a bounded overlap window. Delivery worker and endpoint test-send signatures now include both current and previous secrets during overlap and current-only after expiry.

@@ -69,6 +69,8 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('delete', '/v1/endpoints/{id}', 'bearer', 'Delete endpoint', 204, ['Endpoints']),
   route('post', '/v1/endpoints/{id}/rotate-secret', 'bearer', 'Rotate endpoint signing secret', 201, ['Endpoints']),
   route('post', '/v1/endpoints/{id}/test', 'bearer', 'Send endpoint test', 200, ['Endpoints']),
+  route('get', '/v1/endpoints/{id}/deliveries', 'bearer', 'List endpoint deliveries', 200, ['Endpoints']),
+  route('get', '/v1/endpoints/{id}/stats', 'bearer', 'Read endpoint delivery stats', 200, ['Endpoints']),
   route('get', '/v1/event-types', 'bearer', 'List event types', 200, ['Event Types']),
   route('post', '/v1/event-types', 'bearer', 'Create event type', 201, ['Event Types']),
   route('get', '/v1/event-types/{id}', 'bearer', 'Fetch event type', 200, ['Event Types']),
@@ -173,6 +175,50 @@ export function createOpenApiDocument(): OpenApiDocument {
           responseStatus: { anyOf: [{ type: 'integer', minimum: 100, maximum: 599 }, { type: 'null' }] },
           durationMs: { type: 'integer', minimum: 0 },
           failureReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        }),
+        EndpointDeliveryHistory: objectSchema({
+          id: { type: 'string' },
+          messageId: { type: 'string' },
+          endpointId: { type: 'string' },
+          eventType: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'delivering', 'succeeded', 'dead_letter'] },
+          attemptCount: { type: 'integer', minimum: 0 },
+          nextAttemptAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+          lastError: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        }),
+        EndpointDeliveryStats: objectSchema({
+          endpointId: { type: 'string' },
+          windowDays: { type: 'integer', minimum: 1, maximum: 90 },
+          since: { type: 'string', format: 'date-time' },
+          until: { type: 'string', format: 'date-time' },
+          total: { type: 'integer', minimum: 0 },
+          byStatus: objectSchema({
+            pending: { type: 'integer', minimum: 0 },
+            delivering: { type: 'integer', minimum: 0 },
+            succeeded: { type: 'integer', minimum: 0 },
+            dead_letter: { type: 'integer', minimum: 0 },
+          }),
+          successRate: { anyOf: [{ type: 'number', minimum: 0, maximum: 1 }, { type: 'null' }] },
+          averageDurationMs: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
+          daily: {
+            type: 'array',
+            items: objectSchema({
+              date: { type: 'string' },
+              total: { type: 'integer', minimum: 0 },
+              succeeded: { type: 'integer', minimum: 0 },
+              failed: { type: 'integer', minimum: 0 },
+              deadLettered: { type: 'integer', minimum: 0 },
+            }),
+          },
+          failureReasons: {
+            type: 'array',
+            items: objectSchema({
+              reason: { type: 'string' },
+              count: { type: 'integer', minimum: 0 },
+            }),
+          },
         }),
         PortalSession: objectSchema({
           id: { type: 'string' },
@@ -289,6 +335,13 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
       });
     case 'post /v1/endpoints/{id}/test':
       return objectSchema({ test: { $ref: '#/components/schemas/EndpointTest' } });
+    case 'get /v1/endpoints/{id}/deliveries':
+      return objectSchema({
+        data: { type: 'array', items: { $ref: '#/components/schemas/EndpointDeliveryHistory' } },
+        nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      });
+    case 'get /v1/endpoints/{id}/stats':
+      return objectSchema({ stats: { $ref: '#/components/schemas/EndpointDeliveryStats' } });
     case 'get /v1/event-types':
       return objectSchema({ data: { type: 'array', items: { $ref: '#/components/schemas/EventType' } } });
     case 'post /v1/event-types':

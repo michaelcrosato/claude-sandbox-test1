@@ -55,6 +55,21 @@ export {
 export type { EndpointTestErrorCode, EndpointTestOptions, EndpointTestPayloadSource, EndpointTestResult } from './endpoint-tests';
 export { EndpointTestError, sendEndpointTest } from './endpoint-tests';
 export type {
+  EndpointDailyStats,
+  EndpointDeliveriesPage,
+  EndpointDeliveryHistoryRecord,
+  EndpointDeliveryStats,
+  EndpointFailureReasonStats,
+  EndpointStatsOptions,
+  EndpointStatusCounts,
+  ListEndpointDeliveriesOptions,
+} from './endpoint-observability';
+export {
+  EndpointObservabilityValidationError,
+  getEndpointDeliveryStats,
+  listEndpointDeliveries,
+} from './endpoint-observability';
+export type {
   CreateEventTypeResult,
   EventTypeConflictErrorCode,
   EventTypeRecord,

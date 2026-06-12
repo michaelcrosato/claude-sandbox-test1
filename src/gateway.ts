@@ -34,6 +34,11 @@ import {
 } from './endpoints';
 import { EndpointTestError, sendEndpointTest } from './endpoint-tests';
 import {
+  EndpointObservabilityValidationError,
+  getEndpointDeliveryStats,
+  listEndpointDeliveries,
+} from './endpoint-observability';
+import {
   acceptMessage,
   acceptMessageBatch,
   getMessageStatus,
@@ -302,7 +307,9 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (
     url.pathname === '/v1/endpoints' ||
     endpointIdFromPath(url.pathname) !== null ||
+    endpointDeliveriesPathFromPath(url.pathname) !== null ||
     endpointRotateSecretPathFromPath(url.pathname) !== null ||
+    endpointStatsPathFromPath(url.pathname) !== null ||
     endpointTestPathFromPath(url.pathname) !== null
   ) {
     await handleEndpointRequest(context, url);
@@ -567,6 +574,59 @@ async function handleEventTypeRequest(context: RequestContext, url: URL): Promis
 }
 
 async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
+  const deliveriesEndpointId = endpointDeliveriesPathFromPath(url.pathname);
+  if (deliveriesEndpointId !== null) {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+    try {
+      const result = listEndpointDeliveries(scoped.storage, scoped.tenant.appId, deliveriesEndpointId, {
+        limit: url.searchParams.get('limit'),
+        cursor: url.searchParams.get('cursor'),
+      });
+      if (result === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, result);
+    } catch (error) {
+      writeEndpointObservabilityError(context.response, error);
+    }
+    return;
+  }
+
+  const statsEndpointId = endpointStatsPathFromPath(url.pathname);
+  if (statsEndpointId !== null) {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+    try {
+      const stats = getEndpointDeliveryStats(
+        scoped.storage,
+        scoped.tenant.appId,
+        statsEndpointId,
+        { days: url.searchParams.get('days') },
+        context.now(),
+      );
+      if (stats === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { stats });
+    } catch (error) {
+      writeEndpointObservabilityError(context.response, error);
+    }
+    return;
+  }
+
   const rotateSecretEndpointId = endpointRotateSecretPathFromPath(url.pathname);
   if (rotateSecretEndpointId !== null) {
     if (context.request.method !== 'POST') {
@@ -862,8 +922,18 @@ function endpointIdFromPath(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
+function endpointDeliveriesPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/endpoints\/([^/]+)\/deliveries$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
 function endpointTestPathFromPath(pathname: string): string | null {
   const match = /^\/v1\/endpoints\/([^/]+)\/test$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
+function endpointStatsPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/endpoints\/([^/]+)\/stats$/.exec(pathname);
   return match?.[1] ?? null;
 }
 
@@ -1021,6 +1091,15 @@ function writeEndpointError(response: ServerResponse, error: unknown): void {
 
 function writeEndpointTestError(response: ServerResponse, error: unknown): void {
   if (error instanceof EndpointTestError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeEndpointObservabilityError(response: ServerResponse, error: unknown): void {
+  if (error instanceof EndpointObservabilityValidationError) {
     writeJson(response, 400, { error: { code: error.code, message: error.message } });
     return;
   }
