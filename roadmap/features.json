@@ -1094,6 +1094,46 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0025"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0026",
+      "epic": "api",
+      "title": "Message history filters",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement the README-planned GET /v1/messages filters so tenants can page message history by event type and created-at windows without exporting all messages client-side.",
+      "acceptance": [
+        "GET /v1/messages supports eventType, after, and before query parameters in addition to limit and cursor, with eventType using the existing event type identifier validation and after/before requiring valid date-time strings.",
+        "Message history filters are tenant-scoped, combine with keyset pagination, preserve newest-first ordering, and do not expose idempotency keys, payload hashes, API keys, endpoint secrets, or protected secret metadata.",
+        "The TypeScript PosthornClient listMessages helper exposes typed eventType, after, and before inputs and serializes only the allowlisted message-history query keys.",
+        "OpenAPI parameters and README route/SDK documentation reflect the implemented message filter surface and no longer describe those filters as planned.",
+        "Tests cover eventType filtering, after/before created-at windows, filter pagination, tenant isolation, validation failures, and SDK query allowlisting."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0026.md",
+        "roadmap/evidence/F-0026/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

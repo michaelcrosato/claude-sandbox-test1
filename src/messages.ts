@@ -69,6 +69,9 @@ export interface ListMessageAttemptsOptions {
 export interface ListMessagesOptions {
   readonly limit?: unknown;
   readonly cursor?: unknown;
+  readonly eventType?: unknown;
+  readonly after?: unknown;
+  readonly before?: unknown;
 }
 
 export interface MessageFanout {
@@ -275,6 +278,12 @@ export function listMessages(
 ): MessageListPage {
   const limit = parsePageLimit(options.limit, DEFAULT_MESSAGES_PAGE_LIMIT, MAX_MESSAGES_PAGE_LIMIT);
   const cursor = parseMessagesCursor(options.cursor);
+  const eventType = parseEventTypeFilter(options.eventType);
+  const after = parseDateTimeFilter(options.after, 'after');
+  const before = parseDateTimeFilter(options.before, 'before');
+  if (after !== null && before !== null && after >= before) {
+    throw new MessageValidationError('after must be earlier than before.');
+  }
   const cursorClause =
     cursor === null
       ? ''
@@ -284,7 +293,20 @@ export function listMessages(
           OR (created_at = ? AND id < ?)
         )
       `;
+  const whereClauses = ['app_id = ?'];
   const params: Array<string | number> = [appId];
+  if (eventType !== null) {
+    whereClauses.push('event_type = ?');
+    params.push(eventType);
+  }
+  if (after !== null) {
+    whereClauses.push('created_at >= ?');
+    params.push(after);
+  }
+  if (before !== null) {
+    whereClauses.push('created_at < ?');
+    params.push(before);
+  }
   if (cursor !== null) {
     params.push(cursor.createdAt, cursor.createdAt, cursor.id);
   }
@@ -295,7 +317,7 @@ export function listMessages(
       `
         SELECT id, event_type, payload_json, created_at
         FROM messages
-        WHERE app_id = ?
+        WHERE ${whereClauses.join('\n          AND ')}
           ${cursorClause}
         ORDER BY created_at DESC, id DESC
         LIMIT ?
@@ -503,6 +525,29 @@ function parseIdempotencyKey(value: unknown): string | null {
   }
 
   return idempotencyKey;
+}
+
+function parseEventTypeFilter(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !isValidEventTypeIdentifier(value)) {
+    throw new MessageValidationError('eventType must be a valid event type identifier.');
+  }
+
+  return value;
+}
+
+function parseDateTimeFilter(value: unknown, name: 'after' | 'before'): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '' || !/[tT]/.test(value)) {
+    throw new MessageValidationError(`${name} must be a valid date-time string.`);
+  }
+
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new MessageValidationError(`${name} must be a valid date-time string.`);
+  }
+
+  return new Date(timestamp).toISOString();
 }
 
 function generateId(prefix: string): string {

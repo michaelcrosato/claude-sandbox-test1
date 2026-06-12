@@ -562,6 +562,62 @@ describe('message intake HTTP route', () => {
     expect(secondPage.body.nextCursor).toBeNull();
   });
 
+  it('filters tenant messages by event type and created-at windows with pagination', async () => {
+    let nowMs = Date.parse('2026-06-12T12:00:00.000Z');
+    const { address } = await startSeededGateway({ now: () => new Date(nowMs) });
+    const first = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 1 },
+    });
+    nowMs += 60_000;
+    const second = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 2 },
+    });
+    nowMs += 60_000;
+    const third = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 3 },
+      idempotencyKey: 'filtered-secret-fields',
+    });
+    nowMs += 60_000;
+    await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_B_KEY, {
+      eventType: 'user.created',
+      payload: { id: 'other-tenant' },
+    });
+
+    const firstPage = await requestJson<MessageListJson>(
+      address,
+      'GET',
+      `/v1/messages?eventType=user.created&after=${encodeURIComponent(first.body.message.createdAt)}&limit=1`,
+      TENANT_A_KEY,
+    );
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.data.map((message) => message.id)).toEqual([third.body.message.id]);
+    expect(firstPage.body.nextCursor).toEqual(expect.any(String));
+    expect(JSON.stringify(firstPage.body)).not.toContain('filtered-secret-fields');
+    expect(JSON.stringify(firstPage.body)).not.toContain('payload_hash');
+
+    const secondPage = await requestJson<MessageListJson>(
+      address,
+      'GET',
+      `/v1/messages?eventType=user.created&after=${encodeURIComponent(first.body.message.createdAt)}&limit=1&cursor=${firstPage.body.nextCursor}`,
+      TENANT_A_KEY,
+    );
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.data.map((message) => message.id)).toEqual([first.body.message.id]);
+    expect(secondPage.body.nextCursor).toBeNull();
+
+    const windowed = await requestJson<MessageListJson>(
+      address,
+      'GET',
+      `/v1/messages?after=${encodeURIComponent(second.body.message.createdAt)}&before=${encodeURIComponent(third.body.message.createdAt)}`,
+      TENANT_A_KEY,
+    );
+    expect(windowed.status).toBe(200);
+    expect(windowed.body).toEqual({ data: [second.body.message], nextCursor: null });
+  });
+
   it('keeps message history tenant-scoped and validates pagination parameters', async () => {
     const { address } = await startSeededGateway();
     const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
@@ -573,6 +629,15 @@ describe('message intake HTTP route', () => {
     const tenantB = await requestJson<MessageListJson>(address, 'GET', '/v1/messages', TENANT_B_KEY);
     const invalidLimit = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?limit=0', TENANT_A_KEY);
     const invalidCursor = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?cursor=bad', TENANT_A_KEY);
+    const invalidEventType = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?eventType=bad space', TENANT_A_KEY);
+    const invalidAfter = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?after=2026-06-12', TENANT_A_KEY);
+    const invalidBefore = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?before=not-a-date', TENANT_A_KEY);
+    const invertedWindow = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      '/v1/messages?after=2026-06-12T12%3A00%3A00.000Z&before=2026-06-12T12%3A00%3A00.000Z',
+      TENANT_A_KEY,
+    );
     const missingAuth = await fetch(`${address.url}/v1/messages`);
     const wrongMethod = await requestJson<ErrorJson>(address, 'PATCH', '/v1/messages', TENANT_A_KEY, {});
 
@@ -584,6 +649,14 @@ describe('message intake HTTP route', () => {
     expect(invalidLimit.body.error.code).toBe('invalid_request');
     expect(invalidCursor.status).toBe(400);
     expect(invalidCursor.body.error.code).toBe('invalid_request');
+    expect(invalidEventType.status).toBe(400);
+    expect(invalidEventType.body.error.code).toBe('invalid_request');
+    expect(invalidAfter.status).toBe(400);
+    expect(invalidAfter.body.error.code).toBe('invalid_request');
+    expect(invalidBefore.status).toBe(400);
+    expect(invalidBefore.body.error.code).toBe('invalid_request');
+    expect(invertedWindow.status).toBe(400);
+    expect(invertedWindow.body.error.code).toBe('invalid_request');
     expect(missingAuth.status).toBe(401);
     expect(await missingAuth.json()).toEqual({ error: { code: 'unauthorized', message: 'Invalid bearer token.' } });
     expect(wrongMethod.status).toBe(405);
