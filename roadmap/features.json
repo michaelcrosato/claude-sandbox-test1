@@ -228,7 +228,9 @@
       ],
       "status": "in_progress",
       "passes": false,
-      "evidence": [],
+      "evidence": [
+        "roadmap/evidence/F-0006/verify.log"
+      ],
       "attempts": 0,
       "blocked_reason": null,
       "forbidden_paths": [
