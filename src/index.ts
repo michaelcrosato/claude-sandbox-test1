@@ -34,15 +34,34 @@ export type {
 export { POSTHORN_CLIENT_ROUTES, PosthornApiError, PosthornClient } from './client';
 export type { CliOptions, CliStreams } from './cli';
 export { POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
-export type { CreateEndpointResult, EndpointRecord, EndpointValidationErrorCode } from './endpoints';
+export type { CreateEndpointResult, EndpointDeliveryTarget, EndpointRecord, EndpointValidationErrorCode } from './endpoints';
 export {
   createEndpoint,
   deleteEndpoint,
+  getEndpointDeliveryTarget,
   EndpointValidationError,
   getEndpoint,
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
+export type { EndpointTestErrorCode, EndpointTestOptions, EndpointTestPayloadSource, EndpointTestResult } from './endpoint-tests';
+export { EndpointTestError, sendEndpointTest } from './endpoint-tests';
+export type {
+  CreateEventTypeResult,
+  EventTypeConflictErrorCode,
+  EventTypeRecord,
+  EventTypeValidationErrorCode,
+} from './event-types';
+export {
+  archiveEventType,
+  createEventType,
+  EventTypeConflictError,
+  EventTypeValidationError,
+  getActiveEventTypeByName,
+  getEventType,
+  listEventTypes,
+  updateEventType,
+} from './event-types';
 export type { Gateway, GatewayAddress, GatewayConfig, GatewayDependencies } from './gateway';
 export { createGateway } from './gateway';
 export type {
@@ -79,6 +98,18 @@ export type { MetricsSnapshotOptions } from './metrics';
 export { renderPrometheusMetrics } from './metrics';
 export type { ApiErrorCode, HttpMethod, ImplementedRoute, OpenApiDocument } from './openapi';
 export { API_ERROR_CODES, createOpenApiDocument, IMPLEMENTED_ROUTES } from './openapi';
+export type {
+  CreatePortalSessionResult,
+  PortalSessionRecord,
+  PortalSessionScope,
+  PortalSessionValidationErrorCode,
+} from './portal-sessions';
+export {
+  createPortalSession,
+  getPortalSessionByToken,
+  hashPortalSessionToken,
+  PortalSessionValidationError,
+} from './portal-sessions';
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
 export type { PosthornServer, RunPosthornServerProcessOptions, ServerStreams, StartPosthornServerOptions } from './server';

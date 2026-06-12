@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 
 import { protectEndpointSecret } from './secret-protection';
 import type { PosthornStorage } from './storage';
+import { containsControlCharacter, isValidEventTypeIdentifier } from './validation';
 import { createWebhookSecret } from './webhooks';
 
 export type EndpointValidationErrorCode = 'invalid_request' | 'url_not_allowed';
@@ -22,6 +23,12 @@ export interface CreateEndpointResult {
   readonly secret: string;
 }
 
+export interface EndpointDeliveryTarget extends EndpointRecord {
+  readonly signingSecretCiphertext: string;
+  readonly signingSecretKeyVersion: string;
+  readonly signingSecretNonce: string;
+}
+
 export class EndpointValidationError extends Error {
   readonly code: EndpointValidationErrorCode;
 
@@ -33,7 +40,6 @@ export class EndpointValidationError extends Error {
 }
 
 const ENDPOINT_ID_PREFIX = 'ep_';
-const EVENT_TYPE_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const RESERVED_HEADER_NAMES = new Set([
   'authorization',
@@ -129,6 +135,34 @@ export function getEndpoint(storage: PosthornStorage, appId: string, endpointId:
     .get(appId, endpointId) as EndpointRow | undefined;
 
   return row === undefined ? null : endpointFromRow(row);
+}
+
+export function getEndpointDeliveryTarget(
+  storage: PosthornStorage,
+  appId: string,
+  endpointId: string,
+): EndpointDeliveryTarget | null {
+  const row = storage.db
+    .prepare(
+      `
+        SELECT id,
+               url,
+               event_types_json,
+               non_secret_headers_json,
+               enabled,
+               created_at,
+               updated_at,
+               signing_secret_ciphertext,
+               signing_secret_key_version,
+               signing_secret_nonce
+        FROM endpoints
+        WHERE app_id = ? AND id = ?
+        LIMIT 1
+      `,
+    )
+    .get(appId, endpointId) as EndpointDeliveryTargetRow | undefined;
+
+  return row === undefined ? null : endpointDeliveryTargetFromRow(row);
 }
 
 export function updateEndpoint(
@@ -290,7 +324,7 @@ function parseEventTypes(input: unknown): readonly string[] | null {
   const seen = new Set<string>();
   const eventTypes: string[] = [];
   for (const value of input) {
-    if (typeof value !== 'string' || !EVENT_TYPE_PATTERN.test(value)) {
+    if (typeof value !== 'string' || !isValidEventTypeIdentifier(value)) {
       throw new EndpointValidationError('invalid_request', 'eventTypes must contain valid event type identifiers.');
     }
     if (!seen.has(value)) {
@@ -328,15 +362,6 @@ function parseHeaders(input: unknown): Readonly<Record<string, string>> {
   return Object.freeze(headers);
 }
 
-function containsControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || code === 127) return true;
-  }
-
-  return false;
-}
-
 function parseEnabled(input: unknown): boolean {
   if (typeof input !== 'boolean') {
     throw new EndpointValidationError('invalid_request', 'enabled must be a boolean.');
@@ -358,6 +383,15 @@ function endpointFromRow(row: EndpointRow): EndpointRecord {
     enabled: Number(row.enabled) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function endpointDeliveryTargetFromRow(row: EndpointDeliveryTargetRow): EndpointDeliveryTarget {
+  return {
+    ...endpointFromRow(row),
+    signingSecretCiphertext: String(row.signing_secret_ciphertext),
+    signingSecretKeyVersion: String(row.signing_secret_key_version),
+    signingSecretNonce: String(row.signing_secret_nonce),
   };
 }
 
@@ -388,4 +422,10 @@ interface EndpointRow {
   readonly enabled: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
+}
+
+interface EndpointDeliveryTargetRow extends EndpointRow {
+  readonly signing_secret_ciphertext: unknown;
+  readonly signing_secret_key_version: unknown;
+  readonly signing_secret_nonce: unknown;
 }

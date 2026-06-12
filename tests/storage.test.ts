@@ -27,8 +27,10 @@ describe('openStorage', () => {
         'deliveries',
         'delivery_attempts',
         'endpoints',
+        'event_types',
         'local_secret_keys',
         'messages',
+        'portal_sessions',
         'schema_migrations',
         'usage_months',
       ]);

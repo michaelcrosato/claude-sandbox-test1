@@ -2,9 +2,11 @@ export const API_ERROR_CODES = [
   'invalid_request',
   'invalid_json',
   'url_not_allowed',
+  'endpoint_disabled',
   'unauthorized',
   'not_found',
   'method_not_allowed',
+  'conflict',
   'idempotency_conflict',
   'payload_too_large',
   'quota_exceeded',
@@ -65,12 +67,19 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('get', '/v1/endpoints/{id}', 'bearer', 'Fetch endpoint', 200, ['Endpoints']),
   route('patch', '/v1/endpoints/{id}', 'bearer', 'Update endpoint', 200, ['Endpoints']),
   route('delete', '/v1/endpoints/{id}', 'bearer', 'Delete endpoint', 204, ['Endpoints']),
+  route('post', '/v1/endpoints/{id}/test', 'bearer', 'Send endpoint test', 200, ['Endpoints']),
+  route('get', '/v1/event-types', 'bearer', 'List event types', 200, ['Event Types']),
+  route('post', '/v1/event-types', 'bearer', 'Create event type', 201, ['Event Types']),
+  route('get', '/v1/event-types/{id}', 'bearer', 'Fetch event type', 200, ['Event Types']),
+  route('patch', '/v1/event-types/{id}', 'bearer', 'Update event type', 200, ['Event Types']),
+  route('delete', '/v1/event-types/{id}', 'bearer', 'Archive event type', 204, ['Event Types']),
   route('post', '/v1/messages', 'bearer', 'Accept message', 202, ['Messages']),
   route('post', '/v1/messages/batch', 'bearer', 'Accept message batch', 200, ['Messages']),
   route('get', '/v1/messages/{id}', 'bearer', 'Fetch message status', 200, ['Messages']),
   route('post', '/v1/messages/{id}/retry', 'bearer', 'Retry dead-lettered message deliveries', 200, ['Messages']),
   route('get', '/v1/messages/{id}/attempts', 'bearer', 'List message delivery attempts', 200, ['Messages']),
   route('get', '/v1/usage', 'bearer', 'Read tenant usage', 200, ['Usage']),
+  route('post', '/v1/portal/sessions', 'bearer', 'Create portal session', 201, ['Portal']),
   route('get', '/v1/admin/apps', 'admin', 'List apps', 200, ['Admin']),
   route('post', '/v1/admin/apps', 'admin', 'Create app', 201, ['Admin']),
   route('get', '/v1/admin/apps/{id}', 'admin', 'Fetch app', 200, ['Admin']),
@@ -143,6 +152,35 @@ export function createOpenApiDocument(): OpenApiDocument {
           enabled: { type: 'boolean' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
+        }),
+        EventType: objectSchema({
+          id: { type: 'string' },
+          eventType: { type: 'string' },
+          description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          schemaExample: {},
+          archivedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        }),
+        EndpointTest: objectSchema({
+          id: { type: 'string' },
+          endpointId: { type: 'string' },
+          eventType: { type: 'string' },
+          payloadSource: { type: 'string', enum: ['explicit', 'schema_example'] },
+          outcome: { type: 'string', enum: ['succeeded', 'failed'] },
+          responseStatus: { anyOf: [{ type: 'integer', minimum: 100, maximum: 599 }, { type: 'null' }] },
+          durationMs: { type: 'integer', minimum: 0 },
+          failureReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        }),
+        PortalSession: objectSchema({
+          id: { type: 'string' },
+          appId: { type: 'string' },
+          token: { type: 'string' },
+          scope: { type: 'string', enum: ['endpoint_management'] },
+          endpointId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          expiresAt: { type: 'string', format: 'date-time' },
+          createdAt: { type: 'string', format: 'date-time' },
+          revokedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
         }),
         App: objectSchema({
           id: { type: 'string' },
@@ -241,6 +279,14 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
     case 'get /v1/endpoints/{id}':
     case 'patch /v1/endpoints/{id}':
       return objectSchema({ endpoint: { $ref: '#/components/schemas/Endpoint' } });
+    case 'post /v1/endpoints/{id}/test':
+      return objectSchema({ test: { $ref: '#/components/schemas/EndpointTest' } });
+    case 'get /v1/event-types':
+      return objectSchema({ data: { type: 'array', items: { $ref: '#/components/schemas/EventType' } } });
+    case 'post /v1/event-types':
+    case 'get /v1/event-types/{id}':
+    case 'patch /v1/event-types/{id}':
+      return objectSchema({ eventType: { $ref: '#/components/schemas/EventType' } });
     case 'post /v1/messages':
       return acceptedMessageSchema();
     case 'post /v1/messages/batch':
@@ -278,6 +324,8 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
     case 'get /v1/usage':
     case 'get /v1/admin/apps/{id}/usage':
       return objectSchema({ usage: { $ref: '#/components/schemas/Usage' } });
+    case 'post /v1/portal/sessions':
+      return objectSchema({ session: { $ref: '#/components/schemas/PortalSession' } });
     case 'get /v1/admin/apps':
       return objectSchema({ data: { type: 'array', items: { $ref: '#/components/schemas/App' } } });
     case 'post /v1/admin/apps':
@@ -305,9 +353,18 @@ function acceptedMessageSchema(): OpenApiSchema {
 
 function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null {
   const key = `${implementedRoute.method} ${implementedRoute.path}`;
+  if (key === 'post /v1/portal/sessions') {
+    return {
+      required: false,
+      content: jsonContent({}),
+    };
+  }
   if (
     key === 'post /v1/endpoints' ||
     key === 'patch /v1/endpoints/{id}' ||
+    key === 'post /v1/endpoints/{id}/test' ||
+    key === 'post /v1/event-types' ||
+    key === 'patch /v1/event-types/{id}' ||
     key === 'post /v1/messages' ||
     key === 'post /v1/messages/batch' ||
     key === 'post /v1/admin/apps' ||
