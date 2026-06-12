@@ -18,3 +18,4 @@
 {"date":"2026-06-12","feature":"F-0018","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":47,"notes":"Admin and tenant browser dashboards; tenant-scoped message history route; screenshot evidence"}
 {"date":"2026-06-12","feature":"F-0019","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":2,"pr":48,"notes":"Endpoint signing secret rotation; delivery and test-send multi-signature overlap; JSON null validation fixed"}
 {"date":"2026-06-12","feature":"F-0020","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":1,"pr":49,"notes":"Endpoint delivery history and stats; byStatus.dead_letter contract alignment fixed"}
+{"date":"2026-06-12","feature":"F-0021","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":50,"notes":"App-wide delivery listing with status, endpoint, event type, and failure reason filters"}
