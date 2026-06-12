@@ -666,9 +666,12 @@
         "F-0003",
         "F-0010"
       ],
-      "status": "in_progress",
-      "passes": false,
-      "evidence": [],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0016/verify.log",
+        "roadmap/evidence/F-0016/docker-smoke.log"
+      ],
       "attempts": 0,
       "blocked_reason": null,
       "forbidden_paths": [

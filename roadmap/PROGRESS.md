@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0016 done (Docker and production compose reference)
+
+**What:** Added the single-container Docker deployment path: a compiled `node dist/src/server.js` production entrypoint, non-root runtime image with `/data` persistence, in-process gateway plus delivery worker, loopback-bound Docker Compose reference, and Prometheus scrape config. README and deployment docs now use implemented HTTP admin routes and register an endpoint before sending the first message.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0016/verify.log`. Docker build/run/health/SQLite-volume and `docker compose config --quiet` evidence saved at `roadmap/evidence/F-0016/docker-smoke.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/deployment-artifacts.test.ts tests/server.test.ts`, `npm test` (111 tests), `npm run lint`, `npm run build`, and `npm run state:validate`.
+
+**Surprises:** Docker caught a real build-context issue: TypeScript 6 inferred a narrower project root when only `src/` was copied, so the Docker build stage now copies the same compile-time project shape while the runtime image receives only `dist/src`. Security review also tightened defaults so Compose binds Posthorn and Prometheus to `127.0.0.1` and `.dockerignore` excludes local SQLite/database files.
+
+**Next step:** Merge PR #45 after the final evidence/state commit goes green, then start the next unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0015 done (Prometheus metrics endpoint)
 
 **What:** Added unauthenticated `GET /metrics` Prometheus text exposition for accepted messages, delivery outcomes, delivery task statuses, dead-letter reasons, uptime, and build info. Metrics are derived from durable SQLite state, use only bounded labels, and avoid tenant IDs, endpoint URLs, event types, message IDs, API keys, signing secrets, hashes, headers, and payload fields.
