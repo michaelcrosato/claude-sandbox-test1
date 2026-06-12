@@ -381,6 +381,26 @@ describe('delivery worker', () => {
     expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(true);
   });
 
+  it('does not auto-disable from the current dead-letter alone', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/current-dead-letter-only');
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 35 } });
+    const times = [
+      new Date(NOW.getTime() - 2_000),
+      new Date(NOW.getTime() + 2_000),
+    ];
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => times.shift() ?? NOW,
+      attemptBudget: 1,
+      endpointAutoDisableAfterMs: 1_000,
+      fetch: async () => ({ status: 500 }),
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(true);
+  });
+
   it('does not auto-disable when a recent success resets the failure window', async () => {
     const storage = makeStorage();
     const receiver = await startReceiver(() => ({ status: 500 }));

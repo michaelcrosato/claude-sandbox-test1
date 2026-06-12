@@ -442,7 +442,14 @@ function recordFailure(
       attemptedAt,
     });
     if (outcome === 'dead_letter') {
-      disableEndpointAfterFailureWindow(storage, task.endpointId, now, updatedAt, options.endpointAutoDisableAfterMs);
+      disableEndpointAfterFailureWindow(
+        storage,
+        task.endpointId,
+        attemptedAt,
+        now,
+        updatedAt,
+        options.endpointAutoDisableAfterMs,
+      );
     }
     storage.db.exec('COMMIT');
     return true;
@@ -482,12 +489,14 @@ function insertDeliveryAttempt(storage: PosthornStorage, attempt: DeliveryAttemp
 function disableEndpointAfterFailureWindow(
   storage: PosthornStorage,
   endpointId: string,
+  attemptedAt: Date,
   now: Date,
   updatedAt: string,
   endpointAutoDisableAfterMs: number,
 ): void {
   if (endpointAutoDisableAfterMs === 0) return;
   const cutoff = new Date(now.getTime() - endpointAutoDisableAfterMs).toISOString();
+  const currentAttemptedAt = attemptedAt.toISOString();
 
   storage.db
     .prepare(
@@ -503,6 +512,7 @@ function disableEndpointAfterFailureWindow(
             WHERE deliveries.endpoint_id = endpoints.id
               AND delivery_attempts.outcome IN ('failed', 'dead_letter')
               AND delivery_attempts.attempted_at <= ?
+              AND delivery_attempts.attempted_at < ?
             LIMIT 1
           )
           AND NOT EXISTS (
@@ -516,7 +526,7 @@ function disableEndpointAfterFailureWindow(
           )
       `,
     )
-    .run(updatedAt, endpointId, cutoff, cutoff);
+    .run(updatedAt, endpointId, cutoff, currentAttemptedAt, cutoff);
 }
 
 function buildDeliveryBody(task: ClaimedDelivery): string {
