@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0015 done (Prometheus metrics endpoint)
+
+**What:** Added unauthenticated `GET /metrics` Prometheus text exposition for accepted messages, delivery outcomes, delivery task statuses, dead-letter reasons, uptime, and build info. Metrics are derived from durable SQLite state, use only bounded labels, and avoid tenant IDs, endpoint URLs, event types, message IDs, API keys, signing secrets, hashes, headers, and payload fields.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0015/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/metrics-http.test.ts tests/openapi-contract.test.ts`, `npm test` (106 tests), `npm run lint`, `npm run build`, and `npm run state:validate`.
+
+**Surprises:** The README sample used `connection_refused`, but the worker emits bounded failure reasons such as `http_503`, `timeout`, and `network_error`. The metrics endpoint normalizes HTTP status-specific reasons into `http_###` to avoid high-cardinality labels.
+
+**Next step:** Merge PR #44 after the final evidence/state commit goes green, then start the next unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0014 done (TypeScript SDK and command-line client)
 
 **What:** Added `PosthornClient`, `PosthornApiError`, and the `posthorn client` CLI for tenant endpoint, message, attempt, retry, and usage workflows. To keep the client honest, the feature also added implemented message status and retry HTTP routes, updated OpenAPI/README route status, and packaged runtime SDK/CLI outputs with declaration files.
