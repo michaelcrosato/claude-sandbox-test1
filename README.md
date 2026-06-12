@@ -17,7 +17,7 @@ configuration loading, SQLite storage initialization, health/readiness HTTP endp
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
 queue creation, idempotent message retries, the importable retry delivery worker, the per-attempt
 audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
-batch message intake, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
+batch message intake, Python SDK, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the target Posthorn product contract being built through `roadmap/features.json`;
 not every listed route or client method is implemented yet.
 
@@ -208,10 +208,11 @@ const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-Typed SDK helpers for endpoint secret rotation, endpoint observability, app-wide delivery listing, and typed message listing are planned.
+TypeScript SDK helpers for endpoint secret rotation, endpoint observability, app-wide delivery listing, and typed message listing are planned.
 Endpoint secret rotation, endpoint delivery history/stats, app-wide delivery listing, message listing, the event type catalog, endpoint test-send, and portal session routes
 are available over HTTP/OpenAPI now; typed SDK helpers for them can be added without
 changing the wire contract.
+The Python SDK below already includes endpoint observability and app-wide delivery listing helpers.
 
 ### Receiving webhooks
 
@@ -252,30 +253,43 @@ stderr and a non-zero exit, so it composes in scripts.
 
 ## Python SDK
 
-A zero-dependency port of the SDK above, standard-library only (Python 3.9+), with the
-same surface and wire contract — see [`clients/python`](clients/python). A producer can
-move between the two languages without surprises; the method↔operation mapping is tested
-against the live `/openapi.json`, so the Python client cannot silently drift from the API.
+A zero-dependency Python 3.9+ SDK is available in [`clients/python`](clients/python). It uses
+only the standard library and is tested against the in-process gateway, so Python producers can
+call Posthorn without hand-writing HTTP requests.
 
 ```python
-from posthorn import PosthornClient, PosthornApiError, verify_webhook
+from posthorn import PosthornApiError, PosthornClient, verify_webhook
 
 client = PosthornClient("https://posthorn.acme.example", "phk_...")
 
 # Register a destination — signing secret returned once:
-endpoint = client.create_endpoint(url="https://acme.example/hook", event_types=["user.created"])
+endpoint = client.create_endpoint(
+    url="https://acme.example/hook",
+    event_types=["user.created"],
+)
 
 # Send an event (idempotency_key is optional; a retry won't double-send):
-result = client.send_message(event_type="user.created", payload={"id": 42}, idempotency_key="req_abc123")
+result = client.send_message(
+    event_type="user.created",
+    payload={"id": 42},
+    idempotency_key="req_abc123",
+)
 result["fanout"]["matched"]  # number of endpoints a delivery was enqueued for
+
+# Debug delivery health:
+message = client.get_message(result["message"]["id"])
+attempts = client.list_message_attempts(result["message"]["id"], limit=25)
+deliveries = client.list_deliveries(status="dead_letter", limit=25)
+endpoint_stats = client.get_endpoint_stats(endpoint["endpoint"]["id"], days=7)
+usage = client.get_usage()
 
 # Verify an inbound delivery against the raw body before trusting it:
 verify_webhook(endpoint["secret"], request.headers, raw_body)  # raises on a bad signature
 ```
 
-Methods return the gateway's JSON as plain `dict`/`list`. Optional arguments are omitted
-unless passed; pass `None` explicitly to send a JSON `null`. Failures raise a subclass of
-`PosthornError` (`PosthornApiError` carries `.status` and a stable `.code`).
+Methods return the gateway's JSON as plain `dict`/`list`. Optional query arguments are omitted
+unless passed. Failures raise a subclass of `PosthornError`; `PosthornApiError` carries `.status`,
+`.code`, `.message`, and `.body`.
 
 ## Admin / Control-Plane SDK
 

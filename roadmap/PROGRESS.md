@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0022 done (Python SDK and webhook verification helper)
+
+**What:** Added the README-promised dependency-free Python SDK in `clients/python`. Python producers can create/list endpoints, send single and batch messages, read message status, retry messages, list attempts, read usage, inspect endpoint delivery history/stats, and list app-wide deliveries with filters. Python receivers can verify Posthorn Standard Webhooks signatures with replay-window and multi-signature checks.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0022/verify.log`. Evaluator returned PASS. Security reviewer returned NEEDS_WORK for Python redirect auth leakage, then APPROVE after redirects were disabled and regression-covered. Local checks passed: `python -m py_compile clients/python/posthorn/__init__.py clients/python/posthorn/client.py clients/python/posthorn/webhooks.py`, `npx vitest run tests/python-client.test.ts`, `npm run typecheck`, `npm test` (141 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** The first CI verify attempt failed because the shellcheck package download hit a transient `403 rate limit exceeded`; rerunning the failed job passed. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable.
+
+**Next step:** Push the evidence/state record, wait for PR #51 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0021 done (App-wide delivery listing and filters)
 
 **What:** Added tenant-scoped `GET /v1/deliveries` for app-wide delivery search. Operators can list recent deliveries across endpoints with keyset pagination and filter by status, endpoint id, event type, or failure reason. Responses are metadata-only and omit payloads, endpoint URLs, headers, API keys, signing secrets, protected secret metadata, request bodies, and response bodies.

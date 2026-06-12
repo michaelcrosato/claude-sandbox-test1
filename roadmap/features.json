@@ -925,6 +925,49 @@
         "roadmap/metrics.jsonl",
         "roadmap/STATUS.md"
       ]
+    },
+    {
+      "dependencies": [
+        "F-0021"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0022/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0022",
+      "epic": "clients",
+      "title": "Python SDK and webhook verification helper",
+      "spec_ref": "README.md#python-sdk",
+      "description": "Ship the README-promised zero-dependency Python SDK so Python producers can use Posthorn without hand-writing HTTP calls, and Python receivers can verify Standard Webhooks signatures with the same contract as the TypeScript utilities.",
+      "acceptance": [
+        "A Python 3.9+ package exists under clients/python with PosthornClient, PosthornApiError, and verify_webhook using only the Python standard library.",
+        "PosthornClient supports tenant API calls for endpoint creation/listing, single and batch message sends, message status, message retry, message attempts, usage, endpoint delivery history/stats, and app-wide delivery listing with pagination/filter arguments.",
+        "Client errors expose HTTP status, stable Posthorn error code, and message without requiring callers to parse raw response bodies.",
+        "Python webhook verification accepts valid whsec_ Standard Webhooks signatures, supports multi-signature headers, enforces replay windows, and rejects stale, malformed, missing, or mismatched signatures.",
+        "Automated tests run the Python SDK against the in-process gateway and cover successful calls, API errors, pagination/filter query arguments, and signature verification failures.",
+        "README Python SDK documentation reflects the implemented methods and no longer points at a missing clients/python surface."
+      ],
+      "authorized_paths": [
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0022.md",
+        "roadmap/evidence/F-0022/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }
