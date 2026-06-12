@@ -323,17 +323,21 @@ const admin = new PosthornAdminClient({
 });
 
 // Provision a tenant on a capped plan, then mint its first key:
-const app = await admin.createApp({ name: "Acme", monthlyMessageQuota: 100_000 });
-const { secret } = await admin.createApiKey(app.id); // hand secret to the tenant — shown once
+const { app } = await admin.createApp({ name: "Acme", monthlyMessageQuota: 100_000 });
+const { apiKey, secret } = await admin.createApiKey(app.id, { name: "Production" });
+secret; // phk_... shown once; hand it to the tenant
 
-// Upgrade the plan; meter usage for billing:
+// List/read/update tenants and meter current-month usage:
+const apps = await admin.listApps();
+const readBack = await admin.getApp(app.id);
 await admin.updateApp(app.id, { monthlyMessageQuota: 500_000 });
-const usage = await admin.getAppUsage(app.id, { from: "2026-05-01", to: "2026-05-31" });
-usage.total;            // messages accepted
-usage.deliveries.total; // delivery attempts (operations — every HTTP send, retries included)
+const usage = await admin.getAppUsage(app.id);
+usage.usage.messagesAccepted;  // messages accepted this month
+usage.usage.deliveryAttempts;  // delivery attempts this month
 
-// Off-board: revoke a key, delete a tenant (cascades its keys):
-await admin.revokeApiKey("ak_…");
+// List/revoke keys and off-board tenants:
+const keys = await admin.listApiKeys(app.id);
+await admin.revokeApiKey(apiKey.id);
 await admin.deleteApp(app.id);
 ```
 

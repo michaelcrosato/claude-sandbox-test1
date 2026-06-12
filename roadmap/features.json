@@ -1010,6 +1010,46 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0023"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0024",
+      "epic": "clients",
+      "title": "TypeScript admin client",
+      "spec_ref": "README.md#admin--control-plane-sdk",
+      "description": "Implement the README-documented PosthornAdminClient so operators can provision tenants, manage quotas, mint/list/revoke tenant API keys, and read billing usage through the TypeScript package instead of hand-writing admin HTTP calls.",
+      "acceptance": [
+        "The package exports PosthornAdminClient with typed helpers for app create/list/read/update/delete, app usage, API key create/list, and API key revoke.",
+        "Admin client helpers authenticate with POSTHORN_ADMIN_TOKEN bearer credentials and reuse PosthornApiError behavior for non-2xx responses.",
+        "Admin client route mappings are covered against implemented OpenAPI admin routes without weakening existing tenant SDK route coverage.",
+        "Client tests exercise representative admin helper success paths and at least one stable admin error path against the in-process gateway with admin routes enabled.",
+        "README Admin / Control-Plane SDK documentation reflects the implemented helper surface and avoids claiming unimplemented admin routes are available."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0024.md",
+        "roadmap/evidence/F-0024/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }
