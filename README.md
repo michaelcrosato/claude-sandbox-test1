@@ -12,9 +12,10 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 
 ## Implementation Status
 
-This checkout is at the first product-scaffold milestone. The API, SDK, dashboard, and deployment
-sections below describe the target Posthorn product contract being built through
-`roadmap/features.json`; not every listed route or client method is implemented yet.
+This checkout is in the product-foundation phase: it has the public TypeScript entry point,
+configuration loading, SQLite storage initialization, build, lint, and test wiring. The API, SDK,
+dashboard, and deployment sections below describe the target Posthorn product contract being built
+through `roadmap/features.json`; not every listed route or client method is implemented yet.
 
 ## Quick Start
 
@@ -369,9 +370,9 @@ npm run build
 bash scripts/verify.sh
 ```
 
-**Supported Node:** Posthorn targets **Node ≥ 22.13**. The current scaffold has only the product
-entry point, build, lint, and Vitest wiring; the SQLite-backed datastore lands in the next storage
-feature.
+**Supported Node:** Posthorn targets **Node ≥ 22.13**. The current foundation includes the product
+entry point, configuration loading, a SQLite-backed storage initializer, build, lint, and Vitest
+wiring.
 
 ## Contributing & automation
 

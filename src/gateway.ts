@@ -1,4 +1,6 @@
-export interface GatewayConfig {
+import type { PosthornConfig } from './config';
+
+export interface GatewayConfig extends Partial<PosthornConfig> {
   readonly serviceName?: string;
 }
 
