@@ -1,0 +1,47 @@
+services:
+  posthorn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: posthorn:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POSTHORN_PORT:-3000}:3000"
+    environment:
+      POSTHORN_DATA_DIR: /data
+      POSTHORN_ADMIN_TOKEN: ${POSTHORN_ADMIN_TOKEN:?set POSTHORN_ADMIN_TOKEN to a long random value}
+    volumes:
+      - posthorn-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    depends_on:
+      posthorn:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./docs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  posthorn-data:
+  prometheus-data:

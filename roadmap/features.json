@@ -666,7 +666,7 @@
         "F-0003",
         "F-0010"
       ],
-      "status": "pending",
+      "status": "in_progress",
       "passes": false,
       "evidence": [],
       "attempts": 0,
@@ -691,6 +691,7 @@
         "package.json",
         "package-lock.json",
         "Dockerfile",
+        ".dockerignore",
         "docker-compose.yml",
         "docs/**",
         "README.md",
