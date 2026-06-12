@@ -20,6 +20,7 @@ export interface DeliveryWorkerOptions {
   readonly requestTimeoutMs?: number;
   readonly visibilityTimeoutMs?: number;
   readonly attemptBudget?: number;
+  readonly endpointAutoDisableAfterMs?: number;
   readonly baseBackoffMs?: number;
   readonly maxBackoffMs?: number;
   readonly now?: () => Date;
@@ -73,6 +74,7 @@ interface ResolvedWorkerOptions {
   readonly requestTimeoutMs: number;
   readonly visibilityTimeoutMs: number;
   readonly attemptBudget: number;
+  readonly endpointAutoDisableAfterMs: number;
   readonly baseBackoffMs: number;
   readonly maxBackoffMs: number;
   readonly idlePollMs: number;
@@ -86,6 +88,7 @@ const DEFAULT_WORKER_OPTIONS = {
   requestTimeoutMs: 10_000,
   visibilityTimeoutMs: 30_000,
   attemptBudget: 8,
+  endpointAutoDisableAfterMs: 432_000_000,
   baseBackoffMs: 60_000,
   maxBackoffMs: 3_600_000,
   idlePollMs: 1_000,
@@ -250,6 +253,7 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
   const rows = storage.db
     .prepare(`
       SELECT deliveries.id,
+             endpoints.id AS endpoint_id,
              deliveries.attempt_count,
              deliveries.lease_expires_at,
              endpoints.url,
@@ -437,6 +441,9 @@ function recordFailure(
       failureReason: result.failureReason,
       attemptedAt,
     });
+    if (outcome === 'dead_letter') {
+      disableEndpointAfterFailureWindow(storage, task.endpointId, now, updatedAt, options.endpointAutoDisableAfterMs);
+    }
     storage.db.exec('COMMIT');
     return true;
   } catch (error) {
@@ -470,6 +477,46 @@ function insertDeliveryAttempt(storage: PosthornStorage, attempt: DeliveryAttemp
       attempt.attemptedAt.toISOString(),
     );
   incrementDeliveryAttemptsForDelivery(storage, attempt.deliveryId, attempt.attemptedAt);
+}
+
+function disableEndpointAfterFailureWindow(
+  storage: PosthornStorage,
+  endpointId: string,
+  now: Date,
+  updatedAt: string,
+  endpointAutoDisableAfterMs: number,
+): void {
+  if (endpointAutoDisableAfterMs === 0) return;
+  const cutoff = new Date(now.getTime() - endpointAutoDisableAfterMs).toISOString();
+
+  storage.db
+    .prepare(
+      `
+        UPDATE endpoints
+        SET enabled = 0, updated_at = ?
+        WHERE id = ?
+          AND enabled = 1
+          AND EXISTS (
+            SELECT 1
+            FROM delivery_attempts
+            INNER JOIN deliveries ON deliveries.id = delivery_attempts.delivery_id
+            WHERE deliveries.endpoint_id = endpoints.id
+              AND delivery_attempts.outcome IN ('failed', 'dead_letter')
+              AND delivery_attempts.attempted_at <= ?
+            LIMIT 1
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM delivery_attempts
+            INNER JOIN deliveries ON deliveries.id = delivery_attempts.delivery_id
+            WHERE deliveries.endpoint_id = endpoints.id
+              AND delivery_attempts.outcome = 'succeeded'
+              AND delivery_attempts.attempted_at > ?
+            LIMIT 1
+          )
+      `,
+    )
+    .run(updatedAt, endpointId, cutoff, cutoff);
 }
 
 function buildDeliveryBody(task: ClaimedDelivery): string {
@@ -585,6 +632,11 @@ function resolveWorkerOptions(options: DeliveryWorkerOptions & Partial<Pick<Work
       DEFAULT_WORKER_OPTIONS.visibilityTimeoutMs,
     ),
     attemptBudget: positiveInteger(options.attemptBudget, 'attemptBudget', DEFAULT_WORKER_OPTIONS.attemptBudget),
+    endpointAutoDisableAfterMs: nonNegativeInteger(
+      options.endpointAutoDisableAfterMs,
+      'endpointAutoDisableAfterMs',
+      DEFAULT_WORKER_OPTIONS.endpointAutoDisableAfterMs,
+    ),
     baseBackoffMs: positiveInteger(options.baseBackoffMs, 'baseBackoffMs', DEFAULT_WORKER_OPTIONS.baseBackoffMs),
     maxBackoffMs: positiveInteger(options.maxBackoffMs, 'maxBackoffMs', DEFAULT_WORKER_OPTIONS.maxBackoffMs),
     idlePollMs: positiveInteger(options.idlePollMs, 'idlePollMs', DEFAULT_WORKER_OPTIONS.idlePollMs),
@@ -602,9 +654,19 @@ function positiveInteger(value: number | undefined, name: string, defaultValue: 
   return value;
 }
 
+function nonNegativeInteger(value: number | undefined, name: string, defaultValue: number): number {
+  if (value === undefined) return defaultValue;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative integer.`);
+  }
+
+  return value;
+}
+
 function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
   return {
     id: String(row.id),
+    endpointId: String(row.endpoint_id),
     attemptCount: Number(row.attempt_count),
     leaseExpiresAt: String(row.lease_expires_at),
     url: String(row.url),
@@ -670,6 +732,7 @@ class InvalidPayloadError extends Error {
 
 interface ClaimedDelivery {
   readonly id: string;
+  readonly endpointId: string;
   readonly attemptCount: number;
   readonly leaseExpiresAt: string;
   readonly url: string;
@@ -688,6 +751,7 @@ interface ClaimedDelivery {
 
 interface ClaimedDeliveryRow {
   readonly id: unknown;
+  readonly endpoint_id: unknown;
   readonly attempt_count: unknown;
   readonly lease_expires_at: unknown;
   readonly url: unknown;

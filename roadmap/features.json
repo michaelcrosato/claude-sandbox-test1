@@ -1052,6 +1052,46 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0024"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0025",
+      "epic": "reliability",
+      "title": "Auto-disable persistently failing endpoints",
+      "spec_ref": "README.md#key-capabilities",
+      "description": "Implement the README-documented endpoint auto-disable behavior so endpoints that keep dead-lettering deliveries for longer than POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS are automatically taken out of future fanout, while allowing the feature to be disabled with 0.",
+      "acceptance": [
+        "Delivery worker options include endpointAutoDisableAfterMs, defaulting to the documented configuration value, with 0 disabling the behavior.",
+        "When a delivery dead-letters, the worker disables that endpoint only if the endpoint has had no successful delivery attempt since the auto-disable cutoff and has at least one failed or dead-letter attempt at or before the cutoff.",
+        "Auto-disabled endpoints are excluded from future message fanout and worker claims through the existing enabled=false behavior, while existing endpoint read/list APIs surface enabled=false without leaking payload or secret material.",
+        "Tests cover auto-disable after the configured failure window, no disable when the window is disabled, no disable when a recent success resets the failure window, and no disable for a different endpoint or tenant.",
+        "README configuration and key-capability text remain truthful for the implemented semantics."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0025.md",
+        "roadmap/evidence/F-0025/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

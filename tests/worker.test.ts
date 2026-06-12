@@ -27,6 +27,7 @@ const NOW = new Date('2026-06-12T12:00:00.000Z');
 const activeReceivers: SyntheticReceiver[] = [];
 const activeStorages: PosthornStorage[] = [];
 const tempDirs: string[] = [];
+let historicalDeliverySequence = 0;
 
 interface RecordedRequest {
   readonly headers: IncomingHttpHeaders;
@@ -336,6 +337,93 @@ describe('delivery worker', () => {
     expect(readAttempts(storage, deliveryId).map((attempt) => attempt.outcome)).toEqual(['failed', 'dead_letter']);
   });
 
+  it('auto-disables endpoints after the default sustained failure window and excludes future fanout', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 500 }));
+    const endpoint = createLocalEndpoint(storage, receiver.url);
+    seedHistoricalAttempt(storage, endpoint.endpoint.id, 'failed', new Date(NOW.getTime() - 432_000_001));
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 30 } });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(false);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0])).toMatchObject({
+      status: 'dead_letter',
+      attempt_count: 1,
+      last_error: 'http_500',
+    });
+
+    const afterDisable = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 31 },
+    });
+    expect(afterDisable.fanout.deliveryIds).toEqual([]);
+  });
+
+  it('does not auto-disable endpoints when the failure window is disabled', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 500 }));
+    const endpoint = createLocalEndpoint(storage, receiver.url);
+    seedHistoricalAttempt(storage, endpoint.endpoint.id, 'failed', new Date(NOW.getTime() - 5_000));
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 32 } });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+      endpointAutoDisableAfterMs: 0,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(true);
+  });
+
+  it('does not auto-disable when a recent success resets the failure window', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 500 }));
+    const endpoint = createLocalEndpoint(storage, receiver.url);
+    seedHistoricalAttempt(storage, endpoint.endpoint.id, 'failed', new Date(NOW.getTime() - 2_000));
+    seedHistoricalAttempt(storage, endpoint.endpoint.id, 'succeeded', new Date(NOW.getTime() - 500));
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 33 } });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+      endpointAutoDisableAfterMs: 1_000,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(true);
+  });
+
+  it('does not auto-disable from another endpoint or tenant failure history', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 500 }));
+    const endpoint = createLocalEndpoint(storage, receiver.url, { eventTypes: ['user.current'] });
+    storage.db
+      .prepare('INSERT INTO apps (id, name, monthly_message_quota, created_at) VALUES (?, ?, ?, ?)')
+      .run('app_other_worker', 'Other Worker Tenant', null, NOW.toISOString());
+    const otherEndpoint = createEndpoint(storage, 'app_other_worker', {
+      url: 'https://example.com/webhooks/other-worker',
+      eventTypes: ['user.current'],
+    });
+    seedHistoricalAttempt(storage, otherEndpoint.endpoint.id, 'failed', new Date(NOW.getTime() - 5_000));
+    acceptMessage(storage, APP_ID, { eventType: 'user.current', payload: { id: 34 } });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+      endpointAutoDisableAfterMs: 1_000,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readEndpointEnabled(storage, endpoint.endpoint.id)).toBe(true);
+    expect(readEndpointEnabled(storage, otherEndpoint.endpoint.id)).toBe(true);
+  });
+
   it('times out slow receivers and leaves the task retryable', async () => {
     const storage = makeStorage();
     const receiver = await startReceiver(async () => {
@@ -615,6 +703,95 @@ function readDelivery(storage: PosthornStorage, deliveryId: string): DeliveryRow
   return storage.db
     .prepare('SELECT status, attempt_count, next_attempt_at, lease_expires_at, last_error FROM deliveries WHERE id = ?')
     .get(deliveryId) as unknown as DeliveryRow;
+}
+
+function readEndpointEnabled(storage: PosthornStorage, endpointId: string): boolean {
+  const row = storage.db.prepare('SELECT enabled FROM endpoints WHERE id = ?').get(endpointId) as
+    | { readonly enabled: unknown }
+    | undefined;
+  if (row === undefined) throw new Error(`Missing endpoint ${endpointId}.`);
+  return Number(row.enabled) === 1;
+}
+
+function seedHistoricalAttempt(
+  storage: PosthornStorage,
+  endpointId: string,
+  outcome: 'failed' | 'dead_letter' | 'succeeded',
+  attemptedAt: Date,
+): void {
+  const endpoint = storage.db.prepare('SELECT app_id FROM endpoints WHERE id = ?').get(endpointId) as
+    | { readonly app_id: unknown }
+    | undefined;
+  if (endpoint === undefined) throw new Error(`Missing endpoint ${endpointId}.`);
+
+  historicalDeliverySequence += 1;
+  const suffix = `${historicalDeliverySequence}`;
+  const messageId = `msg_worker_history_${suffix}`;
+  const deliveryId = `del_worker_history_${suffix}`;
+  const attemptId = `datt_worker_history_${suffix}`;
+  const attemptedAtIso = attemptedAt.toISOString();
+  storage.db
+    .prepare(
+      `
+        INSERT INTO messages (id, app_id, event_type, payload_json, idempotency_key, payload_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(messageId, String(endpoint.app_id), 'worker.history', '{}', null, null, attemptedAtIso);
+  storage.db
+    .prepare(
+      `
+        INSERT INTO deliveries (
+          id,
+          message_id,
+          endpoint_id,
+          status,
+          attempt_count,
+          next_attempt_at,
+          lease_expires_at,
+          last_error,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      deliveryId,
+      messageId,
+      endpointId,
+      outcome === 'succeeded' ? 'succeeded' : 'dead_letter',
+      1,
+      null,
+      null,
+      outcome === 'succeeded' ? null : 'http_500',
+      attemptedAtIso,
+      attemptedAtIso,
+    );
+  storage.db
+    .prepare(
+      `
+        INSERT INTO delivery_attempts (
+          id,
+          delivery_id,
+          attempt_number,
+          outcome,
+          response_status,
+          duration_ms,
+          failure_reason,
+          attempted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      attemptId,
+      deliveryId,
+      1,
+      outcome,
+      outcome === 'succeeded' ? 204 : 500,
+      1,
+      outcome === 'succeeded' ? null : 'http_500',
+      attemptedAtIso,
+    );
 }
 
 function readAttempts(storage: PosthornStorage, deliveryId: string): readonly AttemptRow[] {

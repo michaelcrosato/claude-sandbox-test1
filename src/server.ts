@@ -37,6 +37,7 @@ export async function startPosthornServer(
   });
   const worker = createDeliveryWorker(storage, {
     ...config.worker,
+    endpointAutoDisableAfterMs: config.endpointAutoDisableAfterMs,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });

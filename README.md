@@ -81,8 +81,9 @@ Key capabilities:
   double-fans-out
 - **Zero-downtime secret rotation** — old + new secrets both verify during a configurable
   overlap window (default 24h), so receivers migrate at their own pace
-- **Auto-disable dead endpoints** — a persistently-failing endpoint is automatically taken
-  out of rotation after a configurable window, capping wasted retries and billed operations
+- **Auto-disable dead endpoints** — after dead-lettered deliveries show a configured window
+  of failures with no recent success, an endpoint is taken out of rotation, capping wasted retries
+  and billed operations
 - **Per-attempt audit log** — "attempt 3: HTTP 503 after 1.2s" — the data you actually
   debug a flaky receiver from
 - **Usage metering + quota enforcement** — accepted messages and delivery operations (retries)
