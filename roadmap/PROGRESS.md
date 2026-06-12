@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0003 done (health/readiness HTTP server)
+
+**What:** Added a zero-dependency Node HTTP gateway with `start()`/`stop()`, unauthenticated `/healthz`, storage-backed `/readyz`, and in-memory HTTP integration tests. Security review blocked the first version for malformed request crashes and concurrent-start listener leaks; both were fixed with regression tests. A later review noted failed-listen cleanup, which was also fixed before merge.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0003/verify.log`. Fresh-context evaluator returned PASS. Security reviewer returned APPROVE after the lifecycle hardening fixes. Local checks passed: `npm run typecheck`, `npm test` (26 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Raw malformed request targets can bypass normal `fetch`-level assumptions, so the server now catches URL parse failures and keeps running.
+
+**Next step:** Merge PR #32 after the final state commit goes green, then start F-0005 (Standard Webhooks signing and verification utilities).
+
+---
+
 ## 2026-06-12 — F-0002 done (configuration and SQLite storage)
 
 **What:** Added `loadConfig`, documented POSTHORN_* defaults, built the first `node:sqlite` storage layer, and initialized the initial Posthorn tables idempotently. Security review blocked the first endpoint-secret schema, so the schema now separates non-secret headers from secret references and stores signing secrets as protected recoverable fields with key metadata.
