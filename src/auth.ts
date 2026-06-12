@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import type { PosthornStorage } from './storage';
 
@@ -54,6 +54,21 @@ export function authenticateApiKey(
     appId: String(row.app_id),
     apiKeyId: String(row.api_key_id),
   };
+}
+
+export function authenticateAdminToken(
+  configuredToken: string | null | undefined,
+  authorizationHeader: string | readonly string[] | undefined,
+): boolean {
+  if (configuredToken === null || configuredToken === undefined) return false;
+  const suppliedToken = parseBearerToken(authorizationHeader);
+  if (suppliedToken === null) return false;
+
+  return timingSafeEqual(hashTokenBytes(configuredToken), hashTokenBytes(suppliedToken));
+}
+
+function hashTokenBytes(token: string): Buffer {
+  return createHash('sha256').update(token, 'utf8').digest();
 }
 
 function parseBearerToken(authorizationHeader: string | readonly string[] | undefined): string | null {
