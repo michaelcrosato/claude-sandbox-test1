@@ -90,8 +90,8 @@ Key capabilities:
 | POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
 | POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
 | GET | `/v1/messages` | Bearer | planned | List messages, newest-first (keyset-paginated; filter by `?eventType=`, `?channel=`, and a `?after=`/`?before=` created-at window). |
-| GET | `/v1/messages/:id` | Bearer | planned | Read a message + per-endpoint delivery statuses. |
-| POST | `/v1/messages/:id/retry` | Bearer | planned | Replay a message's dead-lettered deliveries. |
+| GET | `/v1/messages/:id` | Bearer | implemented | Read a message + per-endpoint delivery statuses. |
+| POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
 | GET | `/v1/endpoints` | Bearer | implemented | List endpoints. |
 | POST | `/v1/endpoints` | Bearer | implemented | Create an endpoint (`201`; signing secret shown once). |
@@ -184,16 +184,6 @@ status.deliveries[0]?.status; // "pending" | "delivering" | "succeeded" | "dead_
 const replay = await client.retryMessage(message.id);
 replay.retried; // deliveries reset to pending with a fresh attempt budget
 
-// Rotate a signing secret — old secret keeps verifying during the overlap window:
-const rotated = await client.rotateEndpointSecret(endpoint.id); // default 24h overlap
-rotated.secret; // new primary — configure your receivers with it
-
-// Page through sent messages:
-let page = await client.listMessages({ limit: 50 });
-while (page.nextCursor !== null) {
-  page = await client.listMessages({ limit: 50, cursor: page.nextCursor });
-}
-
 // Per-attempt audit log:
 const { data } = await client.listMessageAttempts(message.id);
 data[0]; // { attemptNumber, outcome, responseStatus, durationMs, attemptedAt, ... }
@@ -202,6 +192,9 @@ data[0]; // { attemptNumber, outcome, responseStatus, durationMs, attemptedAt, .
 const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
+
+Endpoint secret rotation and message listing are planned future SDK methods; the
+current SDK only exposes routes that exist in `GET /openapi.json`.
 
 ### Receiving webhooks
 
@@ -237,7 +230,7 @@ posthorn client usage                                # quota for the current per
 posthorn client help                                 # full command list
 ```
 
-Read commands print JSON to stdout; mutating commands print a one-line confirmation.
+Commands print JSON to stdout, including one-time secrets returned by mutating calls.
 A non-2xx from the gateway becomes a single `API error <status> (<code>): …` line on
 stderr and a non-zero exit, so it composes in scripts.
 

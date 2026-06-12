@@ -3,6 +3,21 @@
   "description": "Posthorn — run by the AI operations engine",
   "version": "0.0.0",
   "private": true,
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "posthorn": "./dist/src/cli.js"
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc --outDir dist",
     "verify": "bash scripts/verify.sh",

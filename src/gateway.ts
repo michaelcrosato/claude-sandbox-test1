@@ -25,9 +25,11 @@ import {
 import {
   acceptMessage,
   acceptMessageBatch,
+  getMessageStatus,
   listMessageAttempts,
   MessageConflictError,
   MessageValidationError,
+  retryMessage,
 } from './messages';
 import { createOpenApiDocument } from './openapi';
 import { openStorage, type PosthornStorage } from './storage';
@@ -233,6 +235,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (
     url.pathname === '/v1/messages' ||
     url.pathname === '/v1/messages/batch' ||
+    messageIdFromPath(url.pathname) !== null ||
     messageAttemptsPathFromPath(url.pathname) !== null
   ) {
     await handleMessageRequest(context, url);
@@ -517,6 +520,39 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
     return;
   }
 
+  const messageId = messageIdFromPath(url.pathname);
+  if (messageId !== null) {
+    const isRetryRoute = url.pathname.endsWith('/retry');
+    if (!isRetryRoute && context.request.method === 'GET') {
+      const scoped = authenticateTenantRequest(context);
+      if (scoped === null) return;
+      const status = getMessageStatus(scoped.storage, scoped.tenant.appId, messageId);
+      if (status === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+
+      writeJson(context.response, 200, status);
+      return;
+    }
+
+    if (isRetryRoute && context.request.method === 'POST') {
+      const scoped = authenticateTenantRequest(context);
+      if (scoped === null) return;
+      const result = retryMessage(scoped.storage, scoped.tenant.appId, messageId, context.now());
+      if (result === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+
+      writeJson(context.response, 200, result);
+      return;
+    }
+
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
   if (context.request.method !== 'POST') {
     writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
     return;
@@ -589,6 +625,13 @@ function endpointIdFromPath(pathname: string): string | null {
 
 function messageAttemptsPathFromPath(pathname: string): string | null {
   const match = /^\/v1\/messages\/([^/]+)\/attempts$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
+function messageIdFromPath(pathname: string): string | null {
+  const retryMatch = /^\/v1\/messages\/([^/]+)\/retry$/.exec(pathname);
+  if (retryMatch !== null) return retryMatch[1];
+  const match = /^\/v1\/messages\/([^/]+)$/.exec(pathname);
   return match?.[1] ?? null;
 }
 

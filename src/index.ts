@@ -20,6 +20,20 @@ export type { AuthenticatedTenant } from './auth';
 export { API_KEY_PREFIX, authenticateAdminToken, authenticateApiKey, createApiKeySecret, hashApiKey } from './auth';
 export type { PosthornConfig, WorkerConfig } from './config';
 export { loadConfig } from './config';
+export type {
+  ClientRouteMapping,
+  CreateEndpointInput,
+  EndpointListResult,
+  EndpointReadResult,
+  ListMessageAttemptsInput,
+  PosthornClientOptions,
+  SendMessageInput,
+  UpdateEndpointInput,
+  UsageReadResult,
+} from './client';
+export { POSTHORN_CLIENT_ROUTES, PosthornApiError, PosthornClient } from './client';
+export type { CliOptions, CliStreams } from './cli';
+export { POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
 export type { CreateEndpointResult, EndpointRecord, EndpointValidationErrorCode } from './endpoints';
 export {
   createEndpoint,
@@ -46,16 +60,20 @@ export type {
   MessageAttemptsPage,
   MessageFanout,
   MessageRecord,
+  MessageStatusResult,
   MessageValidationErrorCode,
+  RetryMessageResult,
 } from './messages';
 export {
   acceptMessage,
   acceptMessageBatch,
   getMessage,
+  getMessageStatus,
   listDeliveriesForMessage,
   listMessageAttempts,
   MessageConflictError,
   MessageValidationError,
+  retryMessage,
 } from './messages';
 export type { ApiErrorCode, HttpMethod, ImplementedRoute, OpenApiDocument } from './openapi';
 export { API_ERROR_CODES, createOpenApiDocument, IMPLEMENTED_ROUTES } from './openapi';

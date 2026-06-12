@@ -578,7 +578,7 @@
       "dependencies": [
         "F-0013"
       ],
-      "status": "pending",
+      "status": "in_progress",
       "passes": false,
       "evidence": [],
       "attempts": 0,

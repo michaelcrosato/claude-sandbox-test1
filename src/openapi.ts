@@ -66,6 +66,8 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('delete', '/v1/endpoints/{id}', 'bearer', 'Delete endpoint', 204, ['Endpoints']),
   route('post', '/v1/messages', 'bearer', 'Accept message', 202, ['Messages']),
   route('post', '/v1/messages/batch', 'bearer', 'Accept message batch', 200, ['Messages']),
+  route('get', '/v1/messages/{id}', 'bearer', 'Fetch message status', 200, ['Messages']),
+  route('post', '/v1/messages/{id}/retry', 'bearer', 'Retry dead-lettered message deliveries', 200, ['Messages']),
   route('get', '/v1/messages/{id}/attempts', 'bearer', 'List message delivery attempts', 200, ['Messages']),
   route('get', '/v1/usage', 'bearer', 'Read tenant usage', 200, ['Usage']),
   route('get', '/v1/admin/apps', 'admin', 'List apps', 200, ['Admin']),
@@ -117,6 +119,15 @@ export function createOpenApiDocument(): OpenApiDocument {
           eventType: { type: 'string' },
           payload: {},
           createdAt: { type: 'string', format: 'date-time' },
+        }),
+        Delivery: objectSchema({
+          id: { type: 'string' },
+          messageId: { type: 'string' },
+          endpointId: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'delivering', 'succeeded', 'dead_letter'] },
+          attemptCount: { type: 'integer', minimum: 0 },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
         }),
         Fanout: objectSchema({
           matched: { type: 'integer', minimum: 0 },
@@ -248,6 +259,13 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
           },
         },
       });
+    case 'get /v1/messages/{id}':
+      return objectSchema({
+        message: { $ref: '#/components/schemas/Message' },
+        deliveries: { type: 'array', items: { $ref: '#/components/schemas/Delivery' } },
+      });
+    case 'post /v1/messages/{id}/retry':
+      return objectSchema({ retried: { type: 'integer', minimum: 0 } });
     case 'get /v1/messages/{id}/attempts':
       return objectSchema({
         data: { type: 'array', items: { type: 'object' } },

@@ -26,6 +26,15 @@ export interface DeliveryTaskRecord {
   readonly updatedAt: string;
 }
 
+export interface MessageStatusResult {
+  readonly message: MessageRecord;
+  readonly deliveries: readonly DeliveryTaskRecord[];
+}
+
+export interface RetryMessageResult {
+  readonly retried: number;
+}
+
 export interface DeliveryAttemptAuditRecord {
   readonly id: string;
   readonly deliveryId: string;
@@ -235,6 +244,20 @@ export function getMessage(storage: PosthornStorage, appId: string, messageId: s
   return row === undefined ? null : messageFromRow(row);
 }
 
+export function getMessageStatus(
+  storage: PosthornStorage,
+  appId: string,
+  messageId: string,
+): MessageStatusResult | null {
+  const message = getMessage(storage, appId, messageId);
+  if (message === null) return null;
+
+  return {
+    message,
+    deliveries: listDeliveriesForMessage(storage, appId, messageId),
+  };
+}
+
 export function listDeliveriesForMessage(
   storage: PosthornStorage,
   appId: string,
@@ -259,6 +282,35 @@ export function listDeliveriesForMessage(
     .all(appId, messageId) as unknown as DeliveryRow[];
 
   return rows.map(deliveryFromRow);
+}
+
+export function retryMessage(storage: PosthornStorage, appId: string, messageId: string, now = new Date()): RetryMessageResult | null {
+  if (!messageBelongsToTenant(storage, appId, messageId)) return null;
+
+  const updatedAt = now.toISOString();
+  const result = storage.db
+    .prepare(
+      `
+        UPDATE deliveries
+        SET status = 'pending',
+            attempt_count = 0,
+            next_attempt_at = NULL,
+            lease_expires_at = NULL,
+            last_error = NULL,
+            updated_at = ?
+        WHERE message_id = ?
+          AND status = 'dead_letter'
+          AND EXISTS (
+            SELECT 1
+            FROM messages
+            WHERE messages.id = deliveries.message_id
+              AND messages.app_id = ?
+          )
+      `,
+    )
+    .run(updatedAt, messageId, appId);
+
+  return { retried: Number(result.changes) };
 }
 
 export function listMessageAttempts(
