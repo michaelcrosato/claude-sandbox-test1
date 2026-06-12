@@ -291,6 +291,8 @@ function expectValidOpenApi31(document: ReturnType<typeof createOpenApiDocument>
       expect(parameterNames(operation.parameters)).toEqual(pathParameterNames(path));
       if (method === 'get' && path === '/v1/messages') {
         expect(queryParameterNames(operation.parameters)).toEqual(['limit', 'cursor', 'eventType', 'after', 'before']);
+      } else {
+        expect(queryParameterNames(operation.parameters)).toEqual([]);
       }
       if (route.auth === 'none') {
         expect(operation.security).toBeUndefined();

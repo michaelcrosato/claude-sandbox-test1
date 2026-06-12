@@ -538,16 +538,20 @@ function parseEventTypeFilter(value: unknown): string | null {
 
 function parseDateTimeFilter(value: unknown, name: 'after' | 'before'): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== 'string' || value.trim() === '' || !/[tT]/.test(value)) {
+  if (typeof value !== 'string' || !isCanonicalUtcDateTime(value)) {
     throw new MessageValidationError(`${name} must be a valid date-time string.`);
   }
 
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    throw new MessageValidationError(`${name} must be a valid date-time string.`);
-  }
-
   return new Date(timestamp).toISOString();
+}
+
+function isCanonicalUtcDateTime(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return false;
+
+  return new Date(timestamp).toISOString() === (value.includes('.') ? value : value.replace('Z', '.000Z'));
 }
 
 function generateId(prefix: string): string {

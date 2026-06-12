@@ -632,6 +632,18 @@ describe('message intake HTTP route', () => {
     const invalidEventType = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?eventType=bad space', TENANT_A_KEY);
     const invalidAfter = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?after=2026-06-12', TENANT_A_KEY);
     const invalidBefore = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?before=not-a-date', TENANT_A_KEY);
+    const invalidCalendarDate = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      '/v1/messages?after=2026-02-30T00%3A00%3A00.000Z',
+      TENANT_A_KEY,
+    );
+    const timezoneLessDate = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      '/v1/messages?after=2026-06-12T12%3A00%3A00',
+      TENANT_A_KEY,
+    );
     const invertedWindow = await requestJson<ErrorJson>(
       address,
       'GET',
@@ -655,6 +667,10 @@ describe('message intake HTTP route', () => {
     expect(invalidAfter.body.error.code).toBe('invalid_request');
     expect(invalidBefore.status).toBe(400);
     expect(invalidBefore.body.error.code).toBe('invalid_request');
+    expect(invalidCalendarDate.status).toBe(400);
+    expect(invalidCalendarDate.body.error.code).toBe('invalid_request');
+    expect(timezoneLessDate.status).toBe(400);
+    expect(timezoneLessDate.body.error.code).toBe('invalid_request');
     expect(invertedWindow.status).toBe(400);
     expect(invertedWindow.body.error.code).toBe('invalid_request');
     expect(missingAuth.status).toBe(401);
