@@ -51,8 +51,10 @@
       ],
       "status": "in_progress",
       "passes": false,
-      "evidence": [],
-      "attempts": 0,
+      "evidence": [
+        "roadmap/evidence/F-0002/verify.log"
+      ],
+      "attempts": 1,
       "blocked_reason": null,
       "forbidden_paths": [
         ".claude/**",

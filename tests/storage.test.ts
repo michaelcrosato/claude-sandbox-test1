@@ -38,6 +38,26 @@ describe('openStorage', () => {
     }
   });
 
+  it('keeps endpoint secret storage recoverable and avoids plaintext secret headers', () => {
+    const storage = openStorage({ dataDir: ':memory:' });
+    try {
+      const columns = storage.db
+        .prepare('PRAGMA table_info(endpoints)')
+        .all()
+        .map((row) => String(row.name));
+
+      expect(columns).toContain('non_secret_headers_json');
+      expect(columns).toContain('secret_header_refs_json');
+      expect(columns).toContain('signing_secret_ciphertext');
+      expect(columns).toContain('signing_secret_key_version');
+      expect(columns).toContain('signing_secret_nonce');
+      expect(columns).not.toContain('headers_json');
+      expect(columns).not.toContain('signing_secret_hash');
+    } finally {
+      storage.close();
+    }
+  });
+
   it('opens a file-backed SQLite database and persists synthetic data', () => {
     const dataDir = makeTempDir();
     const first = openStorage({ dataDir });

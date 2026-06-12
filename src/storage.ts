@@ -47,8 +47,11 @@ CREATE TABLE IF NOT EXISTS endpoints (
   app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
   url TEXT NOT NULL,
   event_types_json TEXT,
-  headers_json TEXT,
-  signing_secret_hash TEXT NOT NULL,
+  non_secret_headers_json TEXT,
+  secret_header_refs_json TEXT,
+  signing_secret_ciphertext TEXT NOT NULL,
+  signing_secret_key_version TEXT NOT NULL,
+  signing_secret_nonce TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
