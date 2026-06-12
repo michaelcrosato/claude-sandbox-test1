@@ -8,7 +8,9 @@ import {
   listDeliveriesForMessage,
   loadConfig,
   openStorage,
+  runDeliveryWorkerTick,
   updateEndpoint,
+  type DeliveryFetch,
   type Gateway,
   type GatewayAddress,
   type PosthornStorage,
@@ -17,6 +19,7 @@ import {
 const TENANT_A_KEY = `phk_${Buffer.alloc(32, 11).toString('base64url')}`;
 const TENANT_B_KEY = `phk_${Buffer.alloc(32, 12).toString('base64url')}`;
 const REVOKED_KEY = `phk_${Buffer.alloc(32, 13).toString('base64url')}`;
+const NOW = new Date('2026-06-12T12:00:00.000Z');
 
 const activeGateways: Gateway[] = [];
 
@@ -36,6 +39,24 @@ interface FanoutJson {
 interface AcceptedMessageJson {
   readonly message: MessageJson;
   readonly fanout: FanoutJson;
+}
+
+interface AttemptJson {
+  readonly id: string;
+  readonly deliveryId: string;
+  readonly messageId: string;
+  readonly endpointId: string;
+  readonly attemptNumber: number;
+  readonly outcome: string;
+  readonly attemptedAt: string;
+  readonly durationMs: number | null;
+  readonly responseStatus: number | null;
+  readonly failureReason: string | null;
+}
+
+interface AttemptsPageJson {
+  readonly data: readonly AttemptJson[];
+  readonly nextCursor: string | null;
 }
 
 interface ErrorJson {
@@ -324,6 +345,173 @@ describe('message intake HTTP route', () => {
     expect(retry.body.fanout.endpointIds).toEqual([originalEndpoint.id]);
     expect(retry.body.fanout.endpointIds).not.toContain(laterEndpoint.id);
     expect(countDeliveries(storage, 'app_a')).toBe(1);
+  });
+
+  it('returns successful delivery attempts for the authenticated tenant', async () => {
+    const { address, storage } = await startSeededGateway();
+    const endpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/success-attempts',
+      eventTypes: ['user.created'],
+    }).endpoint;
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 11 },
+    });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: async (url) => {
+        expect(url).toBe(endpoint.url);
+        return { status: 204 };
+      },
+    });
+    const attempts = await requestJson<AttemptsPageJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/attempts`,
+      TENANT_A_KEY,
+    );
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(attempts.status).toBe(200);
+    expect(attempts.body.nextCursor).toBeNull();
+    expect(attempts.body.data).toHaveLength(1);
+    expect(attempts.body.data[0]).toEqual({
+      id: expect.stringMatching(/^datt_/),
+      deliveryId: accepted.body.fanout.deliveryIds[0],
+      messageId: accepted.body.message.id,
+      endpointId: endpoint.id,
+      attemptNumber: 1,
+      outcome: 'succeeded',
+      attemptedAt: NOW.toISOString(),
+      durationMs: expect.any(Number),
+      responseStatus: 204,
+      failureReason: null,
+    });
+  });
+
+  it('returns failed delivery attempts with response status and failure reason', async () => {
+    const { address, storage } = await startSeededGateway();
+    const endpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/failing-attempts',
+      eventTypes: ['invoice.paid'],
+    }).endpoint;
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 'inv_11' },
+    });
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: async () => ({ status: 503 }),
+    });
+    const attempts = await requestJson<AttemptsPageJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/attempts`,
+      TENANT_A_KEY,
+    );
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 0 });
+    expect(attempts.status).toBe(200);
+    expect(attempts.body.data).toEqual([
+      {
+        id: expect.stringMatching(/^datt_/),
+        deliveryId: accepted.body.fanout.deliveryIds[0],
+        messageId: accepted.body.message.id,
+        endpointId: endpoint.id,
+        attemptNumber: 1,
+        outcome: 'failed',
+        attemptedAt: NOW.toISOString(),
+        durationMs: expect.any(Number),
+        responseStatus: 503,
+        failureReason: 'http_503',
+      },
+    ]);
+  });
+
+  it('paginates message attempts newest-first', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/paginated-attempts',
+      eventTypes: ['user.updated'],
+    });
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.updated',
+      payload: { id: 12 },
+    });
+    let nowMs = NOW.getTime();
+    const statuses = [500, 502, 200];
+    const deliveryFetch: DeliveryFetch = async () => ({ status: statuses.shift() ?? 200 });
+
+    await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      baseBackoffMs: 1,
+      maxBackoffMs: 1,
+      fetch: deliveryFetch,
+    });
+    nowMs += 1;
+    await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      baseBackoffMs: 1,
+      maxBackoffMs: 1,
+      fetch: deliveryFetch,
+    });
+    nowMs += 1;
+    await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      baseBackoffMs: 1,
+      maxBackoffMs: 1,
+      fetch: deliveryFetch,
+    });
+
+    const firstPage = await requestJson<AttemptsPageJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/attempts?limit=2`,
+      TENANT_A_KEY,
+    );
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.data.map((attempt) => attempt.attemptNumber)).toEqual([3, 2]);
+    expect(firstPage.body.data.map((attempt) => attempt.responseStatus)).toEqual([200, 502]);
+    expect(firstPage.body.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await requestJson<AttemptsPageJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/attempts?limit=2&cursor=${firstPage.body.nextCursor}`,
+      TENANT_A_KEY,
+    );
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.data.map((attempt) => attempt.attemptNumber)).toEqual([1]);
+    expect(secondPage.body.data[0]?.responseStatus).toBe(500);
+    expect(secondPage.body.nextCursor).toBeNull();
+  });
+
+  it('does not expose another tenant message attempts', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/private-attempts',
+      eventTypes: ['user.deleted'],
+    });
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.deleted',
+      payload: { id: 13 },
+    });
+    await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: async () => ({ status: 204 }),
+    });
+
+    const otherTenant = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/attempts`,
+      TENANT_B_KEY,
+    );
+
+    expect(otherTenant.status).toBe(404);
+    expect(otherTenant.body).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
   });
 });
 

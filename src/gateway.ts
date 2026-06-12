@@ -11,7 +11,7 @@ import {
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
-import { acceptMessage, MessageConflictError, MessageValidationError } from './messages';
+import { acceptMessage, listMessageAttempts, MessageConflictError, MessageValidationError } from './messages';
 import { openStorage, type PosthornStorage } from './storage';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
@@ -186,8 +186,8 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
-  if (url.pathname === '/v1/messages') {
-    await handleMessageRequest(context);
+  if (url.pathname === '/v1/messages' || messageAttemptsPathFromPath(url.pathname) !== null) {
+    await handleMessageRequest(context, url);
     return;
   }
 
@@ -270,7 +270,33 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
 }
 
-async function handleMessageRequest(context: RequestContext): Promise<void> {
+async function handleMessageRequest(context: RequestContext, url: URL): Promise<void> {
+  const attemptsMessageId = messageAttemptsPathFromPath(url.pathname);
+  if (attemptsMessageId !== null) {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const scoped = authenticateTenantRequest(context);
+    if (scoped === null) return;
+    try {
+      const attempts = listMessageAttempts(scoped.storage, scoped.tenant.appId, attemptsMessageId, {
+        limit: url.searchParams.get('limit'),
+        cursor: url.searchParams.get('cursor'),
+      });
+      if (attempts === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+
+      writeJson(context.response, 200, attempts);
+    } catch (error) {
+      writeMessageError(context.response, error);
+    }
+    return;
+  }
+
   if (context.request.method !== 'POST') {
     writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
     return;
@@ -307,6 +333,11 @@ function authenticateTenantRequest(context: RequestContext): ScopedRequest | nul
 
 function endpointIdFromPath(pathname: string): string | null {
   const match = /^\/v1\/endpoints\/([^/]+)$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
+function messageAttemptsPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/messages\/([^/]+)\/attempts$/.exec(pathname);
   return match?.[1] ?? null;
 }
 

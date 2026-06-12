@@ -2,11 +2,11 @@
 
 ## Shipped this week
 
-The first product scaffold, SQLite storage foundation, health/readiness HTTP server, Standard Webhooks utilities, and tenant endpoint CRUD are merged. Posthorn now has a tested TypeScript entry point, configuration loading, database initialization, basic liveness/readiness probes, signing/verification helpers, and endpoint registration.
+The product scaffold, SQLite storage foundation, health/readiness HTTP server, Standard Webhooks utilities, tenant endpoint CRUD, message intake, idempotent retries, and crash-safe delivery worker are merged. Posthorn now has the core path for accepting, signing, retrying, and recording webhook deliveries.
 
 ## Ready for your QA
 
-F-0006 is ready in PR #35. It adds bearer-authenticated message intake and pending fanout queue creation for matching endpoints, with green CI. There is still no customer-facing screen; the proof is the green automated check on the pull request.
+F-0009 is ready in PR #38. It adds a bearer-authenticated message attempt audit endpoint so a tenant can inspect webhook send attempts, newest first, without seeing another tenant's data.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-✅ Automated checks passed on PR #35. The latest local product checks passed with 58 tests.
+✅ Automated checks passed on PR #38. The latest local product checks passed with 77 tests.

@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0009 done (per-attempt audit log)
+
+**What:** Added `GET /v1/messages/:id/attempts` for tenant-authenticated delivery attempt history. The route returns newest-first attempt rows with attempt number, outcome, timestamp, duration, response status, failure reason, delivery ID, message ID, and endpoint ID; missing and other-tenant messages both return `404`.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0009/verify.log`. Fresh-context evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/messages-http.test.ts`, `npx vitest run tests/messages-http.test.ts tests/worker.test.ts`, `npm test` (77 tests), `npm run lint`, `npm run build`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is the authoritative full gate and passed.
+
+**Next step:** Merge PR #38 after the final evidence/state commit goes green, then start F-0010 (admin tenant and API-key management) unless a higher-priority unblocked feature appears.
+
+---
+
 ## 2026-06-12 — F-0008 done (idempotent message intake)
 
 **What:** Added optional `idempotencyKey` support for `POST /v1/messages`. Same-tenant retries with the same canonical request now return the original accepted message and delivery IDs without creating new fanout; changed retries return `409 idempotency_conflict`. Idempotency keys are tenant-scoped through the existing SQLite uniqueness constraint.
