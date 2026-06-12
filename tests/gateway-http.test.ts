@@ -1,7 +1,8 @@
 import { connect } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createGateway, loadConfig, type Gateway } from '../src/index';
+import { createGateway, loadConfig, type Gateway, type PosthornStorage } from '../src/index';
 
 const activeGateways: Gateway[] = [];
 
@@ -39,6 +40,45 @@ describe('HTTP gateway', () => {
     activeGateways.pop();
 
     await expect(fetch(`${first.url}/healthz`)).rejects.toThrow();
+  });
+
+  it('cleans up storage when the server cannot listen', async () => {
+    let closed = false;
+    const db = new DatabaseSync(':memory:');
+    const gateway = createGateway(
+      {
+        ...loadConfig({
+          POSTHORN_HOST: '127.0.0.1',
+          POSTHORN_DATA_DIR: ':memory:',
+        }),
+        port: -1,
+      },
+      {
+        openStorage: () => makeTrackedStorage(db, () => {
+          closed = true;
+        }),
+      },
+    );
+    activeGateways.push(gateway);
+
+    await expect(gateway.start()).rejects.toThrow();
+    expect(closed).toBe(true);
+    await expect(gateway.stop()).resolves.toBeUndefined();
+    activeGateways.pop();
+  });
+
+  it('treats absolute-form health targets as health checks', async () => {
+    const gateway = makeGateway();
+    activeGateways.push(gateway);
+    const address = await gateway.start();
+
+    const rawResponse = await sendRawRequest(
+      address.port,
+      `GET http://127.0.0.1:${address.port}/healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+    );
+
+    expect(rawResponse).toContain('HTTP/1.1 200 OK');
+    expect(rawResponse).toContain('"status":"ok"');
   });
 
   it('serves unauthenticated health checks', async () => {
@@ -131,4 +171,21 @@ function sendRawRequest(port: number, payload: string): Promise<string> {
       resolve(Buffer.concat(chunks).toString('utf8'));
     });
   });
+}
+
+function makeTrackedStorage(db: DatabaseSync, onClose: () => void): PosthornStorage {
+  return {
+    databasePath: ':memory:',
+    db,
+    initializeSchema() {
+      db.exec('CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY)');
+    },
+    listTables() {
+      return [];
+    },
+    close() {
+      onClose();
+      db.close();
+    },
+  };
 }

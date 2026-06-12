@@ -59,8 +59,12 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
       }
     },
     async stop() {
-      if (startPromise !== null) {
-        await startPromise;
+      try {
+        if (startPromise !== null) {
+          await startPromise;
+        }
+      } catch {
+        // Failed starts clean up their own partial resources; stop remains safe.
       }
       const activeServer = server;
       const activeStorage = storage;
@@ -96,8 +100,20 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
 
     const host = normalizedConfig.host ?? '0.0.0.0';
     const port = normalizedConfig.port ?? 3000;
-    address = await listen(server, host, port);
-    return address;
+    try {
+      address = await listen(server, host, port);
+      return address;
+    } catch (error) {
+      const failedServer = server;
+      const failedStorage = storage;
+      server = null;
+      storage = null;
+      address = null;
+      readinessError = null;
+      await closeServer(failedServer);
+      failedStorage?.close();
+      throw error;
+    }
   }
 }
 
