@@ -11,6 +11,7 @@ import {
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
+import { acceptMessage, MessageValidationError } from './messages';
 import { openStorage, type PosthornStorage } from './storage';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
@@ -185,6 +186,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
+  if (url.pathname === '/v1/messages') {
+    await handleMessageRequest(context);
+    return;
+  }
+
   writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
 }
 
@@ -192,13 +198,13 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   const endpointId = endpointIdFromPath(url.pathname);
   if (url.pathname === '/v1/endpoints') {
     if (context.request.method === 'GET') {
-      const scoped = authenticateEndpointRequest(context);
+      const scoped = authenticateTenantRequest(context);
       if (scoped === null) return;
       writeJson(context.response, 200, { data: listEndpoints(scoped.storage, scoped.tenant.appId) });
       return;
     }
     if (context.request.method === 'POST') {
-      const scoped = authenticateEndpointRequest(context);
+      const scoped = authenticateTenantRequest(context);
       if (scoped === null) return;
       const body = await readJsonBody(context);
       if (body === null) return;
@@ -220,7 +226,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   }
 
   if (context.request.method === 'GET') {
-    const scoped = authenticateEndpointRequest(context);
+    const scoped = authenticateTenantRequest(context);
     if (scoped === null) return;
     const endpoint = getEndpoint(scoped.storage, scoped.tenant.appId, endpointId);
     if (endpoint === null) {
@@ -232,7 +238,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   }
 
   if (context.request.method === 'PATCH') {
-    const scoped = authenticateEndpointRequest(context);
+    const scoped = authenticateTenantRequest(context);
     if (scoped === null) return;
     const body = await readJsonBody(context);
     if (body === null) return;
@@ -250,7 +256,7 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   }
 
   if (context.request.method === 'DELETE') {
-    const scoped = authenticateEndpointRequest(context);
+    const scoped = authenticateTenantRequest(context);
     if (scoped === null) return;
     if (!deleteEndpoint(scoped.storage, scoped.tenant.appId, endpointId)) {
       writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
@@ -264,7 +270,25 @@ async function handleEndpointRequest(context: RequestContext, url: URL): Promise
   writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
 }
 
-function authenticateEndpointRequest(context: RequestContext): ScopedRequest | null {
+async function handleMessageRequest(context: RequestContext): Promise<void> {
+  if (context.request.method !== 'POST') {
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  const scoped = authenticateTenantRequest(context);
+  if (scoped === null) return;
+  const body = await readJsonBody(context);
+  if (body === null) return;
+
+  try {
+    writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body));
+  } catch (error) {
+    writeMessageError(context.response, error);
+  }
+}
+
+function authenticateTenantRequest(context: RequestContext): ScopedRequest | null {
   const storage = context.getStorage();
   const readinessError = context.getReadinessError();
   if (storage === null || readinessError !== null) {
@@ -376,6 +400,15 @@ function readRequestBody(request: IncomingMessage, maxBodyBytes: number): Promis
 
 function writeEndpointError(response: ServerResponse, error: unknown): void {
   if (error instanceof EndpointValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
+function writeMessageError(response: ServerResponse, error: unknown): void {
+  if (error instanceof MessageValidationError) {
     writeJson(response, 400, { error: { code: error.code, message: error.message } });
     return;
   }

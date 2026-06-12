@@ -13,6 +13,16 @@ export {
 } from './endpoints';
 export type { Gateway, GatewayAddress, GatewayConfig, GatewayDependencies } from './gateway';
 export { createGateway } from './gateway';
+export type {
+  AcceptMessageResult,
+  DeliveryStatus,
+  DeliveryTaskRecord,
+  JsonValue,
+  MessageFanout,
+  MessageRecord,
+  MessageValidationErrorCode,
+} from './messages';
+export { acceptMessage, getMessage, listDeliveriesForMessage, MessageValidationError } from './messages';
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
 export type {
