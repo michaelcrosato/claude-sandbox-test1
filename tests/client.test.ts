@@ -9,6 +9,7 @@ import {
   PosthornApiError,
   PosthornClient,
   runDeliveryWorkerTick,
+  type DeliveryFetch,
   type Gateway,
   type GatewayAddress,
   type PosthornStorage,
@@ -112,6 +113,123 @@ describe('PosthornClient', () => {
     expect((await client.listEndpoints()).data).toEqual([]);
   });
 
+  it('exercises SDK helpers for implemented tenant routes added after the first client surface', async () => {
+    const delivered: DeliveredRequest[] = [];
+    const { address, storage } = await startSeededGateway({
+      deliveryFetch: async (url, init) => {
+        delivered.push({ url, init });
+        return { status: 204 };
+      },
+    });
+    const client = new PosthornClient({ baseUrl: address.url, apiKey: TENANT_KEY });
+
+    const eventType = await client.createEventType({
+      eventType: 'sdk.catalog',
+      description: 'SDK catalog event',
+      schemaExample: { id: 123 },
+    });
+    expect(eventType.eventType).toMatchObject({
+      id: expect.stringMatching(/^evt_/),
+      eventType: 'sdk.catalog',
+      description: 'SDK catalog event',
+      schemaExample: { id: 123 },
+    });
+    await expect(client.createEventType({ name: 'sdk.catalog' })).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+    });
+    expect((await client.listEventTypes()).data.map((item) => item.id)).toEqual([eventType.eventType.id]);
+    expect(await client.getEventType(eventType.eventType.id)).toEqual({ eventType: eventType.eventType });
+    const updatedEventType = await client.updateEventType(eventType.eventType.id, {
+      description: 'Updated SDK catalog event',
+      schemaExample: { id: 456 },
+    });
+    expect(updatedEventType.eventType).toMatchObject({
+      description: 'Updated SDK catalog event',
+      schemaExample: { id: 456 },
+    });
+
+    const endpoint = await client.createEndpoint({
+      url: 'https://example.com/hooks/sdk-parity',
+      eventTypes: ['sdk.catalog'],
+    });
+    const rotated = await client.rotateEndpointSecret(endpoint.endpoint.id, { overlapSeconds: 120 });
+    expect(rotated).toMatchObject({
+      endpoint: { id: endpoint.endpoint.id },
+      previousSecretExpiresAt: '2026-06-12T12:02:00.000Z',
+    });
+    expect(rotated.secret).toMatch(/^whsec_/);
+    expect(JSON.stringify(await client.getEndpoint(endpoint.endpoint.id))).not.toContain(rotated.secret);
+
+    const test = await client.testEndpoint(endpoint.endpoint.id, { eventType: 'sdk.catalog' });
+    expect(test.test).toMatchObject({
+      endpointId: endpoint.endpoint.id,
+      eventType: 'sdk.catalog',
+      payloadSource: 'schema_example',
+      outcome: 'succeeded',
+      responseStatus: 204,
+    });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].url).toBe('https://example.com/hooks/sdk-parity');
+
+    const first = await client.sendMessage({ eventType: 'sdk.catalog', payload: { id: 1 } });
+    const second = await client.sendMessage({ eventType: 'sdk.catalog', payload: { id: 2 } });
+    const messagePage = await client.listMessages({ limit: 1 });
+    expect(messagePage.data).toHaveLength(1);
+    expect(messagePage.nextCursor).toEqual(expect.any(String));
+    const nextMessagePage = await client.listMessages({ limit: 1, cursor: messagePage.nextCursor ?? '' });
+    expect(new Set([messagePage.data[0]?.id, nextMessagePage.data[0]?.id])).toEqual(
+      new Set([first.message.id, second.message.id]),
+    );
+
+    await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+      fetch: async () => ({ status: 503 }),
+    });
+
+    const endpointDeliveries = await client.listEndpointDeliveries(endpoint.endpoint.id, { limit: 5 });
+    expect(endpointDeliveries.data.map((delivery) => delivery.status)).toEqual(['dead_letter', 'dead_letter']);
+
+    const endpointStats = await client.getEndpointStats(endpoint.endpoint.id, { days: 3 });
+    expect(endpointStats.stats).toMatchObject({
+      endpointId: endpoint.endpoint.id,
+      total: 2,
+      byStatus: {
+        pending: 0,
+        delivering: 0,
+        succeeded: 0,
+        dead_letter: 2,
+      },
+      failureReasons: [{ reason: 'http_503', count: 2 }],
+    });
+
+    const deliveries = await client.listDeliveries({
+      status: 'dead_letter',
+      endpointId: endpoint.endpoint.id,
+      eventType: 'sdk.catalog',
+      failureReason: 'http_503',
+      limit: 5,
+    });
+    expect(deliveries.data).toHaveLength(2);
+    expect(new Set(deliveries.data.map((delivery) => delivery.messageId))).toEqual(
+      new Set([first.message.id, second.message.id]),
+    );
+
+    const portal = await client.createPortalSession({ endpointId: endpoint.endpoint.id, expiresInSeconds: 600 });
+    expect(portal.session).toMatchObject({
+      id: expect.stringMatching(/^ps_/),
+      appId: 'app_sdk',
+      endpointId: endpoint.endpoint.id,
+      scope: 'endpoint_management',
+      expiresAt: '2026-06-12T12:10:00.000Z',
+    });
+    expect(portal.session.token).toMatch(/^phs_/);
+
+    await client.deleteEventType(eventType.eventType.id);
+    expect((await client.listEventTypes()).data).toEqual([]);
+  });
+
   it('throws PosthornApiError with status, stable code, and parsed response body', async () => {
     const { address } = await startSeededGateway();
     const invalidClient = new PosthornClient({ baseUrl: address.url, apiKey: OTHER_TENANT_KEY });
@@ -154,12 +272,24 @@ describe('PosthornClient', () => {
         'GET /v1/endpoints/{id}',
         'PATCH /v1/endpoints/{id}',
         'DELETE /v1/endpoints/{id}',
+        'POST /v1/endpoints/{id}/rotate-secret',
+        'POST /v1/endpoints/{id}/test',
+        'GET /v1/endpoints/{id}/deliveries',
+        'GET /v1/endpoints/{id}/stats',
+        'GET /v1/deliveries',
+        'GET /v1/event-types',
+        'POST /v1/event-types',
+        'GET /v1/event-types/{id}',
+        'PATCH /v1/event-types/{id}',
+        'DELETE /v1/event-types/{id}',
         'POST /v1/messages',
         'POST /v1/messages/batch',
+        'GET /v1/messages',
         'GET /v1/messages/{id}',
         'POST /v1/messages/{id}/retry',
         'GET /v1/messages/{id}/attempts',
         'GET /v1/usage',
+        'POST /v1/portal/sessions',
       ]),
     );
     for (const route of sdkRoutes) {
@@ -168,7 +298,13 @@ describe('PosthornClient', () => {
   });
 });
 
-async function startSeededGateway(): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
+interface StartSeededGatewayOptions {
+  readonly deliveryFetch?: DeliveryFetch;
+}
+
+async function startSeededGateway(
+  options: StartSeededGatewayOptions = {},
+): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
   const storage = openStorage({ dataDir: ':memory:' });
   seedTenant(storage, 'app_sdk', 'SDK Tenant', TENANT_KEY);
   const gateway = createGateway(
@@ -180,10 +316,16 @@ async function startSeededGateway(): Promise<{ address: GatewayAddress; storage:
     {
       openStorage: () => storage,
       now: () => NOW,
+      ...(options.deliveryFetch === undefined ? {} : { deliveryFetch: options.deliveryFetch }),
     },
   );
   activeGateways.push(gateway);
   return { address: await gateway.start(), storage };
+}
+
+interface DeliveredRequest {
+  readonly url: string;
+  readonly init: Parameters<DeliveryFetch>[1];
 }
 
 function seedTenant(storage: PosthornStorage, appId: string, name: string, apiKey: string): void {

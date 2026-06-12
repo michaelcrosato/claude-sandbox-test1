@@ -203,16 +203,35 @@ replay.retried; // deliveries reset to pending with a fresh attempt budget
 const { data } = await client.listMessageAttempts(message.id);
 data[0]; // { attemptNumber, outcome, responseStatus, durationMs, attemptedAt, ... }
 
+// Browse messages and deliveries:
+const messages = await client.listMessages({ limit: 25 });
+const endpointDeliveries = await client.listEndpointDeliveries(endpoint.endpoint.id, { limit: 25 });
+const endpointStats = await client.getEndpointStats(endpoint.endpoint.id, { days: 7 });
+const deliveries = await client.listDeliveries({
+  status: "dead_letter",
+  endpointId: endpoint.endpoint.id,
+  eventType: "user.created",
+  limit: 25,
+});
+
+// Event catalog, test-send, portal sessions, and secret rotation:
+const eventType = await client.createEventType({
+  eventType: "user.created",
+  schemaExample: { id: 42 },
+});
+await client.updateEventType(eventType.eventType.id, { description: "A user joined." });
+const test = await client.testEndpoint(endpoint.endpoint.id, { eventType: "user.created" });
+const portal = await client.createPortalSession({ endpointId: endpoint.endpoint.id });
+const rotated = await client.rotateEndpointSecret(endpoint.endpoint.id, { overlapSeconds: 3600 });
+rotated.secret; // new whsec_ value, shown once
+
 // Usage and quota for the current month:
 const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-TypeScript SDK helpers for endpoint secret rotation, endpoint observability, app-wide delivery listing, and typed message listing are planned.
-Endpoint secret rotation, endpoint delivery history/stats, app-wide delivery listing, message listing, the event type catalog, endpoint test-send, and portal session routes
-are available over HTTP/OpenAPI now; typed SDK helpers for them can be added without
-changing the wire contract.
-The Python SDK below already includes endpoint observability and app-wide delivery listing helpers.
+The tenant TypeScript SDK covers the implemented tenant routes. Admin/control-plane helpers remain
+separate from the tenant client surface.
 
 ### Receiving webhooks
 
