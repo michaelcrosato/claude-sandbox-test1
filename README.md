@@ -16,7 +16,8 @@ This checkout is in the product-foundation phase: it has the public TypeScript e
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
 queue creation, idempotent message retries, the importable retry delivery worker, the per-attempt
-audit log route, admin tenant/API-key provisioning, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
+audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
+build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the target Posthorn product contract being built through `roadmap/features.json`;
 not every listed route or client method is implemented yet.
 

@@ -55,6 +55,15 @@ export {
 } from './messages';
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
+export type { UsageQuotaExceededErrorCode, UsageQuotaStatus, UsageSummary } from './usage';
+export {
+  assertMessageQuotaAvailable,
+  getUsageSummary,
+  incrementAcceptedMessages,
+  incrementDeliveryAttemptsForDelivery,
+  usageMonth,
+  UsageQuotaExceededError,
+} from './usage';
 export type {
   DeliveryAttemptOutcome,
   DeliveryFailureReason,

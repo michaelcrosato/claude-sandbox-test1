@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0011 done (usage metering and quota enforcement)
+
+**What:** Added current-month usage metering for accepted messages and delivery attempts. Tenants can read `GET /v1/usage`, admins can read `GET /v1/admin/apps/:id/usage`, and capped tenants receive `429 quota_exceeded` before new message fanout work is created. Idempotent retries return the original send without double-counting usage.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0011/verify.log`. Fresh-context evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/usage-http.test.ts tests/storage.test.ts`, `npm test` (85 tests), `npm run lint`, `npm run build`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is the authoritative full gate and passed.
+
+**Next step:** Merge PR #40 after the final evidence/state commit goes green, then start F-0012 (batch message intake).
+
+---
+
 ## 2026-06-12 — F-0010 done (admin tenant and API-key management)
 
 **What:** Added the disabled-by-default admin control plane for tenant provisioning. With `POSTHORN_ADMIN_TOKEN` configured, operators can create, list, read, update, and delete tenant apps; mint tenant `phk_` API keys; list key records without secrets or hashes; and revoke keys so they stop authenticating.

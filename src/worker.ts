@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { WorkerConfig } from './config';
 import { revealEndpointSecret, SecretProtectionError } from './secret-protection';
 import type { PosthornStorage } from './storage';
+import { incrementDeliveryAttemptsForDelivery } from './usage';
 import { signWebhook } from './webhooks';
 
 export type DeliveryAttemptOutcome = 'succeeded' | 'failed' | 'dead_letter';
@@ -468,6 +469,7 @@ function insertDeliveryAttempt(storage: PosthornStorage, attempt: DeliveryAttemp
       attempt.failureReason,
       attempt.attemptedAt.toISOString(),
     );
+  incrementDeliveryAttemptsForDelivery(storage, attempt.deliveryId, attempt.attemptedAt);
 }
 
 function buildDeliveryBody(task: ClaimedDelivery): string {

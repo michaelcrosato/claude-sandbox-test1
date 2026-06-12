@@ -8,3 +8,4 @@
 {"date":"2026-06-12","feature":"F-0008","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":1,"pr":37,"notes":"idempotent message intake; raw idempotency key control-character validation hardened"}
 {"date":"2026-06-12","feature":"F-0009","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":38,"notes":"per-attempt audit log; tenant-scoped newest-first pagination; CI verify used for full gate"}
 {"date":"2026-06-12","feature":"F-0010","attempts":0,"evaluator":"PASS","security":"BLOCK->APPROVE","findings_fixed":1,"pr":39,"notes":"admin tenant and API-key management; method dispatch moved behind admin auth"}
+{"date":"2026-06-12","feature":"F-0011","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":40,"notes":"usage metering and quota enforcement; tenant/admin current-month read model; CI verify used for full gate"}
