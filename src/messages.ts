@@ -47,6 +47,8 @@ export class MessageValidationError extends Error {
 const MESSAGE_ID_PREFIX = 'msg_';
 const DELIVERY_ID_PREFIX = 'del_';
 const EVENT_TYPE_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/;
+const MAX_PAYLOAD_DEPTH = 64;
+const MAX_PAYLOAD_NODES = 10_000;
 
 export function acceptMessage(
   storage: PosthornStorage,
@@ -208,15 +210,40 @@ function parsePayload(body: Record<string, unknown>): JsonValue {
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null) return true;
-  if (typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (typeof value === 'object') {
-    return Object.values(value).every(isJsonValue);
+  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) continue;
+    nodes += 1;
+    if (nodes > MAX_PAYLOAD_NODES || current.depth > MAX_PAYLOAD_DEPTH) return false;
+
+    const currentValue = current.value;
+    if (currentValue === null || typeof currentValue === 'string' || typeof currentValue === 'boolean') {
+      continue;
+    }
+    if (typeof currentValue === 'number') {
+      if (!Number.isFinite(currentValue)) return false;
+      continue;
+    }
+    if (Array.isArray(currentValue)) {
+      for (const child of currentValue) {
+        stack.push({ value: child, depth: current.depth + 1 });
+      }
+      continue;
+    }
+    if (typeof currentValue === 'object') {
+      for (const child of Object.values(currentValue)) {
+        stack.push({ value: child, depth: current.depth + 1 });
+      }
+      continue;
+    }
+
+    return false;
   }
 
-  return false;
+  return true;
 }
 
 function generateId(prefix: string): string {

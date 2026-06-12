@@ -115,6 +115,7 @@ describe('message intake HTTP route', () => {
     await expectMessageError(address, { eventType: 'bad type', payload: {} });
     await expectMessageError(address, { eventType: 'user.created' });
     await expectMessageError(address, { eventType: 'user.created', payload: null });
+    await expectMessageError(address, { eventType: 'user.created', payload: deeplyNestedPayload() });
   });
 
   it('accepts a message with no matching endpoints without creating delivery tasks', async () => {
@@ -250,6 +251,14 @@ async function expectMessageError(address: GatewayAddress, body: Record<string, 
   const response = await requestJson<ErrorJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, body);
   expect(response.status).toBe(400);
   expect(response.body.error.code).toBe('invalid_request');
+}
+
+function deeplyNestedPayload(): Record<string, unknown> {
+  let payload: Record<string, unknown> = { leaf: true };
+  for (let index = 0; index < 80; index += 1) {
+    payload = { child: payload };
+  }
+  return payload;
 }
 
 async function requestJson<T>(
