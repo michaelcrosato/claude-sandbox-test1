@@ -91,6 +91,7 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('patch', '/v1/admin/apps/{id}', 'admin', 'Update app', 200, ['Admin']),
   route('delete', '/v1/admin/apps/{id}', 'admin', 'Delete app', 204, ['Admin']),
   route('get', '/v1/admin/apps/{id}/usage', 'admin', 'Read app usage', 200, ['Admin']),
+  route('post', '/v1/admin/apps/{id}/rotate-system-secret', 'admin', 'Rotate app system signing secret', 201, ['Admin']),
   route('get', '/v1/admin/apps/{id}/keys', 'admin', 'List app API keys', 200, ['Admin']),
   route('post', '/v1/admin/apps/{id}/keys', 'admin', 'Create app API key', 201, ['Admin']),
   route('delete', '/v1/admin/keys/{id}', 'admin', 'Revoke API key', 204, ['Admin']),
@@ -423,6 +424,12 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
         apiKey: { $ref: '#/components/schemas/ApiKey' },
         secret: { type: 'string' },
       });
+    case 'post /v1/admin/apps/{id}/rotate-system-secret':
+      return objectSchema({
+        app: { $ref: '#/components/schemas/App' },
+        secret: { type: 'string' },
+        previousSecretExpiresAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+      });
     default:
       return {};
   }
@@ -444,6 +451,18 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
     };
   }
   if (key === 'post /v1/endpoints/{id}/rotate-secret') {
+    return {
+      required: false,
+      content: jsonContent({
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          overlapSeconds: { type: 'integer', minimum: 60, maximum: 2_592_000 },
+        },
+      }),
+    };
+  }
+  if (key === 'post /v1/admin/apps/{id}/rotate-system-secret') {
     return {
       required: false,
       content: jsonContent({

@@ -1,4 +1,10 @@
-import type { AdminApiKeyRecord, AdminAppRecord, CreateAdminApiKeyResult, CreateAdminAppResult } from './admin';
+import type {
+  AdminApiKeyRecord,
+  AdminAppRecord,
+  CreateAdminApiKeyResult,
+  CreateAdminAppResult,
+  RotateAdminAppSystemSecretResult,
+} from './admin';
 import type { DeliveryListPage } from './deliveries';
 import type {
   EndpointDeliveriesPage,
@@ -45,6 +51,10 @@ export interface UpdateAdminAppInput {
 
 export interface CreateAdminApiKeyInput {
   readonly name?: string | null;
+}
+
+export interface RotateAdminAppSystemSecretInput {
+  readonly overlapSeconds?: number;
 }
 
 export interface CreateEndpointInput {
@@ -199,6 +209,7 @@ export const POSTHORN_ADMIN_CLIENT_ROUTES: readonly ClientRouteMapping[] = Objec
   clientRoute('updateApp', 'patch', '/v1/admin/apps/{id}'),
   clientRoute('deleteApp', 'delete', '/v1/admin/apps/{id}'),
   clientRoute('getAppUsage', 'get', '/v1/admin/apps/{id}/usage'),
+  clientRoute('rotateAppSystemSecret', 'post', '/v1/admin/apps/{id}/rotate-system-secret'),
   clientRoute('listApiKeys', 'get', '/v1/admin/apps/{id}/keys'),
   clientRoute('createApiKey', 'post', '/v1/admin/apps/{id}/keys'),
   clientRoute('revokeApiKey', 'delete', '/v1/admin/keys/{id}'),
@@ -251,6 +262,13 @@ export class PosthornAdminClient {
 
   getAppUsage(appId: string): Promise<UsageReadResult> {
     return this.request('get', `/v1/admin/apps/${pathSegment(appId)}/usage`);
+  }
+
+  rotateAppSystemSecret(
+    appId: string,
+    input: RotateAdminAppSystemSecretInput = {},
+  ): Promise<RotateAdminAppSystemSecretResult> {
+    return this.request('post', `/v1/admin/apps/${pathSegment(appId)}/rotate-system-secret`, input);
   }
 
   listApiKeys(appId: string): Promise<AdminApiKeyListResult> {

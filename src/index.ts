@@ -4,6 +4,7 @@ export type {
   AdminValidationErrorCode,
   CreateAdminApiKeyResult,
   CreateAdminAppResult,
+  RotateAdminAppSystemSecretResult,
 } from './admin';
 export {
   AdminValidationError,
@@ -14,6 +15,7 @@ export {
   listAdminApiKeys,
   listAdminApps,
   revokeAdminApiKey,
+  rotateAdminAppSystemSecret,
   updateAdminApp,
 } from './admin';
 export type { AuthenticatedTenant } from './auth';
@@ -35,6 +37,7 @@ export type {
   ListMessageAttemptsInput,
   PosthornAdminClientOptions,
   PosthornClientOptions,
+  RotateAdminAppSystemSecretInput,
   SendMessageInput,
   UpdateAdminAppInput,
   UpdateEndpointInput,

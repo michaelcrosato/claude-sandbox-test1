@@ -1136,6 +1136,48 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0026"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0027/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0027",
+      "epic": "admin",
+      "title": "Admin app system secret rotation",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement the planned POST /v1/admin/apps/:id/rotate-system-secret route so operators can rotate an app-level Standard Webhooks signing secret and receive the new whsec_ value exactly once.",
+      "acceptance": [
+        "POST /v1/admin/apps/:id/rotate-system-secret is implemented, disabled when POSTHORN_ADMIN_TOKEN is unset, admin-authenticated before method dispatch, and returns 404 for missing apps.",
+        "The route creates a new whsec_ system signing secret, stores it protected at rest, preserves the previous protected secret only for a configurable overlap window, and returns the new secret exactly once without exposing it in app read/list/update responses.",
+        "Existing apps with no stored system secret can rotate successfully by creating the first protected system secret without previous-secret overlap metadata.",
+        "OpenAPI, TypeScript admin client route mappings/helpers, README API/admin SDK docs, and route coverage reflect the implemented admin route.",
+        "Tests cover success, missing app, disabled admin routes, admin auth/method behavior, protected storage/no secret leakage, and legacy app rotation."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0027.md",
+        "roadmap/evidence/F-0027/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

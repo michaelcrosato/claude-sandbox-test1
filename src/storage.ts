@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS apps (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   monthly_message_quota INTEGER,
+  system_signing_secret_ciphertext TEXT,
+  system_signing_secret_key_version TEXT,
+  system_signing_secret_nonce TEXT,
+  previous_system_signing_secret_ciphertext TEXT,
+  previous_system_signing_secret_key_version TEXT,
+  previous_system_signing_secret_nonce TEXT,
+  previous_system_signing_secret_expires_at TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -174,7 +181,24 @@ export function openStorage(options: StorageOptions): PosthornStorage {
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec(INITIAL_SCHEMA_SQL);
+  migrateAppSystemSecretColumns(db);
   migrateEndpointSecretRotationColumns(db);
+}
+
+function migrateAppSystemSecretColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (
+      db.prepare('PRAGMA table_info(apps)').all() as Array<{
+        readonly name: unknown;
+      }>
+    ).map((row) => String(row.name)),
+  );
+
+  for (const column of APP_SYSTEM_SECRET_COLUMNS) {
+    if (!columns.has(column.name)) {
+      db.exec(`ALTER TABLE apps ADD COLUMN ${column.definition}`);
+    }
+  }
 }
 
 function migrateEndpointSecretRotationColumns(db: DatabaseSync): void {
@@ -192,6 +216,37 @@ function migrateEndpointSecretRotationColumns(db: DatabaseSync): void {
     }
   }
 }
+
+const APP_SYSTEM_SECRET_COLUMNS = [
+  {
+    name: 'system_signing_secret_ciphertext',
+    definition: 'system_signing_secret_ciphertext TEXT',
+  },
+  {
+    name: 'system_signing_secret_key_version',
+    definition: 'system_signing_secret_key_version TEXT',
+  },
+  {
+    name: 'system_signing_secret_nonce',
+    definition: 'system_signing_secret_nonce TEXT',
+  },
+  {
+    name: 'previous_system_signing_secret_ciphertext',
+    definition: 'previous_system_signing_secret_ciphertext TEXT',
+  },
+  {
+    name: 'previous_system_signing_secret_key_version',
+    definition: 'previous_system_signing_secret_key_version TEXT',
+  },
+  {
+    name: 'previous_system_signing_secret_nonce',
+    definition: 'previous_system_signing_secret_nonce TEXT',
+  },
+  {
+    name: 'previous_system_signing_secret_expires_at',
+    definition: 'previous_system_signing_secret_expires_at TEXT',
+  },
+] as const;
 
 const ENDPOINT_SECRET_ROTATION_COLUMNS = [
   {

@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0027 done (Admin app system secret rotation)
+
+**What:** Added admin-controlled app system signing secret rotation. Operators can rotate an app-level `whsec_` secret through the HTTP API and TypeScript admin client; the raw secret is returned only once, protected storage metadata stays out of read/list/update responses, and previous secret metadata is retained for a bounded overlap window.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0027/verify.log`. Evaluator returned NEEDS_WORK for displaced admin key auth/method assertions, then PASS after those assertions were restored and separate rotate-route checks were added. Security reviewer returned NEEDS_WORK for non-atomic rotation, then APPROVE after the rotation read/protect/update path moved into an immediate transaction with rollback regression coverage. Local checks passed: `npx vitest run tests/admin-http.test.ts tests/client.test.ts tests/storage.test.ts tests/openapi-contract.test.ts` (22 tests), `npm run typecheck`, `npm test` (154 tests), `npm run lint`, `npm run build`, `npx ts-node scripts/update-state.ts --validate`, and `git diff --check`.
+
+**Surprises:** App system secret rotation has the same one-time secret loss risk as endpoint rotation if the old/current secret read and new secret write are not atomic. The regression uses a temporary SQLite trigger to abort the app update after local key creation and proves both app secret fields and generated key material roll back. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, mark PR #56 ready, then merge.
+
+---
+
 ## 2026-06-12 — F-0026 done (Message history filters)
 
 **What:** Added server-side message history filters for `GET /v1/messages`. Tenants can now combine `eventType`, `after`, `before`, `limit`, and `cursor`, with newest-first keyset pagination preserved. The TypeScript SDK allowlist, OpenAPI parameter docs, and README now reflect the implemented filter surface.
