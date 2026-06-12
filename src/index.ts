@@ -1,5 +1,23 @@
+export type {
+  AdminApiKeyRecord,
+  AdminAppRecord,
+  AdminValidationErrorCode,
+  CreateAdminApiKeyResult,
+  CreateAdminAppResult,
+} from './admin';
+export {
+  AdminValidationError,
+  createAdminApiKey,
+  createAdminApp,
+  deleteAdminApp,
+  getAdminApp,
+  listAdminApiKeys,
+  listAdminApps,
+  revokeAdminApiKey,
+  updateAdminApp,
+} from './admin';
 export type { AuthenticatedTenant } from './auth';
-export { API_KEY_PREFIX, authenticateApiKey, createApiKeySecret, hashApiKey } from './auth';
+export { API_KEY_PREFIX, authenticateAdminToken, authenticateApiKey, createApiKeySecret, hashApiKey } from './auth';
 export type { PosthornConfig, WorkerConfig } from './config';
 export { loadConfig } from './config';
 export type { CreateEndpointResult, EndpointRecord, EndpointValidationErrorCode } from './endpoints';

@@ -1,7 +1,18 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { authenticateApiKey, type AuthenticatedTenant } from './auth';
+import {
+  AdminValidationError,
+  createAdminApiKey,
+  createAdminApp,
+  deleteAdminApp,
+  getAdminApp,
+  listAdminApiKeys,
+  listAdminApps,
+  revokeAdminApiKey,
+  updateAdminApp,
+} from './admin';
+import { authenticateAdminToken, authenticateApiKey, type AuthenticatedTenant } from './auth';
 import type { PosthornConfig } from './config';
 import {
   createEndpoint,
@@ -103,6 +114,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
         response,
         serviceName: normalizedConfig.serviceName ?? 'posthorn',
         maxBodyBytes: normalizedConfig.maxBodyBytes ?? 1_000_000,
+        adminToken: normalizeAdminToken(normalizedConfig.adminToken),
         getStorage: () => storage,
         getReadinessError: () => readinessError,
         readinessProbe,
@@ -139,6 +151,7 @@ interface RequestContext {
   readonly response: ServerResponse;
   readonly serviceName: string;
   readonly maxBodyBytes: number;
+  readonly adminToken: string | null;
   readonly getStorage: () => PosthornStorage | null;
   readonly getReadinessError: () => Error | null;
   readonly readinessProbe: (storage: PosthornStorage) => void;
@@ -181,6 +194,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
     return;
   }
 
+  if (url.pathname === '/v1/admin/apps' || adminAppPathFromPath(url.pathname) !== null || adminApiKeyPathFromPath(url.pathname) !== null) {
+    await handleAdminRequest(context, url);
+    return;
+  }
+
   if (url.pathname === '/v1/endpoints' || endpointIdFromPath(url.pathname) !== null) {
     await handleEndpointRequest(context, url);
     return;
@@ -192,6 +210,125 @@ async function handleRequest(context: RequestContext): Promise<void> {
   }
 
   writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+}
+
+async function handleAdminRequest(context: RequestContext, url: URL): Promise<void> {
+  if (context.adminToken === null) {
+    writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+    return;
+  }
+
+  const scoped = authenticateAdminRequest(context);
+  if (scoped === null) return;
+
+  const apiKeyId = adminApiKeyPathFromPath(url.pathname);
+  if (apiKeyId !== null) {
+    if (context.request.method !== 'DELETE') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+    if (!revokeAdminApiKey(scoped.storage, apiKeyId)) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    context.response.writeHead(204);
+    context.response.end();
+    return;
+  }
+
+  const appPath = adminAppPathFromPath(url.pathname);
+  if (url.pathname === '/v1/admin/apps') {
+    if (context.request.method === 'GET') {
+      writeJson(context.response, 200, { data: listAdminApps(scoped.storage) });
+      return;
+    }
+    if (context.request.method === 'POST') {
+      const body = await readJsonBody(context);
+      if (body === null) return;
+      try {
+        writeJson(context.response, 201, createAdminApp(scoped.storage, body));
+      } catch (error) {
+        writeAdminError(context.response, error);
+      }
+      return;
+    }
+
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  if (appPath === null) {
+    writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+    return;
+  }
+
+  if (appPath.keysRoute) {
+    if (context.request.method === 'GET') {
+      const keys = listAdminApiKeys(scoped.storage, appPath.appId);
+      if (keys === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { data: keys });
+      return;
+    }
+    if (context.request.method === 'POST') {
+      const body = await readOptionalJsonBody(context);
+      if (body === null) return;
+      try {
+        const apiKey = createAdminApiKey(scoped.storage, appPath.appId, body);
+        if (apiKey === null) {
+          writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+          return;
+        }
+        writeJson(context.response, 201, apiKey);
+      } catch (error) {
+        writeAdminError(context.response, error);
+      }
+      return;
+    }
+
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  if (context.request.method === 'GET') {
+    const app = getAdminApp(scoped.storage, appPath.appId);
+    if (app === null) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    writeJson(context.response, 200, { app });
+    return;
+  }
+
+  if (context.request.method === 'PATCH') {
+    const body = await readJsonBody(context);
+    if (body === null) return;
+    try {
+      const app = updateAdminApp(scoped.storage, appPath.appId, body);
+      if (app === null) {
+        writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+        return;
+      }
+      writeJson(context.response, 200, { app });
+    } catch (error) {
+      writeAdminError(context.response, error);
+    }
+    return;
+  }
+
+  if (context.request.method === 'DELETE') {
+    if (!deleteAdminApp(scoped.storage, appPath.appId)) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    context.response.writeHead(204);
+    context.response.end();
+    return;
+  }
+
+  writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
 }
 
 async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
@@ -331,6 +468,35 @@ function authenticateTenantRequest(context: RequestContext): ScopedRequest | nul
   return { storage, tenant };
 }
 
+function authenticateAdminRequest(context: RequestContext): AdminScopedRequest | null {
+  const storage = context.getStorage();
+  const readinessError = context.getReadinessError();
+  if (storage === null || readinessError !== null) {
+    writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
+    return null;
+  }
+
+  if (!authenticateAdminToken(context.adminToken, context.request.headers.authorization)) {
+    writeJson(context.response, 401, { error: { code: 'unauthorized', message: 'Invalid bearer token.' } });
+    return null;
+  }
+
+  return { storage };
+}
+
+function adminAppPathFromPath(pathname: string): AdminAppPath | null {
+  const keysMatch = /^\/v1\/admin\/apps\/([^/]+)\/keys$/.exec(pathname);
+  if (keysMatch !== null) return { appId: keysMatch[1], keysRoute: true };
+  const appMatch = /^\/v1\/admin\/apps\/([^/]+)$/.exec(pathname);
+  if (appMatch !== null) return { appId: appMatch[1], keysRoute: false };
+  return null;
+}
+
+function adminApiKeyPathFromPath(pathname: string): string | null {
+  const match = /^\/v1\/admin\/keys\/([^/]+)$/.exec(pathname);
+  return match?.[1] ?? null;
+}
+
 function endpointIdFromPath(pathname: string): string | null {
   const match = /^\/v1\/endpoints\/([^/]+)$/.exec(pathname);
   return match?.[1] ?? null;
@@ -339,6 +505,12 @@ function endpointIdFromPath(pathname: string): string | null {
 function messageAttemptsPathFromPath(pathname: string): string | null {
   const match = /^\/v1\/messages\/([^/]+)\/attempts$/.exec(pathname);
   return match?.[1] ?? null;
+}
+
+function normalizeAdminToken(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 async function readJsonBody(context: RequestContext): Promise<unknown | null> {
@@ -359,6 +531,33 @@ async function readJsonBody(context: RequestContext): Promise<unknown | null> {
   if (rawBody.length === 0) {
     writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
     return null;
+  }
+
+  try {
+    return JSON.parse(rawBody.toString('utf8')) as unknown;
+  } catch {
+    writeJson(context.response, 400, { error: { code: 'invalid_json', message: 'Request body must be valid JSON.' } });
+    return null;
+  }
+}
+
+async function readOptionalJsonBody(context: RequestContext): Promise<unknown | null> {
+  const bodyResult = await readRequestBody(context.request, context.maxBodyBytes);
+  if (bodyResult.status === 'too_large') {
+    writeJson(
+      context.response,
+      413,
+      { error: { code: 'payload_too_large', message: 'Request body is too large.' } },
+      { connection: 'close' },
+    );
+    return null;
+  }
+  if (bodyResult.status === 'aborted') {
+    return null;
+  }
+  const rawBody = bodyResult.body;
+  if (rawBody.length === 0) {
+    return undefined;
   }
 
   try {
@@ -438,6 +637,15 @@ function writeEndpointError(response: ServerResponse, error: unknown): void {
   throw error;
 }
 
+function writeAdminError(response: ServerResponse, error: unknown): void {
+  if (error instanceof AdminValidationError) {
+    writeJson(response, 400, { error: { code: error.code, message: error.message } });
+    return;
+  }
+
+  throw error;
+}
+
 function writeMessageError(response: ServerResponse, error: unknown): void {
   if (error instanceof MessageConflictError) {
     writeJson(response, 409, { error: { code: error.code, message: error.message } });
@@ -459,6 +667,15 @@ function writeJson(response: ServerResponse, status: number, body: unknown, head
 interface ScopedRequest {
   readonly storage: PosthornStorage;
   readonly tenant: AuthenticatedTenant;
+}
+
+interface AdminScopedRequest {
+  readonly storage: PosthornStorage;
+}
+
+interface AdminAppPath {
+  readonly appId: string;
+  readonly keysRoute: boolean;
 }
 
 type RequestBodyResult =
