@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0018 done (Admin and tenant dashboard)
+
+**What:** Added the browser dashboard served by the gateway. The admin panel can list tenants, create tenants, view usage, mint API keys, list keys, and revoke keys. The tenant panel can load usage, endpoints, message history, delivery status, and per-attempt audit logs. To make tenant history real, `GET /v1/messages` is now implemented as a tenant-scoped newest-first keyset-paginated API, with README/OpenAPI sync and focused HTTP coverage.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0018/verify.log`. UI screenshot evidence is saved at `roadmap/evidence/F-0018/admin-dashboard.png` and `roadmap/evidence/F-0018/tenant-dashboard.png`, with browser state checks in `roadmap/evidence/F-0018/browser-screenshots.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/messages-http.test.ts tests/dashboard-http.test.ts tests/openapi-contract.test.ts`, `npm test` (123 tests), `npm run lint`, `npm run build`, and `npm run state:validate`.
+
+**Surprises:** The in-app browser target could interact with the local dashboard but its screenshot command timed out in this session, so final PNG evidence was captured with a one-off headless Chrome DevTools run against the same local server and seeded synthetic data. F-0018 also made the planned `GET /v1/messages` route necessary because browser-local history would not satisfy real tenant debugging.
+
+**Next step:** Push this final evidence/state record, wait for PR #47 checks again, then merge. After merge, the planned backlog is complete.
+
+---
+
 ## 2026-06-12 — F-0017 done (Event type catalog and consumer portal sessions)
 
 **What:** Added tenant-scoped event type catalog routes, active-name conflict handling, archive semantics, synchronous endpoint test sends with explicit or `schemaExample` payloads, and short-lived portal session tokens stored only as hashes. OpenAPI and README route/error tables now mark event types, endpoint test-send, portal sessions, `conflict`, and `endpoint_disabled` as implemented.

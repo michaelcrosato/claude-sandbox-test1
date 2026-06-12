@@ -100,7 +100,7 @@ Key capabilities:
 | GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
 | POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
-| GET | `/v1/messages` | Bearer | planned | List messages, newest-first (keyset-paginated; filter by `?eventType=`, `?channel=`, and a `?after=`/`?before=` created-at window). |
+| GET | `/v1/messages` | Bearer | implemented | List messages, newest-first (keyset-paginated with `?limit=` and `?cursor=`). Additional filters such as `?eventType=`, `?channel=`, and created-at windows are planned. |
 | GET | `/v1/messages/:id` | Bearer | implemented | Read a message + per-endpoint delivery statuses. |
 | POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
@@ -208,10 +208,10 @@ const usage = await client.getUsage();
 usage.quota.remaining; // messages left in this billing period (null = unlimited)
 ```
 
-Endpoint secret rotation and message listing are planned future SDK methods. The
-event type catalog, endpoint test-send, and portal session routes are available
-over HTTP/OpenAPI now; typed SDK helpers for them can be added without changing
-the wire contract.
+Endpoint secret rotation and typed message listing are planned future SDK methods.
+Message listing, the event type catalog, endpoint test-send, and portal session routes
+are available over HTTP/OpenAPI now; typed SDK helpers for them can be added without
+changing the wire contract.
 
 ### Receiving webhooks
 

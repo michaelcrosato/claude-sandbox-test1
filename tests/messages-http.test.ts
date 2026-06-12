@@ -59,6 +59,11 @@ interface AttemptsPageJson {
   readonly nextCursor: string | null;
 }
 
+interface MessageListJson {
+  readonly data: readonly MessageJson[];
+  readonly nextCursor: string | null;
+}
+
 interface DeliveryJson {
   readonly id: string;
   readonly messageId: string;
@@ -512,6 +517,79 @@ describe('message intake HTTP route', () => {
     expect(countDeliveries(storage, 'app_a')).toBe(1);
   });
 
+  it('lists tenant messages newest-first with keyset pagination', async () => {
+    let nowMs = Date.parse('2026-06-12T12:00:00.000Z');
+    const { address } = await startSeededGateway({ now: () => new Date(nowMs) });
+    const first = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'audit.created',
+      payload: { id: 1 },
+    });
+    nowMs += 1000;
+    const second = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'audit.created',
+      payload: { id: 2 },
+    });
+    nowMs += 1000;
+    const third = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'audit.created',
+      payload: { id: 3 },
+      idempotencyKey: 'history-secret-fields',
+    });
+    nowMs += 1000;
+    await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_B_KEY, {
+      eventType: 'audit.created',
+      payload: { id: 'other-tenant' },
+    });
+
+    const firstPage = await requestJson<MessageListJson>(address, 'GET', '/v1/messages?limit=2', TENANT_A_KEY);
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.data.map((message) => message.id)).toEqual([
+      third.body.message.id,
+      second.body.message.id,
+    ]);
+    expect(firstPage.body.nextCursor).toEqual(expect.any(String));
+    expect(JSON.stringify(firstPage.body)).not.toContain('history-secret-fields');
+    expect(JSON.stringify(firstPage.body)).not.toContain('payload_hash');
+
+    const secondPage = await requestJson<MessageListJson>(
+      address,
+      'GET',
+      `/v1/messages?limit=2&cursor=${firstPage.body.nextCursor}`,
+      TENANT_A_KEY,
+    );
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.data).toEqual([first.body.message]);
+    expect(secondPage.body.nextCursor).toBeNull();
+  });
+
+  it('keeps message history tenant-scoped and validates pagination parameters', async () => {
+    const { address } = await startSeededGateway();
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'private.created',
+      payload: { id: 4 },
+    });
+
+    const tenantA = await requestJson<MessageListJson>(address, 'GET', '/v1/messages', TENANT_A_KEY);
+    const tenantB = await requestJson<MessageListJson>(address, 'GET', '/v1/messages', TENANT_B_KEY);
+    const invalidLimit = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?limit=0', TENANT_A_KEY);
+    const invalidCursor = await requestJson<ErrorJson>(address, 'GET', '/v1/messages?cursor=bad', TENANT_A_KEY);
+    const missingAuth = await fetch(`${address.url}/v1/messages`);
+    const wrongMethod = await requestJson<ErrorJson>(address, 'PATCH', '/v1/messages', TENANT_A_KEY, {});
+
+    expect(tenantA.status).toBe(200);
+    expect(tenantA.body.data.map((message) => message.id)).toEqual([accepted.body.message.id]);
+    expect(tenantB.status).toBe(200);
+    expect(tenantB.body).toEqual({ data: [], nextCursor: null });
+    expect(invalidLimit.status).toBe(400);
+    expect(invalidLimit.body.error.code).toBe('invalid_request');
+    expect(invalidCursor.status).toBe(400);
+    expect(invalidCursor.body.error.code).toBe('invalid_request');
+    expect(missingAuth.status).toBe(401);
+    expect(await missingAuth.json()).toEqual({ error: { code: 'unauthorized', message: 'Invalid bearer token.' } });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.body).toEqual({ error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+  });
+
   it('returns successful delivery attempts for the authenticated tenant', async () => {
     const { address, storage } = await startSeededGateway();
     const endpoint = createEndpoint(storage, 'app_a', {
@@ -785,7 +863,9 @@ describe('message intake HTTP route', () => {
   });
 });
 
-async function startSeededGateway(): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
+async function startSeededGateway(
+  options: { readonly now?: () => Date } = {},
+): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
   const storage = openStorage({ dataDir: ':memory:' });
   seedTenant(storage, 'app_a', 'Tenant A', TENANT_A_KEY);
   seedTenant(storage, 'app_b', 'Tenant B', TENANT_B_KEY);
@@ -801,6 +881,7 @@ async function startSeededGateway(): Promise<{ address: GatewayAddress; storage:
     },
     {
       openStorage: () => storage,
+      ...(options.now === undefined ? {} : { now: options.now }),
     },
   );
   activeGateways.push(gateway);
