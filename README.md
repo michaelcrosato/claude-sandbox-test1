@@ -81,38 +81,38 @@ Key capabilities:
 
 ## API Routes
 
-| Method | Path | Auth | Purpose |
-| ------ | ---- | ---- | ------- |
-| GET | `/healthz` | none | Liveness probe (static — the process is up). |
-| GET | `/readyz` | none | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
-| GET | `/metrics` | none | Prometheus text exposition (operator metrics). |
-| GET | `/openapi.json` | none | OpenAPI 3.1 contract (client codegen + interactive docs). |
-| POST | `/v1/messages` | Bearer | Accept an event and fan it out (`202`). |
-| POST | `/v1/messages/batch` | Bearer | Accept up to 100 events in one call; per-item results (`200`). |
-| GET | `/v1/messages` | Bearer | List messages, newest-first (keyset-paginated; filter by `?eventType=`, `?channel=`, and a `?after=`/`?before=` created-at window). |
-| GET | `/v1/messages/:id` | Bearer | Read a message + per-endpoint delivery statuses. |
-| POST | `/v1/messages/:id/retry` | Bearer | Replay a message's dead-lettered deliveries. |
-| GET | `/v1/messages/:id/attempts` | Bearer | Per-attempt audit log (paginated). |
-| GET | `/v1/endpoints` | Bearer | List endpoints. |
-| POST | `/v1/endpoints` | Bearer | Create an endpoint (`201`; signing secret shown once). |
-| GET | `/v1/endpoints/:id` | Bearer | Fetch one endpoint. |
-| PATCH | `/v1/endpoints/:id` | Bearer | Update an endpoint. |
-| DELETE | `/v1/endpoints/:id` | Bearer | Delete an endpoint (`204`). |
-| POST | `/v1/endpoints/:id/rotate-secret` | Bearer | Rotate signing secret, zero-downtime. |
-| POST | `/v1/endpoints/:id/test` | Bearer | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
-| GET | `/v1/endpoints/:id/deliveries` | Bearer | Endpoint delivery history (paginated). |
-| GET | `/v1/endpoints/:id/stats` | Bearer | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
-| GET | `/v1/deliveries` | Bearer | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |
-| GET | `/v1/usage` | Bearer | Tenant's own message + delivery usage and current-month quota status. |
-| POST | `/v1/portal/sessions` | Bearer | Mint a consumer portal session token. |
-| GET/POST/PATCH/DELETE | `/v1/event-types` / `/v1/event-types/:id` | Bearer | Event type catalog (create, list, update, archive). |
-| POST | `/v1/admin/apps` | Admin | Create a tenant. |
-| GET | `/v1/admin/apps` | Admin | List tenants. |
-| GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | Read / update / delete a tenant. |
-| GET | `/v1/admin/apps/:id/usage` | Admin | Per-tenant usage (billing read model). |
-| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | Rotate the app's system webhook signing secret. |
-| POST/GET | `/v1/admin/apps/:id/keys` | Admin | Mint / list API keys. |
-| DELETE | `/v1/admin/keys/:id` | Admin | Revoke an API key. |
+| Method | Path | Auth | Status | Purpose |
+| ------ | ---- | ---- | ------ | ------- |
+| GET | `/healthz` | none | implemented | Liveness probe (static — the process is up). |
+| GET | `/readyz` | none | implemented | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
+| GET | `/metrics` | none | planned | Prometheus text exposition (operator metrics). |
+| GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
+| POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
+| POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
+| GET | `/v1/messages` | Bearer | planned | List messages, newest-first (keyset-paginated; filter by `?eventType=`, `?channel=`, and a `?after=`/`?before=` created-at window). |
+| GET | `/v1/messages/:id` | Bearer | planned | Read a message + per-endpoint delivery statuses. |
+| POST | `/v1/messages/:id/retry` | Bearer | planned | Replay a message's dead-lettered deliveries. |
+| GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
+| GET | `/v1/endpoints` | Bearer | implemented | List endpoints. |
+| POST | `/v1/endpoints` | Bearer | implemented | Create an endpoint (`201`; signing secret shown once). |
+| GET | `/v1/endpoints/:id` | Bearer | implemented | Fetch one endpoint. |
+| PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint. |
+| DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
+| POST | `/v1/endpoints/:id/rotate-secret` | Bearer | planned | Rotate signing secret, zero-downtime. |
+| POST | `/v1/endpoints/:id/test` | Bearer | planned | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
+| GET | `/v1/endpoints/:id/deliveries` | Bearer | planned | Endpoint delivery history (paginated). |
+| GET | `/v1/endpoints/:id/stats` | Bearer | planned | Endpoint delivery stats over a trailing window (`?days=`): totals, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
+| GET | `/v1/deliveries` | Bearer | planned | App-wide delivery listing (`?status=` + `?failureReason=` filters, paginated). |
+| GET | `/v1/usage` | Bearer | implemented | Tenant's own message + delivery usage and current-month quota status. |
+| POST | `/v1/portal/sessions` | Bearer | planned | Mint a consumer portal session token. |
+| GET/POST/PATCH/DELETE | `/v1/event-types` / `/v1/event-types/:id` | Bearer | planned | Event type catalog (create, list, update, archive). |
+| POST | `/v1/admin/apps` | Admin | implemented | Create a tenant. |
+| GET | `/v1/admin/apps` | Admin | implemented | List tenants. |
+| GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | implemented | Read / update / delete a tenant. |
+| GET | `/v1/admin/apps/:id/usage` | Admin | implemented | Per-tenant usage (billing read model). |
+| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | planned | Rotate the app's system webhook signing secret. |
+| POST/GET | `/v1/admin/apps/:id/keys` | Admin | implemented | Mint / list API keys. |
+| DELETE | `/v1/admin/keys/:id` | Admin | implemented | Revoke an API key. |
 
 The admin routes are **disabled by default** — they 404 unless `POSTHORN_ADMIN_TOKEN` is set.
 `GET /openapi.json` serves a machine-readable OpenAPI 3.1 document; use it with
@@ -126,20 +126,20 @@ where `code` is one stable, machine-readable string you can branch on (the human
 `Error.code` schema (a build-time test pins the spec to the values the API actually emits, so
 they cannot drift). In the SDK, `PosthornApiError.code` is typed as the union `ApiErrorCode`.
 
-| `code` | HTTP | Meaning |
-| ------ | ---- | ------- |
-| `invalid_request` | 400 | Malformed request: a validation failure, a bad query parameter, or a missing/non-object body. |
-| `invalid_json` | 400 | The request body is not valid JSON. |
-| `url_not_allowed` | 400 | The endpoint URL targets a private/internal address (SSRF guard). |
-| `endpoint_disabled` | 400 | The target endpoint is disabled (e.g. a test-send to it). |
-| `unauthorized` | 401 | Missing, invalid, or revoked credential (API key, or admin token on a control-plane route). |
-| `not_found` | 404 | No such resource for your tenant, no route, or a disabled (hidden) feature surface. |
-| `method_not_allowed` | 405 | The path exists, but not for this HTTP method. |
-| `conflict` | 409 | A uniqueness/state conflict (e.g. an event type that already exists). |
-| `idempotency_conflict` | 409 | An idempotency key reused with a different payload. |
-| `payload_too_large` | 413 | The request body exceeded the configured maximum size. |
-| `quota_exceeded` | 429 | Your monthly message quota is reached. |
-| `internal_error` | 500 | An unexpected server-side fault. |
+| `code` | HTTP | Status | Meaning |
+| ------ | ---- | ------ | ------- |
+| `invalid_request` | 400 | implemented | Malformed request: a validation failure, a bad query parameter, or a missing/non-object body. |
+| `invalid_json` | 400 | implemented | The request body is not valid JSON. |
+| `url_not_allowed` | 400 | implemented | The endpoint URL targets a private/internal address (SSRF guard). |
+| `endpoint_disabled` | 400 | planned | The target endpoint is disabled (e.g. a test-send to it). |
+| `unauthorized` | 401 | implemented | Missing, invalid, or revoked credential (API key, or admin token on a control-plane route). |
+| `not_found` | 404 | implemented | No such resource for your tenant, no route, or a disabled (hidden) feature surface. |
+| `method_not_allowed` | 405 | implemented | The path exists, but not for this HTTP method. |
+| `conflict` | 409 | planned | A uniqueness/state conflict (e.g. an event type that already exists). |
+| `idempotency_conflict` | 409 | implemented | An idempotency key reused with a different payload. |
+| `payload_too_large` | 413 | implemented | The request body exceeded the configured maximum size. |
+| `quota_exceeded` | 429 | implemented | Your monthly message quota is reached. |
+| `internal_error` | 500/503 | implemented | An unexpected server-side fault or temporarily unavailable storage dependency. |
 
 ## TypeScript SDK
 

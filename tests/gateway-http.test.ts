@@ -122,8 +122,7 @@ describe('HTTP gateway', () => {
 
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
-      status: 'error',
-      service: 'posthorn',
+      error: { code: 'internal_error', message: 'Storage is not ready.' },
     });
   });
 

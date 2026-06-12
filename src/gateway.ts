@@ -29,6 +29,7 @@ import {
   MessageConflictError,
   MessageValidationError,
 } from './messages';
+import { createOpenApiDocument } from './openapi';
 import { openStorage, type PosthornStorage } from './storage';
 import { getUsageSummary, UsageQuotaExceededError } from './usage';
 
@@ -193,15 +194,24 @@ async function handleRequest(context: RequestContext): Promise<void> {
     const storage = context.getStorage();
     const readinessError = context.getReadinessError();
     if (storage === null || readinessError !== null) {
-      writeJson(context.response, 503, { status: 'error', service: context.serviceName });
+      writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
       return;
     }
     try {
       context.readinessProbe(storage);
       writeJson(context.response, 200, { status: 'ok', service: context.serviceName });
     } catch {
-      writeJson(context.response, 503, { status: 'error', service: context.serviceName });
+      writeJson(context.response, 503, { error: { code: 'internal_error', message: 'Storage is not ready.' } });
     }
+    return;
+  }
+
+  if (url.pathname === '/openapi.json') {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+    writeJson(context.response, 200, createOpenApiDocument());
     return;
   }
 

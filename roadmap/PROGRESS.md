@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0013 done (OpenAPI contract and closed error codes)
+
+**What:** Added deterministic `GET /openapi.json` OpenAPI 3.1 output for every implemented public and admin route, centralized the runtime `Error.code` enum, exported the OpenAPI helpers, and changed readiness failures to return the standard error envelope. README route and error-code tables now mark implemented vs planned surfaces so docs and spec can be tested without documenting future routes as live.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0013/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/openapi-contract.test.ts tests/gateway-http.test.ts`, `npm test` (95 tests), `npm run lint`, `npm run build`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is the authoritative full gate and passed.
+
+**Next step:** Merge PR #42 after the final evidence/state commit goes green, then start the next unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0012 done (batch message intake)
 
 **What:** Added `POST /v1/messages/batch` for authenticated producers to send 1 to 100 messages in one request. The route returns per-item `ok` results, reuses single-message validation/idempotency/quota/fanout behavior, supports mixed success and failure, and keeps idempotent batch retries from creating duplicate delivery work.
