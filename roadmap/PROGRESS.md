@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0024 done (TypeScript admin client)
+
+**What:** Added the README-promised TypeScript admin/control-plane client. Operators can now create/list/read/update/delete tenant apps, read current-month app usage, and create/list/revoke tenant API keys through exported package helpers. Admin client route coverage pins the helper surface to implemented OpenAPI admin routes.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0024/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/client.test.ts` (7 tests), `npm run lint`, `npm test` (145 tests), `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, wait for PR #53 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0023 done (TypeScript SDK parity for implemented tenant routes)
 
 **What:** Expanded the TypeScript tenant SDK so implemented routes no longer require raw HTTP: message listing, endpoint secret rotation, endpoint delivery history/stats, app-wide delivery listing, event type CRUD, endpoint test-send, and portal session creation. SDK route coverage now pins every helper to an implemented OpenAPI route.

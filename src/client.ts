@@ -1,3 +1,4 @@
+import type { AdminApiKeyRecord, AdminAppRecord, CreateAdminApiKeyResult, CreateAdminAppResult } from './admin';
 import type { DeliveryListPage } from './deliveries';
 import type {
   EndpointDeliveriesPage,
@@ -24,6 +25,26 @@ export interface PosthornClientOptions {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly fetch?: ClientFetch;
+}
+
+export interface PosthornAdminClientOptions {
+  readonly baseUrl: string;
+  readonly adminToken: string;
+  readonly fetch?: ClientFetch;
+}
+
+export interface CreateAdminAppInput {
+  readonly name: string;
+  readonly monthlyMessageQuota?: number | null;
+}
+
+export interface UpdateAdminAppInput {
+  readonly name?: string;
+  readonly monthlyMessageQuota?: number | null;
+}
+
+export interface CreateAdminApiKeyInput {
+  readonly name?: string | null;
 }
 
 export interface CreateEndpointInput {
@@ -108,6 +129,18 @@ export interface UsageReadResult {
   readonly usage: UsageSummary;
 }
 
+export interface AdminAppListResult {
+  readonly data: readonly AdminAppRecord[];
+}
+
+export interface AdminAppReadResult {
+  readonly app: AdminAppRecord;
+}
+
+export interface AdminApiKeyListResult {
+  readonly data: readonly AdminApiKeyRecord[];
+}
+
 export interface EventTypeListResult {
   readonly data: readonly EventTypeRecord[];
 }
@@ -156,6 +189,18 @@ export const POSTHORN_CLIENT_ROUTES: readonly ClientRouteMapping[] = Object.free
   clientRoute('createPortalSession', 'post', '/v1/portal/sessions'),
 ]);
 
+export const POSTHORN_ADMIN_CLIENT_ROUTES: readonly ClientRouteMapping[] = Object.freeze([
+  clientRoute('listApps', 'get', '/v1/admin/apps'),
+  clientRoute('createApp', 'post', '/v1/admin/apps'),
+  clientRoute('getApp', 'get', '/v1/admin/apps/{id}'),
+  clientRoute('updateApp', 'patch', '/v1/admin/apps/{id}'),
+  clientRoute('deleteApp', 'delete', '/v1/admin/apps/{id}'),
+  clientRoute('getAppUsage', 'get', '/v1/admin/apps/{id}/usage'),
+  clientRoute('listApiKeys', 'get', '/v1/admin/apps/{id}/keys'),
+  clientRoute('createApiKey', 'post', '/v1/admin/apps/{id}/keys'),
+  clientRoute('revokeApiKey', 'delete', '/v1/admin/keys/{id}'),
+]);
+
 export class PosthornApiError extends Error {
   readonly status: number;
   readonly code: ApiErrorCode;
@@ -167,6 +212,58 @@ export class PosthornApiError extends Error {
     this.status = status;
     this.code = code;
     this.responseBody = responseBody;
+  }
+}
+
+export class PosthornAdminClient {
+  private readonly baseUrl: string;
+  private readonly adminToken: string;
+  private readonly fetchImpl: ClientFetch;
+
+  constructor(options: PosthornAdminClientOptions) {
+    this.baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.adminToken = requireNonEmpty(options.adminToken, 'adminToken');
+    this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  listApps(): Promise<AdminAppListResult> {
+    return this.request('get', '/v1/admin/apps');
+  }
+
+  createApp(input: CreateAdminAppInput): Promise<CreateAdminAppResult> {
+    return this.request('post', '/v1/admin/apps', input);
+  }
+
+  getApp(appId: string): Promise<AdminAppReadResult> {
+    return this.request('get', `/v1/admin/apps/${pathSegment(appId)}`);
+  }
+
+  updateApp(appId: string, input: UpdateAdminAppInput): Promise<AdminAppReadResult> {
+    return this.request('patch', `/v1/admin/apps/${pathSegment(appId)}`, input);
+  }
+
+  deleteApp(appId: string): Promise<void> {
+    return this.request('delete', `/v1/admin/apps/${pathSegment(appId)}`);
+  }
+
+  getAppUsage(appId: string): Promise<UsageReadResult> {
+    return this.request('get', `/v1/admin/apps/${pathSegment(appId)}/usage`);
+  }
+
+  listApiKeys(appId: string): Promise<AdminApiKeyListResult> {
+    return this.request('get', `/v1/admin/apps/${pathSegment(appId)}/keys`);
+  }
+
+  createApiKey(appId: string, input: CreateAdminApiKeyInput = {}): Promise<CreateAdminApiKeyResult> {
+    return this.request('post', `/v1/admin/apps/${pathSegment(appId)}/keys`, input);
+  }
+
+  revokeApiKey(keyId: string): Promise<void> {
+    return this.request('delete', `/v1/admin/keys/${pathSegment(keyId)}`);
+  }
+
+  private request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
+    return requestJson<T>(this.fetchImpl, this.baseUrl, this.adminToken, method, path, body);
   }
 }
 
@@ -277,24 +374,8 @@ export class PosthornClient {
     return this.request('post', '/v1/portal/sessions', input);
   }
 
-  private async request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: method.toUpperCase(),
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-    if (response.status === 204) return undefined as T;
-
-    const responseBody = await parseJsonResponse(response);
-    if (response.status >= 200 && response.status <= 299) {
-      return responseBody as T;
-    }
-
-    throw apiErrorFromResponse(response.status, responseBody);
+  private request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
+    return requestJson<T>(this.fetchImpl, this.baseUrl, this.apiKey, method, path, body);
   }
 }
 
@@ -330,6 +411,33 @@ function queryString(input: object, allowedKeys: readonly string[]): string {
   }
 
   return params.size === 0 ? '' : `?${params.toString()}`;
+}
+
+async function requestJson<T>(
+  fetchImpl: ClientFetch,
+  baseUrl: string,
+  bearerToken: string,
+  method: HttpMethod,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const response = await fetchImpl(`${baseUrl}${path}`, {
+    method: method.toUpperCase(),
+    headers: {
+      authorization: `Bearer ${bearerToken}`,
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  if (response.status === 204) return undefined as T;
+
+  const responseBody = await parseJsonResponse(response);
+  if (response.status >= 200 && response.status <= 299) {
+    return responseBody as T;
+  }
+
+  throw apiErrorFromResponse(response.status, responseBody);
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {

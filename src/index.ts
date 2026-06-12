@@ -23,17 +23,24 @@ export { loadConfig } from './config';
 export type { DeliveryListPage, DeliveryListRecord, ListDeliveriesOptions } from './deliveries';
 export { DeliveryListingValidationError, listDeliveries } from './deliveries';
 export type {
+  AdminApiKeyListResult,
+  AdminAppListResult,
+  AdminAppReadResult,
   ClientRouteMapping,
+  CreateAdminApiKeyInput,
+  CreateAdminAppInput,
   CreateEndpointInput,
   EndpointListResult,
   EndpointReadResult,
   ListMessageAttemptsInput,
+  PosthornAdminClientOptions,
   PosthornClientOptions,
   SendMessageInput,
+  UpdateAdminAppInput,
   UpdateEndpointInput,
   UsageReadResult,
 } from './client';
-export { POSTHORN_CLIENT_ROUTES, PosthornApiError, PosthornClient } from './client';
+export { POSTHORN_ADMIN_CLIENT_ROUTES, POSTHORN_CLIENT_ROUTES, PosthornAdminClient, PosthornApiError, PosthornClient } from './client';
 export type { CliOptions, CliStreams } from './cli';
 export { POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
 export type {

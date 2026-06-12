@@ -21,3 +21,4 @@
 {"date":"2026-06-12","feature":"F-0021","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":50,"notes":"App-wide delivery listing with status, endpoint, event type, and failure reason filters"}
 {"date":"2026-06-12","feature":"F-0022","attempts":0,"evaluator":"PASS","security":"NEEDS_WORK->APPROVE","findings_fixed":1,"pr":51,"notes":"Dependency-free Python SDK and webhook verifier; blocked API redirects to prevent bearer token leakage"}
 {"date":"2026-06-12","feature":"F-0023","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"NEEDS_WORK->APPROVE","findings_fixed":2,"pr":52,"notes":"TypeScript SDK parity for tenant routes; typed inputs and query allowlists added"}
+{"date":"2026-06-12","feature":"F-0024","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":53,"notes":"TypeScript admin client for app and API key management plus usage reads"}

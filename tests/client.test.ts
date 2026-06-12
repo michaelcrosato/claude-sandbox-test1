@@ -4,7 +4,9 @@ import {
   createGateway,
   hashApiKey,
   IMPLEMENTED_ROUTES,
+  POSTHORN_ADMIN_CLIENT_ROUTES,
   openStorage,
+  PosthornAdminClient,
   POSTHORN_CLIENT_ROUTES,
   PosthornApiError,
   PosthornClient,
@@ -17,6 +19,7 @@ import {
 
 const TENANT_KEY = `phk_${Buffer.alloc(32, 51).toString('base64url')}`;
 const OTHER_TENANT_KEY = `phk_${Buffer.alloc(32, 52).toString('base64url')}`;
+const ADMIN_TOKEN = '0123456789abcdef';
 const NOW = new Date('2026-06-12T12:00:00.000Z');
 
 const activeGateways: Gateway[] = [];
@@ -323,12 +326,93 @@ describe('PosthornClient', () => {
     }
   });
 
+  it('exercises the admin client for app, usage, and API key management', async () => {
+    const { address } = await startSeededGateway({ adminToken: ADMIN_TOKEN });
+    const admin = new PosthornAdminClient({ baseUrl: address.url, adminToken: ADMIN_TOKEN });
+
+    const created = await admin.createApp({ name: 'SDK Admin Tenant', monthlyMessageQuota: 10 });
+    expect(created.app).toMatchObject({
+      id: expect.stringMatching(/^app_/),
+      name: 'SDK Admin Tenant',
+      monthlyMessageQuota: 10,
+      createdAt: expect.any(String),
+    });
+    expect((await admin.listApps()).data.map((app) => app.id)).toContain(created.app.id);
+    expect(await admin.getApp(created.app.id)).toEqual({ app: created.app });
+
+    const updated = await admin.updateApp(created.app.id, {
+      name: 'SDK Admin Tenant Plus',
+      monthlyMessageQuota: null,
+    });
+    expect(updated.app).toEqual({
+      ...created.app,
+      name: 'SDK Admin Tenant Plus',
+      monthlyMessageQuota: null,
+    });
+
+    const key = await admin.createApiKey(created.app.id, { name: 'Primary SDK key' });
+    expect(key.secret).toMatch(/^phk_/);
+    expect(key.apiKey).toMatchObject({
+      id: expect.stringMatching(/^ak_/),
+      appId: created.app.id,
+      name: 'Primary SDK key',
+      revokedAt: null,
+      createdAt: expect.any(String),
+    });
+    expect(JSON.stringify(key.apiKey)).not.toContain(key.secret);
+    expect((await admin.listApiKeys(created.app.id)).data).toEqual([key.apiKey]);
+
+    const tenant = new PosthornClient({ baseUrl: address.url, apiKey: key.secret });
+    await tenant.sendMessage({ eventType: 'admin.sdk', payload: { id: 1 } });
+    const usage = await admin.getAppUsage(created.app.id);
+    expect(usage.usage).toMatchObject({
+      appId: created.app.id,
+      messagesAccepted: 1,
+      deliveryAttempts: 0,
+      quota: {
+        monthlyMessageQuota: null,
+        remaining: null,
+      },
+    });
+
+    await admin.revokeApiKey(key.apiKey.id);
+    expect((await admin.listApiKeys(created.app.id)).data[0]).toMatchObject({
+      id: key.apiKey.id,
+      revokedAt: expect.any(String),
+    });
+    await expect(tenant.listEndpoints()).rejects.toMatchObject({
+      status: 401,
+      code: 'unauthorized',
+    });
+
+    await admin.deleteApp(created.app.id);
+    await expect(admin.getApp(created.app.id)).rejects.toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
+  });
+
+  it('uses PosthornApiError for admin authentication failures', async () => {
+    const { address } = await startSeededGateway({ adminToken: ADMIN_TOKEN });
+    const admin = new PosthornAdminClient({ baseUrl: address.url, adminToken: 'wrong-admin-token' });
+
+    await expect(admin.listApps()).rejects.toMatchObject({
+      name: 'PosthornApiError',
+      status: 401,
+      code: 'unauthorized',
+      message: 'Invalid bearer token.',
+    });
+  });
+
   it('keeps SDK method routes covered by implemented OpenAPI routes', () => {
     const implemented = new Set(IMPLEMENTED_ROUTES.map(routeKey));
     const sdkRoutes = new Set(POSTHORN_CLIENT_ROUTES.map(routeKey));
     const methodNames = new Set(POSTHORN_CLIENT_ROUTES.map((route) => route.methodName));
+    const adminSdkRoutes = new Set(POSTHORN_ADMIN_CLIENT_ROUTES.map(routeKey));
+    const adminMethodNames = new Set(POSTHORN_ADMIN_CLIENT_ROUTES.map((route) => route.methodName));
 
     expect(methodNames.size).toBe(POSTHORN_CLIENT_ROUTES.length);
+    expect(adminMethodNames.size).toBe(POSTHORN_ADMIN_CLIENT_ROUTES.length);
     expect(sdkRoutes).toEqual(
       new Set([
         'GET /v1/endpoints',
@@ -359,11 +443,28 @@ describe('PosthornClient', () => {
     for (const route of sdkRoutes) {
       expect(implemented.has(route), route).toBe(true);
     }
+    expect(adminSdkRoutes).toEqual(
+      new Set([
+        'GET /v1/admin/apps',
+        'POST /v1/admin/apps',
+        'GET /v1/admin/apps/{id}',
+        'PATCH /v1/admin/apps/{id}',
+        'DELETE /v1/admin/apps/{id}',
+        'GET /v1/admin/apps/{id}/usage',
+        'GET /v1/admin/apps/{id}/keys',
+        'POST /v1/admin/apps/{id}/keys',
+        'DELETE /v1/admin/keys/{id}',
+      ]),
+    );
+    for (const route of adminSdkRoutes) {
+      expect(implemented.has(route), route).toBe(true);
+    }
   });
 });
 
 interface StartSeededGatewayOptions {
   readonly deliveryFetch?: DeliveryFetch;
+  readonly adminToken?: string;
 }
 
 async function startSeededGateway(
@@ -376,6 +477,7 @@ async function startSeededGateway(
       host: '127.0.0.1',
       dataDir: ':memory:',
       port: 0,
+      ...(options.adminToken === undefined ? {} : { adminToken: options.adminToken }),
     },
     {
       openStorage: () => storage,
