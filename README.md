@@ -26,19 +26,30 @@ not every listed route or client method is implemented yet.
 ```bash
 # 1. Build and run
 docker build -t posthorn .
-docker run -d --name posthorn -p 3000:3000 -v posthorn-data:/data \
-  -e POSTHORN_ADMIN_TOKEN=your-secret-admin-token \
+export POSTHORN_ADMIN_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+docker run -d --name posthorn -p 127.0.0.1:3000:3000 -v posthorn-data:/data \
+  -e POSTHORN_DATA_DIR=/data \
+  -e POSTHORN_ADMIN_TOKEN="$POSTHORN_ADMIN_TOKEN" \
   posthorn
 
-# 2. Bootstrap a tenant (one-time)
-docker run --rm -v posthorn-data:/data posthorn admin create-app "Acme"
-#  Created app app_xxx (name: Acme)
-docker run --rm -v posthorn-data:/data posthorn admin create-key app_xxx
-#  secret: phk_...  ← save this; shown once
+# 2. Confirm health, then bootstrap a tenant (one-time)
+curl -fsS localhost:3000/healthz
+APP_ID=$(curl -fsS localhost:3000/v1/admin/apps \
+  -H "Authorization: Bearer $POSTHORN_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Acme"}' | node -e "process.stdout.write(JSON.parse(require('node:fs').readFileSync(0, 'utf8')).app.id)")
+POSTHORN_API_KEY=$(curl -fsS "localhost:3000/v1/admin/apps/$APP_ID/keys" \
+  -H "Authorization: Bearer $POSTHORN_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' | node -e "process.stdout.write(JSON.parse(require('node:fs').readFileSync(0, 'utf8')).secret)")
+curl -fsS localhost:3000/v1/endpoints \
+  -H "Authorization: Bearer $POSTHORN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/webhooks/posthorn","eventTypes":["user.created"]}'
 
 # 3. Send your first webhook
 curl -sX POST localhost:3000/v1/messages \
-  -H "Authorization: Bearer phk_..." \
+  -H "Authorization: Bearer $POSTHORN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"eventType":"user.created","payload":{"id":42}}'
 # -> 202 Accepted; the delivery worker signs and POSTs it to your registered endpoint
@@ -148,7 +159,7 @@ import { PosthornClient, PosthornApiError } from "posthorn";
 
 const client = new PosthornClient({
   baseUrl: "https://posthorn.acme.example",
-  apiKey: process.env.POSTHORN_API_KEY!, // a "phk_..." key from `posthorn admin create-key`
+  apiKey: process.env.POSTHORN_API_KEY!, // a "phk_..." key from the admin API
 });
 
 // Register a destination — signing secret returned once:
@@ -215,12 +226,11 @@ try {
 
 The same tenant surface, from your shell or a CI job — no code. `posthorn client`
 talks to a (possibly remote) gateway over HTTP using a normal API key; it is the
-no-code counterpart to the SDK above (and the consumer-side mirror of the operator
-`posthorn admin` CLI). Point it at the gateway with two environment variables:
+no-code counterpart to the SDK above. Point it at the gateway with two environment variables:
 
 ```bash
 export POSTHORN_URL=https://posthorn.acme.example   # the gateway base URL
-export POSTHORN_API_KEY=phk_...                      # a key from `posthorn admin create-key`
+export POSTHORN_API_KEY=phk_...                      # a key from the admin API
 
 posthorn client create-endpoint https://acme.example/hook user.created  # secret printed ONCE
 posthorn client send user.created '{"id":42}'        # publish an event
@@ -316,7 +326,7 @@ usable independently without the HTTP layer — import just the primitives you n
 
 ## Configuration
 
-All settings are environment variables. See `.env.example` for a template.
+All settings are environment variables.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -352,7 +362,7 @@ Metric labels are intentionally low-cardinality: delivery `outcome`, delivery ta
 dead-letter `reason`, and build `version`. They never include tenant IDs, endpoint URLs,
 message IDs, event types, headers, API keys, signing secrets, or payload fields.
 
-For a production Prometheus + Alertmanager setup with ready-made alerting rules, see
+For a production Docker Compose reference with a Prometheus scrape config, see
 **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## Dashboard

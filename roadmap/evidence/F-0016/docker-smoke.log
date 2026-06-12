@@ -1,0 +1,101 @@
+Docker smoke for F-0016
+docker build -t posthorn:f0016-smoke .
+docker run -d --name posthorn-f0016-smoke -p 127.0.0.1::3000 -v posthorn-f0016-data:/data -e POSTHORN_DATA_DIR=/data -e POSTHORN_ADMIN_TOKEN=<redacted> posthorn:f0016-smoke
+Docker version 29.5.3, build d1c06ef
+posthorn-f0016-data
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 962B done
+#1 DONE 0.0s
+
+#2 [auth] docker/dockerfile:pull token for registry-1.docker.io
+#2 DONE 0.0s
+
+#3 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#3 DONE 0.5s
+
+#4 docker-image://docker.io/docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
+#4 resolve docker.io/docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89 0.0s done
+#4 CACHED
+
+#5 [auth] library/node:pull token for registry-1.docker.io
+#5 DONE 0.0s
+
+#6 [internal] load metadata for docker.io/library/node:24-bookworm-slim
+#6 DONE 0.4s
+
+#7 [internal] load .dockerignore
+#7 transferring context: 224B done
+#7 DONE 0.0s
+
+#8 [build  1/10] FROM docker.io/library/node:24-bookworm-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203
+#8 resolve docker.io/library/node:24-bookworm-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203 0.0s done
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 5.73kB done
+#9 DONE 0.0s
+
+#10 [build  5/10] COPY src ./src
+#10 CACHED
+
+#11 [build  4/10] RUN npm ci --ignore-scripts
+#11 CACHED
+
+#12 [build  2/10] WORKDIR /app
+#12 CACHED
+
+#13 [build  3/10] COPY package.json package-lock.json tsconfig.json ./
+#13 CACHED
+
+#14 [build  6/10] COPY scripts ./scripts
+#14 CACHED
+
+#15 [build  7/10] COPY tests ./tests
+#15 DONE 0.1s
+
+#16 [build  8/10] COPY vitest.config.ts ./
+#16 DONE 0.0s
+
+#17 [build  9/10] RUN npm run build
+#17 0.203 
+#17 0.203 > posthorn@0.0.0 build
+#17 0.203 > tsc --outDir dist
+#17 0.203 
+#17 DONE 1.3s
+
+#18 [build 10/10] RUN npm prune --omit=dev
+#18 3.205 
+#18 3.205 removed 194 packages, and audited 1 package in 3s
+#18 3.206 
+#18 3.206 found 0 vulnerabilities
+#18 DONE 3.2s
+
+#19 [runtime 4/5] COPY --from=build --chown=node:node /app/dist/src ./dist/src
+#19 CACHED
+
+#20 [runtime 3/5] COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+#20 CACHED
+
+#21 [runtime 5/5] RUN mkdir -p /data && chown -R node:node /app /data
+#21 CACHED
+
+#22 exporting to image
+#22 exporting layers done
+#22 exporting manifest sha256:2918c3328c7b7ee01cd1e157a9d45d09ecfed3821301249ab994c8634cb9a947 done
+#22 exporting config sha256:cf096c7576c1a003f27bce8b7e168dda383a0b116faf80fd935caa15a780cbad done
+#22 exporting attestation manifest sha256:f52d9b75033935ed31b104145094f8820c72f26ca74c9c4d78ed802c352c29d8 0.0s done
+#22 exporting manifest list sha256:9aa1b41fb3162cecff79b081bc7faa6ddefc2941748609353aa440b2f9c49032 done
+#22 naming to docker.io/library/posthorn:f0016-smoke done
+#22 unpacking to docker.io/library/posthorn:f0016-smoke 0.0s done
+#22 DONE 0.1s
+container: 06f942e5a695bf2aa8649530db3360b75d218ae6416da490aa43593eead0d4ee
+published: 127.0.0.1:54267
+healthz: {"status":"ok","service":"posthorn"}
+sqlite: /data/posthorn.sqlite exists
+Posthorn listening on http://127.0.0.1:3000
+posthorn-f0016-smoke
+posthorn-f0016-data
+DOCKER-SMOKE: PASS (exit 0)
+docker compose config --quiet: PASS (exit 0)

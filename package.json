@@ -20,6 +20,7 @@
   ],
   "scripts": {
     "build": "tsc --outDir dist",
+    "start": "node dist/src/server.js",
     "verify": "bash scripts/verify.sh",
     "shield": "ts-node scripts/assertion-shield.ts",
     "state": "ts-node scripts/update-state.ts",

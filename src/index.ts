@@ -81,6 +81,8 @@ export type { ApiErrorCode, HttpMethod, ImplementedRoute, OpenApiDocument } from
 export { API_ERROR_CODES, createOpenApiDocument, IMPLEMENTED_ROUTES } from './openapi';
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
+export type { PosthornServer, RunPosthornServerProcessOptions, ServerStreams, StartPosthornServerOptions } from './server';
+export { runPosthornServerProcess, startPosthornServer } from './server';
 export type { UsageQuotaExceededErrorCode, UsageQuotaStatus, UsageSummary } from './usage';
 export {
   assertMessageQuotaAvailable,
