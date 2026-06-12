@@ -1,4 +1,4 @@
-Source: GitHub Actions CI verify run 27421754462, job 81048873646, PR #32.
+Source: GitHub Actions CI verify run 27422211964, job 81050474142, PR #32.
 
 ^[[36;1mbash scripts/verify.sh^[[0m
 shell: /usr/bin/bash -e {0}
@@ -8,22 +8,22 @@ shell: /usr/bin/bash -e {0}
 ──── typecheck: OK
 
 ──── verify: lint ────
-Checked 13 files in 14ms. No fixes applied.
+Checked 13 files in 20ms. No fixes applied.
 ──── lint: OK
 
 ──── verify: unit tests ────
 
 ^[[1m^[[30m^[[46m RUN ^[[49m^[[39m^[[22m ^[[36mv4.1.8 ^[[39m^[[90m/home/runner/work/claude-sandbox-test1/claude-sandbox-test1^[[39m
 
- ^[[32m✓^[[39m tests/config.test.ts ^[[2m(^[[22m^[[2m13 tests^[[22m^[[2m)^[[22m^[[32m 9^[[2mms^[[22m^[[39m
- ^[[32m✓^[[39m tests/storage.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 140^[[2mms^[[22m^[[39m
- ^[[32m✓^[[39m tests/gateway-http.test.ts ^[[2m(^[[22m^[[2m6 tests^[[22m^[[2m)^[[22m^[[32m 186^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/config.test.ts ^[[2m(^[[22m^[[2m13 tests^[[22m^[[2m)^[[22m^[[32m 14^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/storage.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 38^[[2mms^[[22m^[[39m
+ ^[[32m✓^[[39m tests/gateway-http.test.ts ^[[2m(^[[22m^[[2m8 tests^[[22m^[[2m)^[[22m^[[32m 85^[[2mms^[[22m^[[39m
  ^[[32m✓^[[39m tests/index.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 5^[[2mms^[[22m^[[39m
 
 ^[[2m Test Files ^[[22m ^[[1m^[[32m4 passed^[[39m^[[22m^[[90m (4)^[[39m
-^[[2m      Tests ^[[22m ^[[1m^[[32m24 passed^[[39m^[[22m^[[90m (24)^[[39m
-^[[2m   Start at ^[[22m 14:22:49
-^[[2m   Duration ^[[22m 514ms^[[2m (transform 161ms, setup 0ms, import 454ms, tests 341ms, environment 1ms)^[[22m
+^[[2m      Tests ^[[22m ^[[1m^[[32m26 passed^[[39m^[[22m^[[90m (26)^[[39m
+^[[2m   Start at ^[[22m 14:30:46
+^[[2m   Duration ^[[22m 546ms^[[2m (transform 160ms, setup 0ms, import 452ms, tests 141ms, environment 1ms)^[[22m
 
 ──── unit tests: OK
 
@@ -41,14 +41,14 @@ Checked 13 files in 14ms. No fixes applied.
 ──── assertion shield: OK
 
 ──── verify: engine lint (biome) ────
-Checked 4 files in 9ms. No fixes applied.
+Checked 4 files in 10ms. No fixes applied.
 ──── engine lint (biome): OK
 
 ──── verify: shellcheck (hooks + gate scripts) ────
 [INFO ] ShellCheck binary not found or invalid, downloading to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
-[INFO ] Downloading 'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' to '/tmp/mXAiSM/shellcheck.download'
-[INFO ] Extracting '/tmp/mXAiSM/shellcheck.download' to '/tmp/mXAiSM'
-[INFO ] Copying '/tmp/mXAiSM/shellcheck' to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+[INFO ] Downloading 'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' to '/tmp/Q8BeFh/shellcheck.download'
+[INFO ] Extracting '/tmp/Q8BeFh/shellcheck.download' to '/tmp/Q8BeFh'
+[INFO ] Copying '/tmp/Q8BeFh/shellcheck' to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
 [INFO ] ShellCheck binary successfully downloaded to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
 ──── shellcheck (hooks + gate scripts): OK
 
@@ -211,5 +211,5 @@ Checked 4 files in 9ms. No fixes applied.
 hook contract tests: 139 passed, 0 failed
 ──── hook contract tests: OK
 
-VERIFY-COMMIT: 12182591d1d7d057b4bcb80272be5d68a82e9e6c @ 2026-06-12T14:23:57Z
+VERIFY-COMMIT: da18e0f43e76ced0a14f16b2d12d89a6e7fa035c @ 2026-06-12T14:31:54Z
 VERIFY: PASS (exit 0)
