@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0002 done (configuration and SQLite storage)
+
+**What:** Added `loadConfig`, documented POSTHORN_* defaults, built the first `node:sqlite` storage layer, and initialized the initial Posthorn tables idempotently. Security review blocked the first endpoint-secret schema, so the schema now separates non-secret headers from secret references and stores signing secrets as protected recoverable fields with key metadata.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0002/verify.log`. Fresh-context evaluator returned PASS after evidence was committed. Security reviewer returned APPROVE after the schema hardening fix. Local checks passed: `npm run typecheck`, `npm test` (18 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** The reviewer also spotted two non-blocking quality issues; both were fixed before merge: port values now cap at 65535, and `createGateway(loadConfig(...))` preserves loaded config fields.
+
+**Next step:** Merge PR #31 after the final state commit goes green, then start F-0005 (Standard Webhooks signing and verification utilities) or F-0003 if HTTP serving is the higher leverage next foundation.
+
+---
+
 ## 2026-06-12 — F-0001 done (product scaffold)
 
 **What:** Groomed the empty roadmap into 18 machine backlog items, selected F-0001, and added the first Posthorn TypeScript product scaffold with a minimal gateway factory, Vitest test, build script, and README status wording.
