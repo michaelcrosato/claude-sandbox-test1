@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0014 done (TypeScript SDK and command-line client)
+
+**What:** Added `PosthornClient`, `PosthornApiError`, and the `posthorn client` CLI for tenant endpoint, message, attempt, retry, and usage workflows. To keep the client honest, the feature also added implemented message status and retry HTTP routes, updated OpenAPI/README route status, and packaged runtime SDK/CLI outputs with declaration files.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0014/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/client.test.ts tests/cli.test.ts tests/messages-http.test.ts tests/openapi-contract.test.ts`, `npm test` (104 tests), `npm run lint`, `npm run build`, `npm run state:validate`, compiled CLI help smoke, and `npm pack --dry-run --json`.
+
+**Surprises:** F-0014 acceptance required message status and retry methods, but the backend routes were still planned. The route implementations were added in this feature so the SDK and CLI do not expose dead client methods.
+
+**Next step:** Merge PR #43 after the final evidence/state commit goes green, then start the next unblocked feature.
+
+---
+
 ## 2026-06-12 — F-0013 done (OpenAPI contract and closed error codes)
 
 **What:** Added deterministic `GET /openapi.json` OpenAPI 3.1 output for every implemented public and admin route, centralized the runtime `Error.code` enum, exported the OpenAPI helpers, and changed readiness failures to return the standard error envelope. README route and error-code tables now mark implemented vs planned surfaces so docs and spec can be tested without documenting future routes as live.
