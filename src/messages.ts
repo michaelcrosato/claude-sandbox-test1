@@ -538,7 +538,7 @@ function parseEventTypeFilter(value: unknown): string | null {
 
 function parseDateTimeFilter(value: unknown, name: 'after' | 'before'): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== 'string' || !isCanonicalUtcDateTime(value)) {
+  if (typeof value !== 'string' || !isStrictDateTime(value)) {
     throw new MessageValidationError(`${name} must be a valid date-time string.`);
   }
 
@@ -546,12 +546,36 @@ function parseDateTimeFilter(value: unknown, name: 'after' | 'before'): string |
   return new Date(timestamp).toISOString();
 }
 
-function isCanonicalUtcDateTime(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return false;
+function isStrictDateTime(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (match === null) return false;
 
-  return new Date(timestamp).toISOString() === (value.includes('.') ? value : value.replace('Z', '.000Z'));
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offset = match[8];
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (offset !== 'Z') {
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+
+  return Number.isFinite(Date.parse(value));
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }
 
 function generateId(prefix: string): string {

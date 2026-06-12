@@ -585,11 +585,12 @@ describe('message intake HTTP route', () => {
       eventType: 'user.created',
       payload: { id: 'other-tenant' },
     });
+    const firstCreatedAtEastern = encodeURIComponent('2026-06-12T08:00:00-04:00');
 
     const firstPage = await requestJson<MessageListJson>(
       address,
       'GET',
-      `/v1/messages?eventType=user.created&after=${encodeURIComponent(first.body.message.createdAt)}&limit=1`,
+      `/v1/messages?eventType=user.created&after=${firstCreatedAtEastern}&limit=1`,
       TENANT_A_KEY,
     );
     expect(firstPage.status).toBe(200);
@@ -601,7 +602,7 @@ describe('message intake HTTP route', () => {
     const secondPage = await requestJson<MessageListJson>(
       address,
       'GET',
-      `/v1/messages?eventType=user.created&after=${encodeURIComponent(first.body.message.createdAt)}&limit=1&cursor=${firstPage.body.nextCursor}`,
+      `/v1/messages?eventType=user.created&after=${firstCreatedAtEastern}&limit=1&cursor=${firstPage.body.nextCursor}`,
       TENANT_A_KEY,
     );
     expect(secondPage.status).toBe(200);
