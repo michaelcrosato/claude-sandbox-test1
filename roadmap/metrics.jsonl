@@ -24,3 +24,4 @@
 {"date":"2026-06-12","feature":"F-0024","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":53,"notes":"TypeScript admin client for app and API key management plus usage reads"}
 {"date":"2026-06-12","feature":"F-0025","attempts":0,"evaluator":"PASS","security":"NEEDS_WORK->APPROVE","findings_fixed":1,"pr":54,"notes":"Endpoint auto-disable after sustained failures; current-dead-letter single-failure DoS edge case fixed"}
 {"date":"2026-06-12","feature":"F-0026","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":2,"pr":55,"notes":"Message history event type and created-at filters; strict timestamp and OpenAPI query invariants fixed"}
+{"date":"2026-06-12","feature":"F-0027","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"NEEDS_WORK->APPROVE","findings_fixed":2,"pr":56,"notes":"Admin app system signing secret rotation with protected storage, one-time output, and atomic updates"}
