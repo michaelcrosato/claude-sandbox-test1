@@ -169,20 +169,20 @@ describe('message intake HTTP route', () => {
     const { address, storage } = await startSeededGateway();
     const matchAll = createEndpoint(storage, 'app_a', {
       url: 'https://example.com/hooks/all',
-    }).endpoint;
+    }, new Date('2026-06-12T00:00:00.001Z')).endpoint;
     const matchFiltered = createEndpoint(storage, 'app_a', {
       url: 'https://example.com/hooks/payments',
       eventTypes: ['payment.created'],
-    }).endpoint;
+    }, new Date('2026-06-12T00:00:00.002Z')).endpoint;
     const disabled = createEndpoint(storage, 'app_a', {
       url: 'https://example.com/hooks/disabled',
       eventTypes: ['payment.created'],
-    }).endpoint;
+    }, new Date('2026-06-12T00:00:00.003Z')).endpoint;
     updateEndpoint(storage, 'app_a', disabled.id, { enabled: false });
     const otherTenant = createEndpoint(storage, 'app_b', {
       url: 'https://example.com/hooks/other',
       eventTypes: ['payment.created'],
-    }).endpoint;
+    }, new Date('2026-06-12T00:00:00.004Z')).endpoint;
 
     const response = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
       eventType: 'payment.created',
