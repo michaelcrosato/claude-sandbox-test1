@@ -11,7 +11,7 @@ import {
   listEndpoints,
   updateEndpoint,
 } from './endpoints';
-import { acceptMessage, MessageValidationError } from './messages';
+import { acceptMessage, MessageConflictError, MessageValidationError } from './messages';
 import { openStorage, type PosthornStorage } from './storage';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
@@ -408,6 +408,10 @@ function writeEndpointError(response: ServerResponse, error: unknown): void {
 }
 
 function writeMessageError(response: ServerResponse, error: unknown): void {
+  if (error instanceof MessageConflictError) {
+    writeJson(response, 409, { error: { code: error.code, message: error.message } });
+    return;
+  }
   if (error instanceof MessageValidationError) {
     writeJson(response, 400, { error: { code: error.code, message: error.message } });
     return;

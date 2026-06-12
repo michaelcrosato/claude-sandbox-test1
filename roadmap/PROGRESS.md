@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0008 done (idempotent message intake)
+
+**What:** Added optional `idempotencyKey` support for `POST /v1/messages`. Same-tenant retries with the same canonical request now return the original accepted message and delivery IDs without creating new fanout; changed retries return `409 idempotency_conflict`. Idempotency keys are tenant-scoped through the existing SQLite uniqueness constraint.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0008/verify.log`. Fresh-context evaluator returned NEEDS_WORK for a raw control-character validation gap, then PASS after the fix and regression test. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npm test` (73 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** Trimming before validation would have allowed leading/trailing control characters in idempotency keys; the parser now rejects control characters in the raw supplied string before trimming.
+
+**Next step:** Merge PR #37 after the final evidence commit goes green, then start F-0009 (per-attempt audit log) or F-0010 if admin provisioning is higher leverage.
+
+---
+
 ## 2026-06-12 — F-0007 done (crash-safe retry delivery worker)
 
 **What:** Added the importable delivery worker with SQLite lease claiming, Standard Webhooks signing, success/failure attempt recording, exponential retry scheduling, dead-lettering, timeout handling, and lease reclaim. Endpoint signing-secret persistence now stores recoverable protected material for new endpoints while legacy digest-only rows fail closed instead of sending unsigned traffic. Security review blocked redirect-following and response-body buffering; the worker now sends with redirects disabled and cancels response bodies.

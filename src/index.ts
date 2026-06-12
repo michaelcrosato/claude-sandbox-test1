@@ -18,11 +18,18 @@ export type {
   DeliveryStatus,
   DeliveryTaskRecord,
   JsonValue,
+  MessageConflictErrorCode,
   MessageFanout,
   MessageRecord,
   MessageValidationErrorCode,
 } from './messages';
-export { acceptMessage, getMessage, listDeliveriesForMessage, MessageValidationError } from './messages';
+export {
+  acceptMessage,
+  getMessage,
+  listDeliveriesForMessage,
+  MessageConflictError,
+  MessageValidationError,
+} from './messages';
 export type { PosthornStorage, StorageOptions } from './storage';
 export { initializeSchema, openStorage, POSTHORN_DATABASE_FILE } from './storage';
 export type {
