@@ -30,6 +30,7 @@ describe('openStorage', () => {
         'local_secret_keys',
         'messages',
         'schema_migrations',
+        'usage_months',
       ]);
 
       storage.initializeSchema();

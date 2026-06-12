@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   attempted_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS usage_months (
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,
+  messages_accepted INTEGER NOT NULL DEFAULT 0,
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(app_id, month)
+);
+
 INSERT OR IGNORE INTO schema_migrations (version, applied_at)
 VALUES ('0001_initial', datetime('now'));
 `;

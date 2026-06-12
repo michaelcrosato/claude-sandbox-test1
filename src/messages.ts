@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import type { PosthornStorage } from './storage';
+import { assertMessageQuotaAvailable, incrementAcceptedMessages } from './usage';
 
 export type MessageValidationErrorCode = 'invalid_request';
 export type MessageConflictErrorCode = 'idempotency_conflict';
@@ -101,8 +102,8 @@ export function acceptMessage(
   const requestHash = idempotencyKey === null ? null : hashMessageRequest(eventType, payload);
   const messageId = generateId(MESSAGE_ID_PREFIX);
   const createdAt = now.toISOString();
-  const matchingEndpoints = listMatchingEnabledEndpoints(storage, appId, eventType);
-  const deliveryIds = matchingEndpoints.map(() => generateId(DELIVERY_ID_PREFIX));
+  let matchingEndpoints: readonly MatchingEndpoint[] = [];
+  let deliveryIds: string[] = [];
 
   storage.db.exec('BEGIN IMMEDIATE');
   try {
@@ -117,6 +118,10 @@ export function acceptMessage(
         return existingResult;
       }
     }
+
+    assertMessageQuotaAvailable(storage, appId, now);
+    matchingEndpoints = listMatchingEnabledEndpoints(storage, appId, eventType);
+    deliveryIds = matchingEndpoints.map(() => generateId(DELIVERY_ID_PREFIX));
 
     storage.db
       .prepare(`
@@ -143,6 +148,7 @@ export function acceptMessage(
       insertDelivery.run(deliveryIds[index], messageId, endpoint.id, 'pending', 0, null, null, null, createdAt, createdAt);
     });
 
+    incrementAcceptedMessages(storage, appId, now);
     storage.db.exec('COMMIT');
   } catch (error) {
     storage.db.exec('ROLLBACK');

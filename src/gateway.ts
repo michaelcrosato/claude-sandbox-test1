@@ -24,6 +24,7 @@ import {
 } from './endpoints';
 import { acceptMessage, listMessageAttempts, MessageConflictError, MessageValidationError } from './messages';
 import { openStorage, type PosthornStorage } from './storage';
+import { getUsageSummary, UsageQuotaExceededError } from './usage';
 
 export interface GatewayConfig extends Partial<PosthornConfig> {
   readonly serviceName?: string;
@@ -38,6 +39,7 @@ export interface GatewayAddress {
 export interface GatewayDependencies {
   readonly openStorage?: (options: { readonly dataDir: string }) => PosthornStorage;
   readonly readinessProbe?: (storage: PosthornStorage) => void;
+  readonly now?: () => Date;
 }
 
 export interface Gateway {
@@ -59,6 +61,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
   let readinessError: Error | null = null;
 
   const storageFactory = dependencies.openStorage ?? openStorage;
+  const now = dependencies.now ?? (() => new Date());
   const readinessProbe =
     dependencies.readinessProbe ??
     ((currentStorage: PosthornStorage) => {
@@ -118,6 +121,7 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
         getStorage: () => storage,
         getReadinessError: () => readinessError,
         readinessProbe,
+        now,
       }).catch((error: unknown) => {
         if (!response.headersSent) {
           writeJson(response, 500, { error: { code: 'internal_error', message: 'Internal server error.' } });
@@ -155,6 +159,7 @@ interface RequestContext {
   readonly getStorage: () => PosthornStorage | null;
   readonly getReadinessError: () => Error | null;
   readonly readinessProbe: (storage: PosthornStorage) => void;
+  readonly now: () => Date;
 }
 
 async function handleRequest(context: RequestContext): Promise<void> {
@@ -196,6 +201,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
 
   if (url.pathname === '/v1/admin/apps' || adminAppPathFromPath(url.pathname) !== null || adminApiKeyPathFromPath(url.pathname) !== null) {
     await handleAdminRequest(context, url);
+    return;
+  }
+
+  if (url.pathname === '/v1/usage') {
+    await handleUsageRequest(context);
     return;
   }
 
@@ -262,7 +272,22 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
     return;
   }
 
-  if (appPath.keysRoute) {
+  if (appPath.route === 'usage') {
+    if (context.request.method !== 'GET') {
+      writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+      return;
+    }
+
+    const usage = getUsageSummary(scoped.storage, appPath.appId, context.now());
+    if (usage === null) {
+      writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+      return;
+    }
+    writeJson(context.response, 200, { usage });
+    return;
+  }
+
+  if (appPath.route === 'keys') {
     if (context.request.method === 'GET') {
       const keys = listAdminApiKeys(scoped.storage, appPath.appId);
       if (keys === null) {
@@ -329,6 +354,24 @@ async function handleAdminRequest(context: RequestContext, url: URL): Promise<vo
   }
 
   writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+}
+
+async function handleUsageRequest(context: RequestContext): Promise<void> {
+  const scoped = authenticateTenantRequest(context);
+  if (scoped === null) return;
+
+  if (context.request.method !== 'GET') {
+    writeJson(context.response, 405, { error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
+    return;
+  }
+
+  const usage = getUsageSummary(scoped.storage, scoped.tenant.appId, context.now());
+  if (usage === null) {
+    writeJson(context.response, 404, { error: { code: 'not_found', message: 'Not found.' } });
+    return;
+  }
+
+  writeJson(context.response, 200, { usage });
 }
 
 async function handleEndpointRequest(context: RequestContext, url: URL): Promise<void> {
@@ -445,7 +488,7 @@ async function handleMessageRequest(context: RequestContext, url: URL): Promise<
   if (body === null) return;
 
   try {
-    writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body));
+    writeJson(context.response, 202, acceptMessage(scoped.storage, scoped.tenant.appId, body, context.now()));
   } catch (error) {
     writeMessageError(context.response, error);
   }
@@ -485,10 +528,12 @@ function authenticateAdminRequest(context: RequestContext): AdminScopedRequest |
 }
 
 function adminAppPathFromPath(pathname: string): AdminAppPath | null {
+  const usageMatch = /^\/v1\/admin\/apps\/([^/]+)\/usage$/.exec(pathname);
+  if (usageMatch !== null) return { appId: usageMatch[1], route: 'usage' };
   const keysMatch = /^\/v1\/admin\/apps\/([^/]+)\/keys$/.exec(pathname);
-  if (keysMatch !== null) return { appId: keysMatch[1], keysRoute: true };
+  if (keysMatch !== null) return { appId: keysMatch[1], route: 'keys' };
   const appMatch = /^\/v1\/admin\/apps\/([^/]+)$/.exec(pathname);
-  if (appMatch !== null) return { appId: appMatch[1], keysRoute: false };
+  if (appMatch !== null) return { appId: appMatch[1], route: 'app' };
   return null;
 }
 
@@ -647,6 +692,10 @@ function writeAdminError(response: ServerResponse, error: unknown): void {
 }
 
 function writeMessageError(response: ServerResponse, error: unknown): void {
+  if (error instanceof UsageQuotaExceededError) {
+    writeJson(response, 429, { error: { code: error.code, message: error.message } });
+    return;
+  }
   if (error instanceof MessageConflictError) {
     writeJson(response, 409, { error: { code: error.code, message: error.message } });
     return;
@@ -675,7 +724,7 @@ interface AdminScopedRequest {
 
 interface AdminAppPath {
   readonly appId: string;
-  readonly keysRoute: boolean;
+  readonly route: 'app' | 'keys' | 'usage';
 }
 
 type RequestBodyResult =
