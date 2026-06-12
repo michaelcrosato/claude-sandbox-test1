@@ -1,0 +1,519 @@
+VERIFY-COMMIT: 3c993e7b48c8349eb0ebc3efe8b0071c70278e5a @ 2026-06-12T23:09:21Z
+VERIFY: PASS (exit 0)
+
+verify	Set up job	﻿2026-06-12T23:08:01.0480571Z Current runner version: '2.335.1'
+verify	Set up job	2026-06-12T23:08:01.0505858Z ##[group]Runner Image Provisioner
+verify	Set up job	2026-06-12T23:08:01.0506718Z Hosted Compute Agent
+verify	Set up job	2026-06-12T23:08:01.0507419Z Version: 20260527.539
+verify	Set up job	2026-06-12T23:08:01.0508075Z Commit: a891dd388383b896fa6ac04a82c0b75cec981078
+verify	Set up job	2026-06-12T23:08:01.0508839Z Build Date: 2026-05-27T21:39:57Z
+verify	Set up job	2026-06-12T23:08:01.0510082Z Worker ID: {1f611fb9-4ad7-42b8-8f44-858cf4744315}
+verify	Set up job	2026-06-12T23:08:01.0510847Z Azure Region: eastus
+verify	Set up job	2026-06-12T23:08:01.0511484Z ##[endgroup]
+verify	Set up job	2026-06-12T23:08:01.0513279Z ##[group]Operating System
+verify	Set up job	2026-06-12T23:08:01.0513979Z Ubuntu
+verify	Set up job	2026-06-12T23:08:01.0514593Z 24.04.4
+verify	Set up job	2026-06-12T23:08:01.0515136Z LTS
+verify	Set up job	2026-06-12T23:08:01.0515660Z ##[endgroup]
+verify	Set up job	2026-06-12T23:08:01.0516332Z ##[group]Runner Image
+verify	Set up job	2026-06-12T23:08:01.0517030Z Image: ubuntu-24.04
+verify	Set up job	2026-06-12T23:08:01.0517690Z Version: 20260607.184.1
+verify	Set up job	2026-06-12T23:08:01.0518783Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260607.184/images/ubuntu/Ubuntu2404-Readme.md
+verify	Set up job	2026-06-12T23:08:01.0520721Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260607.184
+verify	Set up job	2026-06-12T23:08:01.0521796Z ##[endgroup]
+verify	Set up job	2026-06-12T23:08:01.0522962Z ##[group]GITHUB_TOKEN Permissions
+verify	Set up job	2026-06-12T23:08:01.0525350Z Contents: read
+verify	Set up job	2026-06-12T23:08:01.0526004Z Metadata: read
+verify	Set up job	2026-06-12T23:08:01.0526677Z ##[endgroup]
+verify	Set up job	2026-06-12T23:08:01.0529083Z Secret source: Actions
+verify	Set up job	2026-06-12T23:08:01.0530195Z Prepare workflow directory
+verify	Set up job	2026-06-12T23:08:01.0854069Z Prepare all required actions
+verify	Set up job	2026-06-12T23:08:01.0891953Z Getting action download info
+verify	Set up job	2026-06-12T23:08:01.3237456Z Download action repository 'actions/checkout@v6' (SHA:df4cb1c069e1874edd31b4311f1884172cec0e10)
+verify	Set up job	2026-06-12T23:08:01.4816805Z Download action repository 'actions/setup-node@v6' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+verify	Set up job	2026-06-12T23:08:01.7146191Z Complete job name: verify
+verify	Run actions/checkout@v6	﻿2026-06-12T23:08:01.7882207Z ##[group]Run actions/checkout@v6
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7883036Z with:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7883462Z   fetch-depth: 0
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7884003Z   repository: michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7888853Z   token: ***
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7889719Z   ssh-strict: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7890229Z   ssh-user: git
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7890671Z   persist-credentials: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7891167Z   clean: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7891616Z   sparse-checkout-cone-mode: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7892139Z   fetch-tags: false
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7892575Z   show-progress: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7893015Z   lfs: false
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7893427Z   submodules: false
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7893871Z   set-safe-directory: true
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.7894641Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8869610Z Syncing repository: michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8871786Z ##[group]Getting Git version info
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8872753Z Working directory is '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1'
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8874134Z [command]/usr/bin/git version
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8934428Z git version 2.54.0
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.8987347Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9001251Z Temporarily overriding HOME='/home/runner/work/_temp/a6dc086b-054f-4e69-ad57-304bdfd01cb5' before making global git config changes
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9002667Z Adding repository directory to the temporary git global config as a safe directory
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9006668Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9055271Z Deleting the contents of '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1'
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9059156Z ##[group]Determining repository object format
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9061653Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9062512Z ##[group]Initializing the repository
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9066780Z [command]/usr/bin/git init /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9165643Z hint: Using 'master' as the name for the initial branch. This default branch name
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9167528Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9169092Z hint: to use in all of your new repositories, which will suppress this warning,
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9170419Z hint: call:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9171043Z hint:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9171846Z hint: 	git config --global init.defaultBranch <name>
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9172530Z hint:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9173330Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9174493Z hint: 'development'. The just-created branch can be renamed via this command:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9175224Z hint:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9175669Z hint: 	git branch -m <name>
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9176419Z hint:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9177188Z hint: Disable this message with "git config set advice.defaultBranchName false"
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9178311Z Initialized empty Git repository in /home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9181995Z [command]/usr/bin/git remote add origin https://github.com/michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9226529Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9227334Z ##[group]Disabling automatic garbage collection
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9230255Z [command]/usr/bin/git config --local gc.auto 0
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9260006Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9261021Z ##[group]Setting up auth
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9261902Z Removing SSH command configuration
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9266804Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9301394Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9636049Z Removing HTTP extra header
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9641833Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9674736Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9901840Z Removing includeIf entries pointing to credentials config files
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9906982Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verify	Run actions/checkout@v6	2026-06-12T23:08:01.9937776Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0174112Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0217390Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0252141Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0288132Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0320604Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0348288Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0349057Z ##[group]Fetching the repository
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.0357496Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/* +3c993e7b48c8349eb0ebc3efe8b0071c70278e5a:refs/remotes/pull/54/merge
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5177765Z From https://github.com/michaelcrosato/claude-sandbox-test1
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5180265Z  * [new branch]      develop                                  -> origin/develop
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5181805Z  * [new branch]      feat/F-0025                              -> origin/feat/F-0025
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5184413Z  * [new branch]      fix-secure-cookies-12621239021464708045  -> origin/fix-secure-cookies-12621239021464708045
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5186285Z  * [new branch]      fix-testing-gap-9769365040422560746      -> origin/fix-testing-gap-9769365040422560746
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5188134Z  * [new branch]      fix/cookie-secure-attribute-9649095602443010258 -> origin/fix/cookie-secure-attribute-9649095602443010258
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5190584Z  * [new branch]      fix/n-plus-one-query-tenant-dashboard-7585570271790670955 -> origin/fix/n-plus-one-query-tenant-dashboard-7585570271790670955
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5192619Z  * [new branch]      jules-12633352851970186916-85cc8dc4      -> origin/jules-12633352851970186916-85cc8dc4
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5194276Z  * [new branch]      jules-14114376179219540410-9e6a39ce      -> origin/jules-14114376179219540410-9e6a39ce
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5196318Z  * [new branch]      jules-15744721551443159625-6373e1e8      -> origin/jules-15744721551443159625-6373e1e8
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5198274Z  * [new branch]      jules-16093478213463828521               -> origin/jules-16093478213463828521
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5200490Z  * [new branch]      jules-3616429161098162028-5b310ee4       -> origin/jules-3616429161098162028-5b310ee4
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5202432Z  * [new branch]      jules-5287189669532334063-b24b1fe2       -> origin/jules-5287189669532334063-b24b1fe2
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5204170Z  * [new branch]      jules-5876443510078069307-ff8a6bca       -> origin/jules-5876443510078069307-ff8a6bca
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5206457Z  * [new branch]      jules-add-systemEventTransportFrom-tests-17576351816775455343 -> origin/jules-add-systemEventTransportFrom-tests-17576351816775455343
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5209578Z  * [new branch]      jules-optimize-cancel-message-9113223768473199127 -> origin/jules-optimize-cancel-message-9113223768473199127
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5212873Z  * [new branch]      jules-optimize-tenant-handler-17752217191181656008 -> origin/jules-optimize-tenant-handler-17752217191181656008
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5216259Z  * [new branch]      jules-perf-optimize-retries-10420574192359177556 -> origin/jules-perf-optimize-retries-10420574192359177556
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5218861Z  * [new branch]      main                                     -> origin/main
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5221263Z  * [new branch]      perf-retry-message-17142870735697212356  -> origin/perf-retry-message-17142870735697212356
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5224636Z  * [new branch]      performance-improve-queue-retry-concurrency-13574057378926878238 -> origin/performance-improve-queue-retry-concurrency-13574057378926878238
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5227836Z  * [new branch]      test-billing-provider-1867712393725636274 -> origin/test-billing-provider-1867712393725636274
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5230226Z  * [new tag]         archive/add-tests-usage-report-5882049586409978497 -> archive/add-tests-usage-report-5882049586409978497
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5232831Z  * [new tag]         archive/cursor/cloud-dev-env-docs-7e1c   -> archive/cursor/cloud-dev-env-docs-7e1c
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5236060Z  * [new tag]         archive/fix-missing-secure-attribute-on-session-cookies-12656376876899540371 -> archive/fix-missing-secure-attribute-on-session-cookies-12656376876899540371
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5239200Z  * [new tag]         archive/fix-portal-cookie-secure-4807980669564717116 -> archive/fix-portal-cookie-secure-4807980669564717116
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5242250Z  * [new tag]         archive/fix-secure-cookies-12621239021464708045 -> archive/fix-secure-cookies-12621239021464708045
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5244879Z  * [new tag]         archive/fix-secure-cookies-6908223813514403416 -> archive/fix-secure-cookies-6908223813514403416
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5247586Z  * [new tag]         archive/fix-testing-gap-9769365040422560746 -> archive/fix-testing-gap-9769365040422560746
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5251034Z  * [new tag]         archive/fix/cookie-secure-attribute-9649095602443010258 -> archive/fix/cookie-secure-attribute-9649095602443010258
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5254511Z  * [new tag]         archive/fix/n-plus-one-query-tenant-dashboard-7585570271790670955 -> archive/fix/n-plus-one-query-tenant-dashboard-7585570271790670955
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5257495Z  * [new tag]         archive/jules-12063469622865446951-d6c9d038 -> archive/jules-12063469622865446951-d6c9d038
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5259993Z  * [new tag]         archive/jules-12633352851970186916-85cc8dc4 -> archive/jules-12633352851970186916-85cc8dc4
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5262354Z  * [new tag]         archive/jules-12886355537722753111-2b7a6689 -> archive/jules-12886355537722753111-2b7a6689
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5264640Z  * [new tag]         archive/jules-14114376179219540410-9e6a39ce -> archive/jules-14114376179219540410-9e6a39ce
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5266937Z  * [new tag]         archive/jules-14488570772810190490-3c152e68 -> archive/jules-14488570772810190490-3c152e68
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5269223Z  * [new tag]         archive/jules-15744721551443159625-6373e1e8 -> archive/jules-15744721551443159625-6373e1e8
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5271560Z  * [new tag]         archive/jules-16093478213463828521       -> archive/jules-16093478213463828521
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5273678Z  * [new tag]         archive/jules-3616429161098162028-5b310ee4 -> archive/jules-3616429161098162028-5b310ee4
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5275903Z  * [new tag]         archive/jules-5287189669532334063-b24b1fe2 -> archive/jules-5287189669532334063-b24b1fe2
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5278146Z  * [new tag]         archive/jules-5876443510078069307-ff8a6bca -> archive/jules-5876443510078069307-ff8a6bca
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5280584Z  * [new tag]         archive/jules-6793574749816983955-95105f6d -> archive/jules-6793574749816983955-95105f6d
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5283636Z  * [new tag]         archive/jules-add-error-codes-test-15793405527436340862 -> archive/jules-add-error-codes-test-15793405527436340862
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5292959Z  * [new tag]         archive/jules-add-systemEventTransportFrom-tests-17576351816775455343 -> archive/jules-add-systemEventTransportFrom-tests-17576351816775455343
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5296725Z  * [new tag]         archive/jules-optimize-cancel-message-9113223768473199127 -> archive/jules-optimize-cancel-message-9113223768473199127
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5300242Z  * [new tag]         archive/jules-optimize-tenant-handler-17752217191181656008 -> archive/jules-optimize-tenant-handler-17752217191181656008
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5303633Z  * [new tag]         archive/jules-perf-optimize-retries-10420574192359177556 -> archive/jules-perf-optimize-retries-10420574192359177556
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5305750Z  * [new tag]         archive/maint/iter-0115                  -> archive/maint/iter-0115
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5307908Z  * [new tag]         archive/optimize-n1-dashboard-10055649552144261545 -> archive/optimize-n1-dashboard-10055649552144261545
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5311356Z  * [new tag]         archive/perf-retry-message-17142870735697212356 -> archive/perf-retry-message-17142870735697212356
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5315447Z  * [new tag]         archive/performance-improve-queue-retry-concurrency-13574057378926878238 -> archive/performance-improve-queue-retry-concurrency-13574057378926878238
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5319838Z  * [new tag]         archive/test-billing-provider-1867712393725636274 -> archive/test-billing-provider-1867712393725636274
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5322413Z  * [new tag]         pre-purge-20260609                       -> pre-purge-20260609
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5324238Z  * [new ref]         3c993e7b48c8349eb0ebc3efe8b0071c70278e5a -> pull/54/merge
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5341191Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5344568Z ##[group]Determining the checkout info
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5346784Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5347875Z [command]/usr/bin/git sparse-checkout disable
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5407894Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5437040Z ##[group]Checking out the ref
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5441177Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/54/merge
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5634388Z Note: switching to 'refs/remotes/pull/54/merge'.
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5635089Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5635549Z You are in 'detached HEAD' state. You can look around, make experimental
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5636719Z changes and commit them, and you can discard any commits you make in this
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5638098Z state without impacting any branches by switching back to a branch.
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5639141Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5640046Z If you want to create a new branch to retain commits you create, you may
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5642059Z do so (now or later) by using -c with the switch command. Example:
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5643236Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5643634Z   git switch -c <new-branch-name>
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5644420Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5644778Z Or undo this operation with:
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5645467Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5645800Z   git switch -
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5646284Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5647151Z Turn off this advice by setting config variable advice.detachedHead to false
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5648594Z 
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5650371Z HEAD is now at 3c993e7 Merge 0fb1f4fb5c5287552788cfde820effeec68a1e89 into d827e8e329b05c5128505e49bdbb999eca77ca18
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5655118Z ##[endgroup]
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5690044Z [command]/usr/bin/git log -1 --format=%H
+verify	Run actions/checkout@v6	2026-06-12T23:08:02.5717236Z 3c993e7b48c8349eb0ebc3efe8b0071c70278e5a
+verify	Run actions/setup-node@v6	﻿2026-06-12T23:08:02.6122249Z ##[group]Run actions/setup-node@v6
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6123115Z with:
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6123666Z   node-version: 24
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6124279Z   cache: npm
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6124867Z   check-latest: false
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6136292Z   token: ***
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6136950Z   package-manager-cache: true
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.6137713Z ##[endgroup]
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.7693915Z Found in cache @ /opt/hostedtoolcache/node/24.16.0/x64
+verify	Run actions/setup-node@v6	2026-06-12T23:08:02.7696110Z ##[group]Environment details
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.0974027Z node: v24.16.0
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.0974672Z npm: 11.13.0
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.0975025Z yarn: 1.22.22
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.0976292Z ##[endgroup]
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.0993314Z [command]/opt/hostedtoolcache/node/24.16.0/x64/bin/npm config get cache
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.3604880Z /home/runner/.npm
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.4402340Z Cache hit for: node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.7491177Z Received 42148325 of 42148325 (100.0%), 151.1 MBs/sec
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.7492091Z Cache Size: ~40 MB (42148325 B)
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.7526085Z [command]/usr/bin/tar -xf /home/runner/work/_temp/e16d48fd-8cbd-469e-a77d-0e6978ce209d/cache.tzst -P -C /home/runner/work/claude-sandbox-test1/claude-sandbox-test1 --use-compress-program unzstd
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.8453384Z Cache restored successfully
+verify	Run actions/setup-node@v6	2026-06-12T23:08:05.8477338Z Cache restored from key: node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5
+verify	Install	﻿2026-06-12T23:08:05.8744905Z ##[group]Run npm ci --no-audit --no-fund
+verify	Install	2026-06-12T23:08:05.8745356Z ^[[36;1mnpm ci --no-audit --no-fund^[[0m
+verify	Install	2026-06-12T23:08:05.8906775Z shell: /usr/bin/bash -e {0}
+verify	Install	2026-06-12T23:08:05.8907144Z ##[endgroup]
+verify	Install	2026-06-12T23:08:07.8956818Z npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+verify	Install	2026-06-12T23:08:08.2124370Z 
+verify	Install	2026-06-12T23:08:08.2125086Z added 194 packages in 2s
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	﻿2026-06-12T23:08:08.2676153Z ##[group]Run mkdir -p "$HOME/.local/bin"
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2676548Z ^[[36;1mmkdir -p "$HOME/.local/bin"^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2677218Z ^[[36;1mcurl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o /tmp/actionlint.tar.gz^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2678170Z ^[[36;1mecho "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2678844Z ^[[36;1mtar -C "$HOME/.local/bin" -xzf /tmp/actionlint.tar.gz actionlint^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2679761Z ^[[36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"^[[0m
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2715315Z shell: /usr/bin/bash -e {0}
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.2715603Z ##[endgroup]
+verify	Install actionlint (pinned v1.7.12, checksum-verified)	2026-06-12T23:08:08.3675866Z /tmp/actionlint.tar.gz: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	﻿2026-06-12T23:08:08.4183374Z ##[group]Run bash scripts/verify.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:08.4183745Z ^[[36;1mbash scripts/verify.sh^[[0m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:08.4218388Z shell: /usr/bin/bash -e {0}
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:08.4218725Z ##[endgroup]
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:08.4589718Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:08.4590531Z ──── verify: typecheck ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.6897643Z ──── typecheck: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.7146920Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.7148132Z ──── verify: lint ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.9515460Z Checked 52 files in 102ms. No fixes applied.
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.9679150Z ──── lint: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.9930453Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:10.9931396Z ──── verify: unit tests ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:11.4586614Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:11.4591064Z ^[[1m^[[30m^[[46m RUN ^[[49m^[[39m^[[22m ^[[36mv4.1.8 ^[[39m^[[90m/home/runner/work/claude-sandbox-test1/claude-sandbox-test1^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:11.4591916Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.4853483Z  ^[[32m✓^[[39m tests/endpoints-http.test.ts ^[[2m(^[[22m^[[2m9 tests^[[22m^[[2m)^[[22m^[[33m 535^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.4889958Z      ^[[33m^[[2m✓^[[22m^[[39m creates endpoints with event filters, optional headers, and a signing secret returned once ^[[33m 381^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.5852159Z  ^[[32m✓^[[39m tests/messages-http.test.ts ^[[2m(^[[22m^[[2m22 tests^[[22m^[[2m)^[[22m^[[33m 633^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.5880031Z      ^[[33m^[[2m✓^[[22m^[[39m authenticates producers, accepts a valid message, and persists it for readback ^[[33m 374^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.6176506Z  ^[[32m✓^[[39m tests/worker.test.ts ^[[2m(^[[22m^[[2m18 tests^[[22m^[[2m)^[[22m^[[33m 667^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:12.6182693Z      ^[[33m^[[2m✓^[[22m^[[39m sends signed webhooks, marks success, and records response status and duration ^[[33m 371^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.0081628Z  ^[[32m✓^[[39m tests/client.test.ts ^[[2m(^[[22m^[[2m7 tests^[[22m^[[2m)^[[22m^[[32m 236^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.0265832Z  ^[[32m✓^[[39m tests/usage-http.test.ts ^[[2m(^[[22m^[[2m5 tests^[[22m^[[2m)^[[22m^[[32m 170^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.0692043Z  ^[[32m✓^[[39m tests/openapi-contract.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 221^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.4270651Z  ^[[32m✓^[[39m tests/endpoint-observability-http.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 158^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.4391482Z  ^[[32m✓^[[39m tests/deliveries-http.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 166^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.7629891Z  ^[[32m✓^[[39m tests/endpoint-test-http.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 87^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.8181626Z  ^[[32m✓^[[39m tests/metrics-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 123^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.9076588Z  ^[[32m✓^[[39m tests/python-client.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[33m 593^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:13.9078117Z      ^[[33m^[[2m✓^[[22m^[[39m exercises tenant HTTP routes and stable API errors ^[[33m 324^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.0811745Z  ^[[32m✓^[[39m tests/webhooks.test.ts ^[[2m(^[[22m^[[2m21 tests^[[22m^[[2m)^[[22m^[[32m 15^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.1801503Z  ^[[32m✓^[[39m tests/admin-http.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 152^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.2851569Z  ^[[32m✓^[[39m tests/event-types-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 103^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.4236020Z  ^[[32m✓^[[39m tests/cli.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 83^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.5161642Z  ^[[32m✓^[[39m tests/portal-sessions-http.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 70^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.6425769Z  ^[[32m✓^[[39m tests/gateway-http.test.ts ^[[2m(^[[22m^[[2m8 tests^[[22m^[[2m)^[[22m^[[32m 89^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.6973859Z  ^[[32m✓^[[39m tests/deployment-artifacts.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 8^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.7277057Z  ^[[32m✓^[[39m tests/storage.test.ts ^[[2m(^[[22m^[[2m4 tests^[[22m^[[2m)^[[22m^[[32m 37^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.9832282Z  ^[[32m✓^[[39m tests/config.test.ts ^[[2m(^[[22m^[[2m14 tests^[[22m^[[2m)^[[22m^[[32m 14^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:14.9923792Z  ^[[32m✓^[[39m tests/dashboard-http.test.ts ^[[2m(^[[22m^[[2m3 tests^[[22m^[[2m)^[[22m^[[32m 61^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.0431550Z  ^[[32m✓^[[39m tests/server.test.ts ^[[2m(^[[22m^[[2m1 test^[[22m^[[2m)^[[22m^[[32m 134^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1750148Z  ^[[32m✓^[[39m tests/index.test.ts ^[[2m(^[[22m^[[2m2 tests^[[22m^[[2m)^[[22m^[[32m 5^[[2mms^[[22m^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1778667Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1783422Z ^[[2m Test Files ^[[22m ^[[1m^[[32m23 passed^[[39m^[[22m^[[90m (23)^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1784870Z ^[[2m      Tests ^[[22m ^[[1m^[[32m150 passed^[[39m^[[22m^[[90m (150)^[[39m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1785931Z ^[[2m   Start at ^[[22m 23:08:11
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1787343Z ^[[2m   Duration ^[[22m 3.71s^[[2m (transform 803ms, setup 0ms, import 2.73s, tests 4.36s, environment 3ms)^[[22m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.1788498Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.2095394Z ──── unit tests: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.2355614Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:15.2356561Z ──── verify: build ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:17.6321318Z ──── build: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:17.6901790Z ──── test coverage guard: OK (every src test file is wired into npm test)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:17.7219576Z ──── placeholder check: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:17.7220086Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:17.7220836Z ──── verify: features.json schema + invariants ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:19.7491345Z [update-state] valid: 25 features, 24 passing (evidence re-verified).
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:19.7904172Z ──── features.json schema + invariants: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:19.7904645Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:19.7905109Z ──── verify: assertion shield ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:20.9957346Z ^[[32m[Assertion Shield] Check passed. No deleted assertions detected in test files.^[[0m
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.0871554Z ──── assertion shield: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.0871931Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.0872224Z ──── verify: engine lint (biome) ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.3649785Z Checked 4 files in 9ms. No fixes applied.
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.3816006Z ──── engine lint (biome): OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.3816401Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.3817009Z ──── verify: shellcheck (hooks + gate scripts) ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.7655484Z [INFO ] ShellCheck binary not found or invalid, downloading to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:21.9416117Z [INFO ] Downloading 'https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz' to '/tmp/0H3AKO/shellcheck.download'
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:22.0155138Z [INFO ] Extracting '/tmp/0H3AKO/shellcheck.download' to '/tmp/0H3AKO'
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:22.3200910Z [INFO ] Copying '/tmp/0H3AKO/shellcheck' to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:22.3270806Z [INFO ] ShellCheck binary successfully downloaded to '/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/node_modules/shellcheck/bin/shellcheck'
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.1066448Z ──── shellcheck (hooks + gate scripts): OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.1066893Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.1067228Z ──── verify: actionlint (workflows) ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7734520Z ──── actionlint (workflows): OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7734818Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7735076Z ──── verify: hook contract tests ────
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7768376Z ── guard-bash.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7858758Z   [PASS] blocks push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.7947979Z   [PASS] blocks push to master
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8036105Z   [PASS] blocks refspec push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8125103Z   [PASS] blocks refs/heads refspec
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8214932Z   [PASS] blocks bare refs/heads dst
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8302690Z   [PASS] blocks -C flag push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8390376Z   [PASS] blocks -c flag push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8495195Z   [PASS] blocks force push
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8602322Z   [PASS] blocks -C force push
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8689824Z   [PASS] blocks +refspec to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8777711Z   [PASS] blocks +refs/heads refspec
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8865879Z   [PASS] blocks -C +refspec to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.8971502Z   [PASS] blocks +refspec force (any branch)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9062804Z   [PASS] blocks --work-tree push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9153023Z   [PASS] blocks --git-dir= push to main
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9289006Z   [PASS] blocks .env read
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9428353Z   [PASS] blocks .env.local read
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9580778Z   [PASS] blocks pipe-to-shell
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9747478Z   [PASS] blocks npm publish
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:23.9928479Z   [PASS] blocks shield bypass
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.0048731Z   [PASS] blocks rm -rf on root
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.0265135Z   [PASS] blocks exfil POST (key-shaped data)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.0481165Z   [PASS] blocks exfil upload (env secret ref)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.0698092Z   [PASS] blocks exfil form (github token)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.0916993Z   [PASS] blocks wget --post-data exfil
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.1134908Z   [PASS] blocks curl -T secret upload
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.1333232Z   [PASS] allows gh api read
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.1549820Z   [PASS] allows harmless POST
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.1767473Z   [PASS] allows gh api POST of plain refs
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.1967630Z   [PASS] allows push to develop
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2169844Z   [PASS] allows -C push to develop
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2368428Z   [PASS] allows feature branch push
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2566301Z   [PASS] allows scoped rm
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2764399Z   [PASS] allows plain git commit
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2765151Z ── guard-bash.sh kill switch
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2825300Z   [PASS] AGENT_STOP halts all commands
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2837046Z ── verify-gate.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2906659Z   [PASS] blocks features.json (posix path)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.2975977Z   [PASS] blocks features.json (rel path)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3045554Z   [PASS] blocks features.json (backslash path)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3115603Z   [PASS] blocks features.json (dot segment)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3185274Z   [PASS] blocks features.json (double slash)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3255933Z   [PASS] blocks features.json (parent re-entry)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3325292Z   [PASS] allows other files
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3396431Z   [PASS] allows other features.json outside roadmap
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3466371Z   [PASS] allows file mentioning it in content only
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3467264Z ── verify-gate.sh degraded environment (no jq, no node → sed fallback)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3530053Z   [PASS] fail-closed without jq/node (sed branch)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3592571Z   [PASS] sed branch ignores decoy file_path in content
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3657169Z   [PASS] sed branch still allows other files
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3657903Z ── commit-on-stop.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3811450Z   [PASS] blocks stop on dirty tree
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3955163Z   [PASS] allows stop on clean tree
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.3992460Z   [PASS] kill switch overrides dirty block
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:24.4013972Z ── session-brief.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:25.7411269Z   [PASS] exits 0
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:25.7431021Z   [PASS] emits brief content
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:25.7431894Z ── update-state.ts (fixture: tmp/hook-tests)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:27.1164009Z   [PASS] validate accepts valid fixture
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:28.4549592Z   [PASS] validate exits 0 despite stale policy
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:28.4568771Z   [PASS] validate warns on stale model-policy
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:29.8570876Z   [PASS] validate accepts well-formed metrics
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:31.1884391Z   [PASS] validate rejects malformed metrics line
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:32.4921472Z   [PASS] validate rejects metrics missing date
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:33.7855377Z   [PASS] validate rejects oversized metrics record
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:35.1222919Z   [PASS] add rejects malformed JSON
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:36.4272261Z   [PASS] add rejects passes:true at birth
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:37.7224061Z   [PASS] add rejects dangling dependency
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:39.0834993Z   [PASS] add accepts valid feature
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:40.4014121Z   [PASS] add refuses reserved F-9xxx range on real backlog
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:40.4321060Z   [PASS] reserved-range refusal wrote nothing to real backlog
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:41.7400352Z   [PASS] status rejects unknown id
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:43.0497840Z   [PASS] status rejects invalid enum
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:44.4032274Z   [PASS] status blocked requires+stores reason
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:45.7165982Z   [PASS] paths rejects non-array
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:47.0113127Z   [PASS] paths rejects empty array
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:48.3290258Z   [PASS] paths rejects guardrail surface .claude
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:49.6199009Z   [PASS] paths rejects guardrail surface scripts
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:50.9378946Z   [PASS] paths rejects guardrail surface .github
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:52.2292302Z   [PASS] paths rejects catch-all glob
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:53.5370703Z   [PASS] paths rejects parent traversal
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:54.8942871Z   [PASS] paths replaces authorized_paths
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:56.2035178Z   [PASS] passes refuses without evidence
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:57.5238240Z   [PASS] evidence refuses missing file
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:08:58.8984481Z   [PASS] evidence accepts existing file
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:00.2125789Z   [PASS] passes rejects QUOTED marker in failed log
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:01.6186147Z   [PASS] passes accepts green verify log (exact line)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:02.9272349Z   [PASS] validate rejects corrupt backlog
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:02.9289168Z ── assertion-shield.ts (fixture repo)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:03.9579569Z   [PASS] shield catches STAGED assertion deletion
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:04.9727463Z   [PASS] shield catches deleted test FILE
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:06.0444416Z   [PASS] shield passes on clean tree
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:07.0379928Z   [PASS] shield catches ADDED test.skip
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:08.0465922Z   [PASS] shield catches ADDED it.only
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:09.1056565Z   [PASS] shield allows ADDED healthy test
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:09.1118157Z ── seed.ts delegating shim
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:10.0953254Z   [PASS] template mode (no src, no seed script) exits 0
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:11.0726103Z   [PASS] refuses prod DATABASE_URL
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:12.0669571Z   [PASS] product mode without seed script fails
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:13.1687935Z   [PASS] delegates to seed script (success)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:14.2626013Z   [PASS] propagates seed script failure
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:15.2296427Z   [PASS] circular delegation fails fast
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:15.2314224Z ── update-state.ts invariants (fixture: tmp/hook-tests)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:16.5375360Z   [PASS] status:done without passes is rejected
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:17.8418045Z   [PASS] dependency cycle is rejected
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.1565489Z   [PASS] validate audits evidence of passing features (missing file rejected)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.1580241Z ── install-into.sh
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.1622480Z   [PASS] refusal: missing arg exits 1
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.1666309Z   [PASS] refusal: template root exits 1
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.1723306Z   [PASS] refusal: ancestor of template root exits 1
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2525371Z   [PASS] exclusion: no src/ copied
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2530701Z   [PASS] exclusion: no package-lock.json
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2536470Z   [PASS] exclusion: no docs/feedback-2-verification
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2542444Z   [PASS] exclusion: no docs/feedback-2-verdicts
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2548055Z   [PASS] exclusion: no roadmap/briefs/F-0012.md
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2553901Z   [PASS] exclusion: no roadmap/evidence/F-0001
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.2868462Z   [PASS] exclusion: features.json has empty array
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.3132327Z   [PASS] fresh pkg: no test script
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.3440192Z   [PASS] fresh pkg: lint is biome lint scripts
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.3753158Z   [PASS] fresh pkg: name is not ai-operations-template
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.4028005Z   [PASS] fresh pkg: devDep @biomejs/biome present
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.4319564Z   [PASS] fresh pkg: devDep @types/node present
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.4596045Z   [PASS] fresh pkg: devDep shellcheck present
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.4862621Z   [PASS] fresh pkg: devDep ts-node present
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.5141482Z   [PASS] fresh pkg: devDep typescript present
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.6255437Z   [PASS] merge pkg: name preserved
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.6560031Z   [PASS] merge pkg: test script preserved
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.6861922Z   [PASS] merge pkg: lint script preserved
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.7170765Z   [PASS] merge pkg: verify script added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.7482508Z   [PASS] merge pkg: shield script added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.7801666Z   [PASS] merge pkg: state script added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.8079783Z   [PASS] merge pkg: devDep @biomejs/biome added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.8339144Z   [PASS] merge pkg: devDep @types/node added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.8593320Z   [PASS] merge pkg: devDep shellcheck added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.8858917Z   [PASS] merge pkg: devDep ts-node added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:19.9134994Z   [PASS] merge pkg: devDep typescript added
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:20.0370833Z   [PASS] idempotent: marker feature survives re-run
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:20.0376029Z   [PASS] idempotent: engine-owned scripts/verify.sh present after re-run
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:20.1251056Z   [PASS] product-mode warning: present when src/ exists
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:20.1985004Z   [PASS] product-mode warning: absent when no src/
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.5704048Z   [PASS] seeded features.json validates against schema
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6428957Z   [PASS] merge-copy: adopter scripts/custom.sh survives install
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6434098Z   [PASS] merge-copy: adopter .github/workflows/deploy.yml survives
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6440140Z   [PASS] merge-copy: adopter .claude/settings.local.json survives
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6445905Z   [PASS] merge-copy: engine scripts/verify.sh present after install
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6484412Z ── workflow lane parity (F-0014)
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6699882Z   [PASS] lane parity: every verify.sh workflow conforms
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6705562Z   [PASS] lane parity: refs extracted from ci.yml
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6801228Z   [PASS] lane parity: broken fixture workflow rejected
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6831695Z   [PASS] e2e.yml triggers on its own changes
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6831958Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6832154Z hook contract tests: 139 passed, 0 failed
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6834525Z ──── hook contract tests: OK
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6834838Z 
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6871005Z VERIFY-COMMIT: 3c993e7b48c8349eb0ebc3efe8b0071c70278e5a @ 2026-06-12T23:09:21Z
+verify	Verify (typecheck + lint + tests + static analysis + state validation + shield)	2026-06-12T23:09:21.6871552Z VERIFY: PASS (exit 0)
+verify	Secret-shaped string scan	﻿2026-06-12T23:09:21.6914105Z ##[group]Run # Deterministic leak check (plan §7.2): fail if tracked files contain key-shaped strings.
+verify	Secret-shaped string scan	2026-06-12T23:09:21.6914853Z ^[[36;1m# Deterministic leak check (plan §7.2): fail if tracked files contain key-shaped strings.^[[0m
+verify	Secret-shaped string scan	2026-06-12T23:09:21.6915920Z ^[[36;1m! git grep -nE "(sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}\b)" -- ':!.claude/security-patterns.json' ':!.github/workflows/ci.yml' \^[[0m
+verify	Secret-shaped string scan	2026-06-12T23:09:21.6916857Z ^[[36;1m  || { echo "::error::Secret-shaped string found in tracked files"; exit 1; }^[[0m
+verify	Secret-shaped string scan	2026-06-12T23:09:21.6950601Z shell: /usr/bin/bash -e {0}
+verify	Secret-shaped string scan	2026-06-12T23:09:21.6950882Z ##[endgroup]
+verify	Trust-widening tripwire (F-0009)	﻿2026-06-12T23:09:21.7319861Z ##[group]Run # Fail PRs that widen workflow trust or smuggle MCP config (mirrors
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7320469Z ^[[36;1m# Fail PRs that widen workflow trust or smuggle MCP config (mirrors^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7320977Z ^[[36;1m# claude-code-action's non-write-users-check; plan section 7.2).^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7321478Z ^[[36;1m# Key-shape anchored (key followed by ':' or '=') so pattern strings^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7321996Z ^[[36;1m# quoted in scripts/docs cannot self-trip the check (evaluator finding).^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7322438Z ^[[36;1mgit fetch -q origin "develop" --depth=50^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7322997Z ^[[36;1mif git diff "origin/develop...HEAD" -- .github | grep -nE '^\+\s*(allowed_non_write_users|allowed_bots)\s*[:=]'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7323747Z ^[[36;1m  echo "::error::PR adds a trust-widening workflow key (allowed_non_write_users / allowed_bots)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7324232Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7324609Z ^[[36;1mif git diff --name-only "origin/develop...HEAD" | grep -E '(^|/)\.mcp\.json$'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7325557Z ^[[36;1m  echo "::error::PR changes .mcp.json — MCP config changes require explicit security review (GHSA-8q5r-mmjf-575q class)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7326129Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7326619Z ^[[36;1mif git diff "origin/develop...HEAD" -- .claude/settings.json .github | grep -nE '^\+\s*("mcpServers"|--mcp-config)'; then^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7327451Z ^[[36;1m  echo "::error::PR introduces MCP server config — requires a tool-registry entry + security review first (plan section 2.3)"; exit 1^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7327995Z ^[[36;1mfi^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7328208Z ^[[36;1mecho "tripwire clean"^[[0m
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7359648Z shell: /usr/bin/bash -e {0}
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.7359934Z ##[endgroup]
+verify	Trust-widening tripwire (F-0009)	2026-06-12T23:09:21.9633778Z tripwire clean
+verify	Post Run actions/setup-node@v6	﻿2026-06-12T23:09:21.9733282Z Post job cleanup.
+verify	Post Run actions/setup-node@v6	2026-06-12T23:09:22.0886229Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-7bc64da8045cc82e6b4ac219f49df8ebb2d110a6367fb5b8085747a949da4ae5, not saving cache.
+verify	Post Run actions/checkout@v6	﻿2026-06-12T23:09:22.1028510Z Post job cleanup.
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.1919551Z [command]/usr/bin/git version
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.1957462Z git version 2.54.0
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.1994681Z Temporarily overriding HOME='/home/runner/work/_temp/b5227402-fca8-4b20-ba5a-dca8242a617e' before making global git config changes
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.1995658Z Adding repository directory to the temporary git global config as a safe directory
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.1999904Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/claude-sandbox-test1/claude-sandbox-test1
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2031286Z Removing SSH command configuration
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2037868Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2073416Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2308107Z Removing HTTP extra header
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2313237Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2347020Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2575084Z Removing includeIf entries pointing to credentials config files
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2581536Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2610181Z includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2611224Z includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2611844Z includeif.gitdir:/github/workspace/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2612293Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2619847Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2642260Z /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2653180Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git.path /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2689145Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2711421Z /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2720952Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/claude-sandbox-test1/claude-sandbox-test1/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2751888Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2773023Z /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2780614Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2811739Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2834568Z /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2841678Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.2873793Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+verify	Post Run actions/checkout@v6	2026-06-12T23:09:22.3125715Z Removing credentials config '/home/runner/work/_temp/git-credentials-36b13872-898c-400b-953b-a8120a4e0d65.config'
+verify	Complete job	﻿2026-06-12T23:09:22.3283515Z Cleaning up orphan processes
+
