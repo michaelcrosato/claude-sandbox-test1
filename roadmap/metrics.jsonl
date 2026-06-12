@@ -12,3 +12,4 @@
 {"date":"2026-06-12","feature":"F-0012","attempts":0,"evaluator":"NEEDS_WORK->PASS","security":"APPROVE","findings_fixed":0,"pr":41,"notes":"batch message intake; initial evaluator only requested CI evidence, follow-up passed after evidence"}
 {"date":"2026-06-12","feature":"F-0013","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":42,"notes":"OpenAPI 3.1 contract and closed runtime error-code enum; README/spec/runtime sync tests"}
 {"date":"2026-06-12","feature":"F-0014","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":43,"notes":"TypeScript SDK and posthorn client CLI; added message status and retry routes so clients call only live API"}
+{"date":"2026-06-12","feature":"F-0015","attempts":0,"evaluator":"PASS","security":"APPROVE","findings_fixed":0,"pr":44,"notes":"Prometheus metrics endpoint; bounded aggregate labels with no tenant/payload/endpoint leakage"}

@@ -85,7 +85,7 @@ Key capabilities:
 | ------ | ---- | ---- | ------ | ------- |
 | GET | `/healthz` | none | implemented | Liveness probe (static — the process is up). |
 | GET | `/readyz` | none | implemented | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
-| GET | `/metrics` | none | planned | Prometheus text exposition (operator metrics). |
+| GET | `/metrics` | none | implemented | Prometheus text exposition (operator metrics). |
 | GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
 | POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
 | POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
@@ -340,12 +340,17 @@ All settings are environment variables. See `.env.example` for a template.
 ```
 posthorn_messages_ingested_total 1234
 posthorn_deliveries_total{outcome="succeeded"} 1220
+posthorn_deliveries_total{outcome="retrying"} 11
 posthorn_deliveries_total{outcome="dead_lettered"} 3
-posthorn_delivery_tasks{status="dead_letter"} 3   ← the gauge to alert on
-posthorn_dead_letter_tasks{reason="connection_refused"} 3   ← why they died
+posthorn_delivery_tasks{status="dead_letter"} 3
+posthorn_dead_letter_tasks{reason="http_###"} 3
 posthorn_uptime_seconds 86400
-posthorn_build_info{version="1.0.0"} 1
+posthorn_build_info{version="0.0.0"} 1
 ```
+
+Metric labels are intentionally low-cardinality: delivery `outcome`, delivery task `status`,
+dead-letter `reason`, and build `version`. They never include tenant IDs, endpoint URLs,
+message IDs, event types, headers, API keys, signing secrets, or payload fields.
 
 For a production Prometheus + Alertmanager setup with ready-made alerting rules, see
 **[docs/DEPLOY.md](docs/DEPLOY.md)**.
