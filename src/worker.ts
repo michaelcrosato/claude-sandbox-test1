@@ -257,6 +257,10 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
              endpoints.signing_secret_ciphertext,
              endpoints.signing_secret_key_version,
              endpoints.signing_secret_nonce,
+             endpoints.previous_signing_secret_ciphertext,
+             endpoints.previous_signing_secret_key_version,
+             endpoints.previous_signing_secret_nonce,
+             endpoints.previous_signing_secret_expires_at,
              messages.id AS message_id,
              messages.event_type,
              messages.payload_json
@@ -300,12 +304,8 @@ async function sendDelivery(
 
   try {
     const rawBody = buildDeliveryBody(task);
-    const secret = revealEndpointSecret(storage, {
-      ciphertext: task.signingSecretCiphertext,
-      keyVersion: task.signingSecretKeyVersion,
-      nonce: task.signingSecretNonce,
-    });
-    const signedHeaders = signWebhook(secret, rawBody, {
+    const secrets = resolveSigningSecrets(storage, task, attemptedAt);
+    const signedHeaders = signWebhook(secrets, rawBody, {
       id: task.messageId,
       timestampSeconds: Math.floor(attemptedAt.getTime() / 1000),
     });
@@ -487,6 +487,42 @@ function buildDeliveryBody(task: ClaimedDelivery): string {
   });
 }
 
+function resolveSigningSecrets(storage: PosthornStorage, task: ClaimedDelivery, attemptedAt: Date): string | readonly string[] {
+  const currentSecret = revealEndpointSecret(storage, {
+    ciphertext: task.signingSecretCiphertext,
+    keyVersion: task.signingSecretKeyVersion,
+    nonce: task.signingSecretNonce,
+  });
+  if (!isPreviousSigningSecretActive(task, attemptedAt)) {
+    return currentSecret;
+  }
+
+  if (
+    task.previousSigningSecretCiphertext === null ||
+    task.previousSigningSecretKeyVersion === null ||
+    task.previousSigningSecretNonce === null
+  ) {
+    throw new SecretProtectionError('Previous endpoint signing secret metadata is incomplete.');
+  }
+
+  const previousSecret = revealEndpointSecret(storage, {
+    ciphertext: task.previousSigningSecretCiphertext,
+    keyVersion: task.previousSigningSecretKeyVersion,
+    nonce: task.previousSigningSecretNonce,
+  });
+  return [currentSecret, previousSecret];
+}
+
+function isPreviousSigningSecretActive(task: ClaimedDelivery, attemptedAt: Date): boolean {
+  if (task.previousSigningSecretExpiresAt === null) return false;
+  const expiresAtMs = Date.parse(task.previousSigningSecretExpiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new SecretProtectionError('Previous endpoint signing secret expiry is invalid.');
+  }
+
+  return expiresAtMs >= attemptedAt.getTime();
+}
+
 function buildDeliveryHeaders(
   endpointHeaders: Readonly<Record<string, string>>,
   signedHeaders: Readonly<Record<string, string | number | readonly string[] | null | undefined>>,
@@ -576,10 +612,18 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
     signingSecretCiphertext: String(row.signing_secret_ciphertext),
     signingSecretKeyVersion: String(row.signing_secret_key_version),
     signingSecretNonce: String(row.signing_secret_nonce),
+    previousSigningSecretCiphertext: nullableString(row.previous_signing_secret_ciphertext),
+    previousSigningSecretKeyVersion: nullableString(row.previous_signing_secret_key_version),
+    previousSigningSecretNonce: nullableString(row.previous_signing_secret_nonce),
+    previousSigningSecretExpiresAt: nullableString(row.previous_signing_secret_expires_at),
     messageId: String(row.message_id),
     eventType: String(row.event_type),
     payloadJson: String(row.payload_json),
   };
+}
+
+function nullableString(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
 }
 
 function parseStoredHeaders(value: unknown): Readonly<Record<string, string>> {
@@ -633,6 +677,10 @@ interface ClaimedDelivery {
   readonly signingSecretCiphertext: string;
   readonly signingSecretKeyVersion: string;
   readonly signingSecretNonce: string;
+  readonly previousSigningSecretCiphertext: string | null;
+  readonly previousSigningSecretKeyVersion: string | null;
+  readonly previousSigningSecretNonce: string | null;
+  readonly previousSigningSecretExpiresAt: string | null;
   readonly messageId: string;
   readonly eventType: string;
   readonly payloadJson: string;
@@ -647,6 +695,10 @@ interface ClaimedDeliveryRow {
   readonly signing_secret_ciphertext: unknown;
   readonly signing_secret_key_version: unknown;
   readonly signing_secret_nonce: unknown;
+  readonly previous_signing_secret_ciphertext: unknown;
+  readonly previous_signing_secret_key_version: unknown;
+  readonly previous_signing_secret_nonce: unknown;
+  readonly previous_signing_secret_expires_at: unknown;
   readonly message_id: unknown;
   readonly event_type: unknown;
   readonly payload_json: unknown;

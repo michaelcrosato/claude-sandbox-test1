@@ -67,6 +67,7 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('get', '/v1/endpoints/{id}', 'bearer', 'Fetch endpoint', 200, ['Endpoints']),
   route('patch', '/v1/endpoints/{id}', 'bearer', 'Update endpoint', 200, ['Endpoints']),
   route('delete', '/v1/endpoints/{id}', 'bearer', 'Delete endpoint', 204, ['Endpoints']),
+  route('post', '/v1/endpoints/{id}/rotate-secret', 'bearer', 'Rotate endpoint signing secret', 201, ['Endpoints']),
   route('post', '/v1/endpoints/{id}/test', 'bearer', 'Send endpoint test', 200, ['Endpoints']),
   route('get', '/v1/event-types', 'bearer', 'List event types', 200, ['Event Types']),
   route('post', '/v1/event-types', 'bearer', 'Create event type', 201, ['Event Types']),
@@ -280,6 +281,12 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
     case 'get /v1/endpoints/{id}':
     case 'patch /v1/endpoints/{id}':
       return objectSchema({ endpoint: { $ref: '#/components/schemas/Endpoint' } });
+    case 'post /v1/endpoints/{id}/rotate-secret':
+      return objectSchema({
+        endpoint: { $ref: '#/components/schemas/Endpoint' },
+        secret: { type: 'string' },
+        previousSecretExpiresAt: { type: 'string', format: 'date-time' },
+      });
     case 'post /v1/endpoints/{id}/test':
       return objectSchema({ test: { $ref: '#/components/schemas/EndpointTest' } });
     case 'get /v1/event-types':
@@ -363,6 +370,18 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
     return {
       required: false,
       content: jsonContent({}),
+    };
+  }
+  if (key === 'post /v1/endpoints/{id}/rotate-secret') {
+    return {
+      required: false,
+      content: jsonContent({
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          overlapSeconds: { type: 'integer', minimum: 60, maximum: 2_592_000 },
+        },
+      }),
     };
   }
   if (

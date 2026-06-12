@@ -34,7 +34,14 @@ export type {
 export { POSTHORN_CLIENT_ROUTES, PosthornApiError, PosthornClient } from './client';
 export type { CliOptions, CliStreams } from './cli';
 export { POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
-export type { CreateEndpointResult, EndpointDeliveryTarget, EndpointRecord, EndpointValidationErrorCode } from './endpoints';
+export type {
+  CreateEndpointResult,
+  EndpointDeliveryTarget,
+  EndpointRecord,
+  EndpointValidationErrorCode,
+  RotateEndpointSecretInput,
+  RotateEndpointSecretResult,
+} from './endpoints';
 export {
   createEndpoint,
   deleteEndpoint,
@@ -42,6 +49,7 @@ export {
   EndpointValidationError,
   getEndpoint,
   listEndpoints,
+  rotateEndpointSecret,
   updateEndpoint,
 } from './endpoints';
 export type { EndpointTestErrorCode, EndpointTestOptions, EndpointTestPayloadSource, EndpointTestResult } from './endpoint-tests';

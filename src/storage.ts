@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS endpoints (
   signing_secret_ciphertext TEXT NOT NULL,
   signing_secret_key_version TEXT NOT NULL,
   signing_secret_nonce TEXT NOT NULL,
+  previous_signing_secret_ciphertext TEXT,
+  previous_signing_secret_key_version TEXT,
+  previous_signing_secret_nonce TEXT,
+  previous_signing_secret_expires_at TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -170,7 +174,43 @@ export function openStorage(options: StorageOptions): PosthornStorage {
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec(INITIAL_SCHEMA_SQL);
+  migrateEndpointSecretRotationColumns(db);
 }
+
+function migrateEndpointSecretRotationColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (
+      db.prepare('PRAGMA table_info(endpoints)').all() as Array<{
+        readonly name: unknown;
+      }>
+    ).map((row) => String(row.name)),
+  );
+
+  for (const column of ENDPOINT_SECRET_ROTATION_COLUMNS) {
+    if (!columns.has(column.name)) {
+      db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
+    }
+  }
+}
+
+const ENDPOINT_SECRET_ROTATION_COLUMNS = [
+  {
+    name: 'previous_signing_secret_ciphertext',
+    definition: 'previous_signing_secret_ciphertext TEXT',
+  },
+  {
+    name: 'previous_signing_secret_key_version',
+    definition: 'previous_signing_secret_key_version TEXT',
+  },
+  {
+    name: 'previous_signing_secret_nonce',
+    definition: 'previous_signing_secret_nonce TEXT',
+  },
+  {
+    name: 'previous_signing_secret_expires_at',
+    definition: 'previous_signing_secret_expires_at TEXT',
+  },
+] as const;
 
 function resolveDatabasePath(dataDir: string): string {
   if (dataDir === ':memory:') return dataDir;

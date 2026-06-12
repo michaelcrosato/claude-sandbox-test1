@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { getEndpointDeliveryTarget } from './endpoints';
+import { getEndpointDeliveryTarget, type EndpointDeliveryTarget } from './endpoints';
 import { getActiveEventTypeByName, parseEventType } from './event-types';
 import { revealEndpointSecret, SecretProtectionError } from './secret-protection';
 import type { PosthornStorage } from './storage';
@@ -76,12 +76,8 @@ export async function sendEndpointTest(
   const abortController = new AbortController();
 
   try {
-    const secret = revealEndpointSecret(storage, {
-      ciphertext: endpoint.signingSecretCiphertext,
-      keyVersion: endpoint.signingSecretKeyVersion,
-      nonce: endpoint.signingSecretNonce,
-    });
-    const signedHeaders = signWebhook(secret, rawBody, {
+    const secrets = resolveSigningSecrets(storage, endpoint, attemptedAt);
+    const signedHeaders = signWebhook(secrets, rawBody, {
       id,
       timestampSeconds: Math.floor(attemptedAt.getTime() / 1000),
     });
@@ -190,6 +186,46 @@ function buildDeliveryHeaders(
   }
 
   return headers;
+}
+
+function resolveSigningSecrets(
+  storage: PosthornStorage,
+  endpoint: EndpointDeliveryTarget,
+  attemptedAt: Date,
+): string | readonly string[] {
+  const currentSecret = revealEndpointSecret(storage, {
+    ciphertext: endpoint.signingSecretCiphertext,
+    keyVersion: endpoint.signingSecretKeyVersion,
+    nonce: endpoint.signingSecretNonce,
+  });
+  if (!isPreviousSigningSecretActive(endpoint, attemptedAt)) {
+    return currentSecret;
+  }
+
+  if (
+    endpoint.previousSigningSecretCiphertext === null ||
+    endpoint.previousSigningSecretKeyVersion === null ||
+    endpoint.previousSigningSecretNonce === null
+  ) {
+    throw new SecretProtectionError('Previous endpoint signing secret metadata is incomplete.');
+  }
+
+  const previousSecret = revealEndpointSecret(storage, {
+    ciphertext: endpoint.previousSigningSecretCiphertext,
+    keyVersion: endpoint.previousSigningSecretKeyVersion,
+    nonce: endpoint.previousSigningSecretNonce,
+  });
+  return [currentSecret, previousSecret];
+}
+
+function isPreviousSigningSecretActive(endpoint: EndpointDeliveryTarget, attemptedAt: Date): boolean {
+  if (endpoint.previousSigningSecretExpiresAt === null) return false;
+  const expiresAtMs = Date.parse(endpoint.previousSigningSecretExpiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new SecretProtectionError('Previous endpoint signing secret expiry is invalid.');
+  }
+
+  return expiresAtMs >= attemptedAt.getTime();
 }
 
 function classifyFailureReason(error: unknown): DeliveryFailureReason {

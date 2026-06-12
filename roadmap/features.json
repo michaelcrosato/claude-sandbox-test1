@@ -799,6 +799,46 @@
         "roadmap/STATUS.md"
       ],
       "priority": 3
+    },
+    {
+      "dependencies": [
+        "F-0018"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0019",
+      "acceptance": [
+        "POST /v1/endpoints/:id/rotate-secret creates a new whsec_ signing secret, returns it exactly once, and marks it active for future deliveries.",
+        "Deliveries after rotation include Standard Webhooks signatures for both the new and previous active endpoint secrets during a configurable overlap window.",
+        "Expired previous endpoint secrets are not used for new delivery signatures after the overlap window, while the endpoint remains readable without exposing secret material.",
+        "Rotation is tenant-scoped, rejects missing or invalid auth, returns 404 for other-tenant endpoints, and does not rotate disabled or missing endpoints incorrectly.",
+        "OpenAPI, README route rows, and tests document the implemented route and multi-signature rotation behavior."
+      ],
+      "title": "Endpoint signing secret rotation",
+      "description": "Implement zero-downtime endpoint signing secret rotation so tenants can rotate receiver verification secrets without breaking in-flight webhook consumers.",
+      "priority": 1,
+      "spec_ref": "README.md#api-routes",
+      "epic": "security",
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0019.md",
+        "roadmap/evidence/F-0019/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ]
     }
   ]
 }
