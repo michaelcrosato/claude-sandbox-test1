@@ -226,8 +226,8 @@
         "F-0004",
         "F-0005"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "done",
+      "passes": true,
       "evidence": [
         "roadmap/evidence/F-0006/verify.log"
       ],

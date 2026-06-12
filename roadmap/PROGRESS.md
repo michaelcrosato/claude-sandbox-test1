@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0006 done (message intake and fanout queue)
+
+**What:** Added `POST /v1/messages`, tenant-authenticated message persistence, pending delivery task creation for enabled matching endpoints, and store helpers for message/delivery readback. Security review approved and suggested payload-depth hardening; the JSON validator is now iterative with depth/node caps and regression coverage for deeply nested payloads.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0006/verify.log`. Fresh-context evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npm test` (58 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** CI exposed nondeterministic ordering in fanout tests where random endpoint IDs tied on timestamps; the tests now seed deterministic endpoint timestamps and delivery readback uses insertion order.
+
+**Next step:** Merge PR #35 after the final state commit goes green, then start F-0007 (crash-safe retry delivery worker).
+
+---
+
 ## 2026-06-12 — F-0004 done (tenant endpoint management CRUD)
 
 **What:** Added bearer-authenticated endpoint create/list/read/update/delete routes, tenant-scoped API-key auth helpers, endpoint validation, one-time `whsec_` create responses, and protected signing-secret persistence. Security review found SSRF edge cases in trailing-dot hostnames and IPv6 internal literals plus delayed oversized-body responses; all were fixed with regression tests.
