@@ -883,6 +883,48 @@
         "roadmap/metrics.jsonl",
         "roadmap/STATUS.md"
       ]
+    },
+    {
+      "dependencies": [
+        "F-0020"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0021/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0021",
+      "epic": "observability",
+      "title": "App-wide delivery listing and filters",
+      "spec_ref": "README.md#api-routes",
+      "description": "Implement tenant-scoped app-wide delivery listing with useful filters so operators can find failed, pending, or endpoint-specific deliveries without starting from a message id.",
+      "acceptance": [
+        "GET /v1/deliveries returns a tenant-scoped, newest-first, keyset-paginated list of delivery records across the app, including message id, endpoint id, event type, status, attempt count, next attempt time, last error, createdAt, and updatedAt without exposing payloads or endpoint secrets.",
+        "The route supports filters for status, endpointId, eventType, and failureReason, plus limit and cursor pagination, with invalid query parameters returning invalid_request.",
+        "Filtering by failureReason matches deliveries whose latest error or any recorded attempt failure reason matches the requested bounded reason string.",
+        "The route requires tenant bearer auth, returns 405 for unsupported methods, and never exposes other-tenant deliveries or endpoint existence through filters.",
+        "OpenAPI, README route rows, and tests document the implemented app-wide delivery listing route and filter behavior."
+      ],
+      "priority": 1,
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0021.md",
+        "roadmap/evidence/F-0021/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ]
     }
   ]
 }

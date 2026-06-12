@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0021 done (App-wide delivery listing and filters)
+
+**What:** Added tenant-scoped `GET /v1/deliveries` for app-wide delivery search. Operators can list recent deliveries across endpoints with keyset pagination and filter by status, endpoint id, event type, or failure reason. Responses are metadata-only and omit payloads, endpoint URLs, headers, API keys, signing secrets, protected secret metadata, request bodies, and response bodies.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0021/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npm run typecheck`, `npx vitest run tests/deliveries-http.test.ts tests/openapi-contract.test.ts`, `npm test` (138 tests), `npm run lint`, `npm run build`, `npm run state:validate`, and `git diff --check`.
+
+**Surprises:** Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, wait for PR #50 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0020 done (Endpoint delivery history and stats)
 
 **What:** Added endpoint-scoped observability routes. Tenants can now list one endpoint's delivery history with keyset pagination and read trailing-window endpoint stats with status counts, success rate, average successful duration, daily trend, and failure-reason breakdowns. Responses intentionally omit payloads, endpoint URLs, headers, API keys, signing secrets, protected secret metadata, and response bodies.

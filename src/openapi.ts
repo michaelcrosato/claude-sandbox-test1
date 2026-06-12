@@ -82,6 +82,7 @@ export const IMPLEMENTED_ROUTES: readonly ImplementedRoute[] = Object.freeze([
   route('get', '/v1/messages/{id}', 'bearer', 'Fetch message status', 200, ['Messages']),
   route('post', '/v1/messages/{id}/retry', 'bearer', 'Retry dead-lettered message deliveries', 200, ['Messages']),
   route('get', '/v1/messages/{id}/attempts', 'bearer', 'List message delivery attempts', 200, ['Messages']),
+  route('get', '/v1/deliveries', 'bearer', 'List app deliveries', 200, ['Deliveries']),
   route('get', '/v1/usage', 'bearer', 'Read tenant usage', 200, ['Usage']),
   route('post', '/v1/portal/sessions', 'bearer', 'Create portal session', 201, ['Portal']),
   route('get', '/v1/admin/apps', 'admin', 'List apps', 200, ['Admin']),
@@ -140,6 +141,18 @@ export function createOpenApiDocument(): OpenApiDocument {
           endpointId: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'delivering', 'succeeded', 'dead_letter'] },
           attemptCount: { type: 'integer', minimum: 0 },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        }),
+        DeliveryListItem: objectSchema({
+          id: { type: 'string' },
+          messageId: { type: 'string' },
+          endpointId: { type: 'string' },
+          eventType: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'delivering', 'succeeded', 'dead_letter'] },
+          attemptCount: { type: 'integer', minimum: 0 },
+          nextAttemptAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+          lastError: { anyOf: [{ type: 'string' }, { type: 'null' }] },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
         }),
@@ -385,6 +398,11 @@ function successSchemaRef(implementedRoute: ImplementedRoute): OpenApiSchema {
     case 'get /v1/messages/{id}/attempts':
       return objectSchema({
         data: { type: 'array', items: { type: 'object' } },
+        nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      });
+    case 'get /v1/deliveries':
+      return objectSchema({
+        data: { type: 'array', items: { $ref: '#/components/schemas/DeliveryListItem' } },
         nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] },
       });
     case 'get /v1/usage':

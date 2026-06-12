@@ -20,6 +20,8 @@ export type { AuthenticatedTenant } from './auth';
 export { API_KEY_PREFIX, authenticateAdminToken, authenticateApiKey, createApiKeySecret, hashApiKey } from './auth';
 export type { PosthornConfig, WorkerConfig } from './config';
 export { loadConfig } from './config';
+export type { DeliveryListPage, DeliveryListRecord, ListDeliveriesOptions } from './deliveries';
+export { DeliveryListingValidationError, listDeliveries } from './deliveries';
 export type {
   ClientRouteMapping,
   CreateEndpointInput,
