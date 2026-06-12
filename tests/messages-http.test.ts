@@ -59,6 +59,25 @@ interface AttemptsPageJson {
   readonly nextCursor: string | null;
 }
 
+interface DeliveryJson {
+  readonly id: string;
+  readonly messageId: string;
+  readonly endpointId: string;
+  readonly status: string;
+  readonly attemptCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface MessageStatusJson {
+  readonly message: MessageJson;
+  readonly deliveries: readonly DeliveryJson[];
+}
+
+interface RetryJson {
+  readonly retried: number;
+}
+
 type BatchItemJson =
   | {
       readonly ok: true;
@@ -534,6 +553,111 @@ describe('message intake HTTP route', () => {
       responseStatus: 204,
       failureReason: null,
     });
+  });
+
+  it('returns message status with delivery rows for the authenticated tenant', async () => {
+    const { address, storage } = await startSeededGateway();
+    const endpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/status',
+      eventTypes: ['user.created'],
+    }).endpoint;
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 14 },
+    });
+
+    const status = await requestJson<MessageStatusJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}`,
+      TENANT_A_KEY,
+    );
+    const otherTenant = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}`,
+      TENANT_B_KEY,
+    );
+
+    expect(status.status).toBe(200);
+    expect(status.body.message).toEqual(accepted.body.message);
+    expect(status.body.deliveries).toEqual([
+      {
+        id: accepted.body.fanout.deliveryIds[0],
+        messageId: accepted.body.message.id,
+        endpointId: endpoint.id,
+        status: 'pending',
+        attemptCount: 0,
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+      },
+    ]);
+    expect(otherTenant.status).toBe(404);
+    expect(otherTenant.body).toEqual({ error: { code: 'not_found', message: 'Not found.' } });
+  });
+
+  it('retries only tenant-owned dead-lettered deliveries with a fresh attempt budget', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/retry',
+      eventTypes: ['invoice.failed'],
+    });
+    const accepted = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'invoice.failed',
+      payload: { id: 'inv_14' },
+    });
+
+    await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+      fetch: async () => ({ status: 503 }),
+    });
+    const beforeRetry = await requestJson<MessageStatusJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}`,
+      TENANT_A_KEY,
+    );
+    const retry = await requestJson<RetryJson>(
+      address,
+      'POST',
+      `/v1/messages/${accepted.body.message.id}/retry`,
+      TENANT_A_KEY,
+    );
+    const secondRetry = await requestJson<RetryJson>(
+      address,
+      'POST',
+      `/v1/messages/${accepted.body.message.id}/retry`,
+      TENANT_A_KEY,
+    );
+    const afterRetry = await requestJson<MessageStatusJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}`,
+      TENANT_A_KEY,
+    );
+    const otherTenantRetry = await requestJson<ErrorJson>(
+      address,
+      'POST',
+      `/v1/messages/${accepted.body.message.id}/retry`,
+      TENANT_B_KEY,
+    );
+    const wrongMethod = await requestJson<ErrorJson>(
+      address,
+      'GET',
+      `/v1/messages/${accepted.body.message.id}/retry`,
+      TENANT_A_KEY,
+    );
+
+    expect(beforeRetry.body.deliveries[0]).toMatchObject({ status: 'dead_letter', attemptCount: 1 });
+    expect(retry.status).toBe(200);
+    expect(retry.body).toEqual({ retried: 1 });
+    expect(secondRetry.status).toBe(200);
+    expect(secondRetry.body).toEqual({ retried: 0 });
+    expect(afterRetry.body.deliveries[0]).toMatchObject({ status: 'pending', attemptCount: 0 });
+    expect(otherTenantRetry.status).toBe(404);
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.body).toEqual({ error: { code: 'method_not_allowed', message: 'Method not allowed.' } });
   });
 
   it('returns failed delivery attempts with response status and failure reason', async () => {
