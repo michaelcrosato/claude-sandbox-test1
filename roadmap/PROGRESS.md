@@ -4,15 +4,15 @@
 
 ---
 
-## 2026-06-12 — F-0001 in progress (product scaffold)
+## 2026-06-12 — F-0001 done (product scaffold)
 
 **What:** Groomed the empty roadmap into 18 machine backlog items, selected F-0001, and added the first Posthorn TypeScript product scaffold with a minimal gateway factory, Vitest test, build script, and README status wording.
 
-**Verified:** Local product checks passed: `npm run typecheck`, `npm test`, `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0001/verify.log`. Fresh-context evaluator returned PASS, and dependency/security review returned APPROVE. Local product checks also passed: `npm run typecheck`, `npm test`, `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
 
 **Surprises:** `bash scripts/verify.sh` reaches the existing hook contract tests but fails locally because Git Bash can see Windows `npm`/`npx` without a native Bash `node`; CI on Ubuntu is the authoritative full-gate lane for this branch.
 
-**Next step:** Push `feat/F-0001`, open the PR to `develop`, and use the CI verify log as F-0001 evidence before marking it done.
+**Next step:** Merge PR #30 after the final evidence commit goes green, then start F-0002 (configuration and SQLite storage foundation).
 
 ---
 
@@ -23,4 +23,3 @@
 **Verified:** `bash scripts/init.sh` and `bash scripts/verify.sh` both passed — VERIFY: PASS confirmed. Branch `develop` pushed to GitHub with engine commit. Default branch set to `develop`; branch protection applied to `develop` and `main`.
 
 **Next step:** Run `/groom` against the charter (README.md + GOAL.md + roadmap/ROADMAP.md) to decompose the Now/Next/Later bullets into `features.json` entries with acceptance criteria.
-
