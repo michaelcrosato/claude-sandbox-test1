@@ -15,7 +15,7 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 This checkout is in the product-foundation phase: it has the public TypeScript entry point,
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
-queue creation, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
+queue creation, the importable retry delivery worker, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the target Posthorn product contract being built through `roadmap/features.json`;
 not every listed route or client method is implemented yet.
 
@@ -335,6 +335,7 @@ All settings are environment variables. See `.env.example` for a template.
 | `POSTHORN_WORKER_REQUEST_TIMEOUT_MS` | `10000` | Per-delivery HTTP timeout. |
 | `POSTHORN_WORKER_IDLE_POLL_MS` | `1000` | Worker poll interval when idle. |
 | `POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS` | `30000` | Lease lifetime before reclaim. |
+| `POSTHORN_WORKER_ATTEMPT_BUDGET` | `8` | Failed attempts before a delivery is dead-lettered. |
 | `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` | `432000000` | Auto-disable window (5 days). `0` = off. |
 
 ## Monitoring
@@ -375,7 +376,7 @@ bash scripts/verify.sh
 **Supported Node:** Posthorn targets **Node ≥ 22.13**. The current foundation includes the product
 entry point, configuration loading, a SQLite-backed storage initializer, health/readiness HTTP
 endpoints, Standard Webhooks signing/verification utilities, tenant endpoint CRUD, message intake
-with pending fanout queue creation, build, lint, and Vitest wiring.
+with pending fanout queue creation, an importable retry delivery worker, build, lint, and Vitest wiring.
 
 ## Contributing & automation
 

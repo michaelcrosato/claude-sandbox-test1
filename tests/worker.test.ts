@@ -1,0 +1,547 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  acceptMessage,
+  createEndpoint,
+  hashApiKey,
+  listDeliveriesForMessage,
+  openStorage,
+  runDeliveryWorkerTick,
+  verifyWebhook,
+  type DeliveryFetch,
+  type PosthornStorage,
+} from '../src/index';
+
+const APP_ID = 'app_worker';
+const API_KEY = `phk_${Buffer.alloc(32, 21).toString('base64url')}`;
+const NOW = new Date('2026-06-12T12:00:00.000Z');
+
+const activeReceivers: SyntheticReceiver[] = [];
+const activeStorages: PosthornStorage[] = [];
+const tempDirs: string[] = [];
+
+interface RecordedRequest {
+  readonly headers: IncomingHttpHeaders;
+  readonly body: string;
+}
+
+interface SyntheticReceiver {
+  readonly url: string;
+  readonly requests: readonly RecordedRequest[];
+  readonly errors: readonly Error[];
+  close(): Promise<void>;
+}
+
+interface SyntheticResponse {
+  readonly status: number;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: string;
+}
+
+interface DeliveryRow {
+  readonly status: string;
+  readonly attempt_count: number;
+  readonly next_attempt_at: string | null;
+  readonly lease_expires_at: string | null;
+  readonly last_error: string | null;
+}
+
+interface AttemptRow {
+  readonly attempt_number: number;
+  readonly outcome: string;
+  readonly response_status: number | null;
+  readonly duration_ms: number;
+  readonly failure_reason: string | null;
+}
+
+afterEach(async () => {
+  while (activeReceivers.length > 0) {
+    const receiver = activeReceivers.pop();
+    if (receiver !== undefined) await receiver.close();
+  }
+  while (activeStorages.length > 0) {
+    activeStorages.pop()?.close();
+  }
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe('delivery worker', () => {
+  it('sends signed webhooks, marks success, and records response status and duration', async () => {
+    const storage = makeStorage();
+    let endpointSecret = '';
+    let expectedMessageId = '';
+    const receiver = await startReceiver((request) => {
+      verifyWebhook(endpointSecret, request.headers, request.body, {
+        nowSeconds: Math.floor(NOW.getTime() / 1000),
+      });
+      expect(request.headers['x-trace-id']).toBe('worker-success');
+      expect(JSON.parse(request.body)).toEqual({
+        id: expectedMessageId,
+        eventType: 'user.created',
+        payload: { id: 42 },
+      });
+      return { status: 204 };
+    });
+    const endpoint = createLocalEndpoint(storage, receiver.url, {
+      eventTypes: ['user.created'],
+      headers: { 'X-Trace-Id': 'worker-success' },
+    });
+    endpointSecret = endpoint.secret;
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 42 },
+    });
+    expectedMessageId = message.message.id;
+
+    const summary = await runDeliveryWorkerTick(storage, { now: () => NOW });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(receiver.errors).toEqual([]);
+    expect(receiver.requests).toHaveLength(1);
+    expect(listDeliveriesForMessage(storage, APP_ID, message.message.id)).toEqual([
+      expect.objectContaining({
+        endpointId: endpoint.endpoint.id,
+        status: 'succeeded',
+        attemptCount: 1,
+      }),
+    ]);
+    expect(readAttempts(storage, message.fanout.deliveryIds[0])).toEqual([
+      expect.objectContaining({
+        attempt_number: 1,
+        outcome: 'succeeded',
+        response_status: 204,
+        failure_reason: null,
+      }),
+    ]);
+    expect(readAttempts(storage, message.fanout.deliveryIds[0])[0]?.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('does not let concurrent ticks process the same active lease', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(async () => {
+      await delay(75);
+      return { status: 200 };
+    });
+    createLocalEndpoint(storage, receiver.url);
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 1 } });
+
+    const first = runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      requestTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const second = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      requestTimeoutMs: 1_000,
+      visibilityTimeoutMs: 10_000,
+    });
+    const firstSummary = await first;
+
+    expect(firstSummary.claimed).toBe(1);
+    expect(second).toEqual({ claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 });
+    expect(receiver.requests).toHaveLength(1);
+  });
+
+  it('schedules retryable failures with exponential backoff and succeeds on a later due tick', async () => {
+    const storage = makeStorage();
+    let status = 503;
+    let nowMs = NOW.getTime();
+    const receiver = await startReceiver(() => ({ status }));
+    createLocalEndpoint(storage, receiver.url);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 2 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+
+    const first = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      baseBackoffMs: 1_000,
+    });
+
+    expect(first).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 0 });
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'pending',
+      attempt_count: 1,
+      next_attempt_at: new Date(NOW.getTime() + 1_000).toISOString(),
+      last_error: 'http_503',
+    });
+    expect(await runDeliveryWorkerTick(storage, { now: () => new Date(nowMs), baseBackoffMs: 1_000 })).toEqual({
+      claimed: 0,
+      succeeded: 0,
+      failed: 0,
+      deadLettered: 0,
+    });
+
+    status = 200;
+    nowMs += 1_000;
+    const retry = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      baseBackoffMs: 1_000,
+    });
+
+    expect(retry).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'succeeded',
+      attempt_count: 2,
+      next_attempt_at: null,
+      last_error: null,
+    });
+    expect(readAttempts(storage, deliveryId).map((attempt) => attempt.outcome)).toEqual(['failed', 'succeeded']);
+  });
+
+  it('dead-letters after the configured attempt budget is exhausted', async () => {
+    const storage = makeStorage();
+    let nowMs = NOW.getTime();
+    const receiver = await startReceiver(() => ({ status: 500 }));
+    createLocalEndpoint(storage, receiver.url);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 3 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+
+    await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      attemptBudget: 2,
+      baseBackoffMs: 10,
+    });
+    nowMs += 10;
+    const second = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(nowMs),
+      attemptBudget: 2,
+      baseBackoffMs: 10,
+    });
+
+    expect(second).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'dead_letter',
+      attempt_count: 2,
+      next_attempt_at: null,
+      lease_expires_at: null,
+      last_error: 'http_500',
+    });
+    expect(readAttempts(storage, deliveryId).map((attempt) => attempt.outcome)).toEqual(['failed', 'dead_letter']);
+  });
+
+  it('times out slow receivers and leaves the task retryable', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(async () => {
+      await delay(100);
+      return { status: 200 };
+    });
+    createLocalEndpoint(storage, receiver.url);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 4 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      requestTimeoutMs: 20,
+      baseBackoffMs: 5,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 0 });
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'pending',
+      attempt_count: 1,
+      last_error: 'timeout',
+    });
+    expect(readAttempts(storage, deliveryId)).toEqual([
+      expect.objectContaining({
+        outcome: 'failed',
+        response_status: null,
+        failure_reason: 'timeout',
+      }),
+    ]);
+  });
+
+  it('does not follow receiver redirects to another target', async () => {
+    const storage = makeStorage();
+    const redirectedTarget = await startReceiver(() => ({ status: 200 }));
+    const redirectingReceiver = await startReceiver(() => ({
+      status: 307,
+      headers: { Location: redirectedTarget.url },
+    }));
+    createLocalEndpoint(storage, redirectingReceiver.url);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 8 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      baseBackoffMs: 5,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 0 });
+    expect(redirectingReceiver.requests).toHaveLength(1);
+    expect(redirectedTarget.requests).toEqual([]);
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'pending',
+      attempt_count: 1,
+      last_error: 'http_307',
+    });
+  });
+
+  it('cancels receiver response bodies instead of buffering them', async () => {
+    const storage = makeStorage();
+    createLocalEndpoint(storage, 'https://example.com/webhooks/custom-fetch');
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 9 } });
+    let responseBodyCanceled = false;
+    const responseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel() {
+        responseBodyCanceled = true;
+      },
+    });
+    const deliveryFetch: DeliveryFetch = async (_url, init) => {
+      expect(init.redirect).toBe('manual');
+      return { status: 200, body: responseBody };
+    };
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: deliveryFetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(responseBodyCanceled).toBe(true);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
+  it('reclaims expired leases and processes the task', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 200 }));
+    createLocalEndpoint(storage, receiver.url);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 5 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+    storage.db
+      .prepare('UPDATE deliveries SET status = ?, lease_expires_at = ? WHERE id = ?')
+      .run('delivering', new Date(NOW.getTime() - 1).toISOString(), deliveryId);
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      visibilityTimeoutMs: 1_000,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(readDelivery(storage, deliveryId).status).toBe('succeeded');
+    expect(receiver.requests).toHaveLength(1);
+  });
+
+  it('fails closed for legacy digest-only endpoint secrets instead of sending unsigned traffic', async () => {
+    const storage = makeStorage();
+    const receiver = await startReceiver(() => ({ status: 200 }));
+    const endpoint = createLocalEndpoint(storage, receiver.url);
+    storage.db
+      .prepare(
+        `
+          UPDATE endpoints
+          SET signing_secret_ciphertext = ?, signing_secret_key_version = ?, signing_secret_nonce = ?
+          WHERE id = ?
+        `,
+      )
+      .run('sha256:legacy', 'sha256-v1', '', endpoint.endpoint.id);
+    const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 6 } });
+    const deliveryId = message.fanout.deliveryIds[0];
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      attemptBudget: 1,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 1 });
+    expect(receiver.requests).toEqual([]);
+    expect(readDelivery(storage, deliveryId)).toMatchObject({
+      status: 'dead_letter',
+      attempt_count: 1,
+      last_error: 'signing_secret_unavailable',
+    });
+  });
+
+  it('can reveal endpoint signing secrets after file-backed storage is reopened', async () => {
+    const dataDir = makeTempDir();
+    let storage = openTrackedStorage(dataDir);
+    seedApp(storage);
+    let endpointSecret = '';
+    let expectedMessageId = '';
+    const receiver = await startReceiver((request) => {
+      verifyWebhook(endpointSecret, request.headers, request.body, {
+        nowSeconds: Math.floor(NOW.getTime() / 1000),
+      });
+      expect(JSON.parse(request.body)).toMatchObject({ id: expectedMessageId });
+      return { status: 200 };
+    });
+    const endpoint = createEndpoint(storage, APP_ID, {
+      url: 'https://example.com/webhooks/reopened',
+      eventTypes: ['user.created'],
+    });
+    endpointSecret = endpoint.secret;
+    closeTrackedStorage(storage);
+
+    storage = openTrackedStorage(dataDir);
+    storage.db.prepare('UPDATE endpoints SET url = ? WHERE id = ?').run(receiver.url, endpoint.endpoint.id);
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.created',
+      payload: { id: 7 },
+    });
+    expectedMessageId = message.message.id;
+
+    const summary = await runDeliveryWorkerTick(storage, { now: () => NOW });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(receiver.errors).toEqual([]);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+});
+
+function makeStorage(): PosthornStorage {
+  const storage = openTrackedStorage(':memory:');
+  seedApp(storage);
+  return storage;
+}
+
+function openTrackedStorage(dataDir: string): PosthornStorage {
+  const storage = openStorage({ dataDir });
+  activeStorages.push(storage);
+  return storage;
+}
+
+function closeTrackedStorage(storage: PosthornStorage): void {
+  const index = activeStorages.indexOf(storage);
+  if (index >= 0) activeStorages.splice(index, 1);
+  storage.close();
+}
+
+function seedApp(storage: PosthornStorage): void {
+  storage.db
+    .prepare('INSERT INTO apps (id, name, monthly_message_quota, created_at) VALUES (?, ?, ?, ?)')
+    .run(APP_ID, 'Worker Tenant', null, NOW.toISOString());
+  storage.db
+    .prepare('INSERT INTO api_keys (id, app_id, key_hash, name, revoked_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('ak_worker', APP_ID, hashApiKey(API_KEY), 'Worker key', null, NOW.toISOString());
+}
+
+function createLocalEndpoint(
+  storage: PosthornStorage,
+  url: string,
+  input: { readonly eventTypes?: readonly string[]; readonly headers?: Readonly<Record<string, string>> } = {},
+): ReturnType<typeof createEndpoint> {
+  const endpoint = createEndpoint(storage, APP_ID, {
+    url: 'https://example.com/webhooks/worker',
+    ...input,
+  });
+  storage.db.prepare('UPDATE endpoints SET url = ? WHERE id = ?').run(url, endpoint.endpoint.id);
+  return endpoint;
+}
+
+async function startReceiver(
+  handler: (request: RecordedRequest) => Promise<SyntheticResponse> | SyntheticResponse,
+): Promise<SyntheticReceiver> {
+  const requests: RecordedRequest[] = [];
+  const errors: Error[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      void (async () => {
+        const recorded = {
+          headers: request.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        };
+        requests.push(recorded);
+
+        try {
+          const result = await handler(recorded);
+          response.writeHead(result.status, result.headers);
+          if (result.body !== undefined) {
+            response.write(result.body);
+          }
+        } catch (error) {
+          errors.push(asError(error));
+          response.writeHead(500);
+        }
+        response.end();
+      })();
+    });
+  });
+
+  const address = await listen(server);
+  const receiver = Object.freeze({
+    url: `http://127.0.0.1:${address.port}/webhook`,
+    requests,
+    errors,
+    close: () => closeServer(server),
+  });
+  activeReceivers.push(receiver);
+  return receiver;
+}
+
+function readDelivery(storage: PosthornStorage, deliveryId: string): DeliveryRow {
+  return storage.db
+    .prepare('SELECT status, attempt_count, next_attempt_at, lease_expires_at, last_error FROM deliveries WHERE id = ?')
+    .get(deliveryId) as unknown as DeliveryRow;
+}
+
+function readAttempts(storage: PosthornStorage, deliveryId: string): readonly AttemptRow[] {
+  return storage.db
+    .prepare(
+      `
+        SELECT attempt_number, outcome, response_status, duration_ms, failure_reason
+        FROM delivery_attempts
+        WHERE delivery_id = ?
+        ORDER BY attempt_number ASC
+      `,
+    )
+    .all(deliveryId) as unknown as AttemptRow[];
+}
+
+function listen(server: Server): Promise<AddressInfo> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve(server.address() as AddressInfo);
+    };
+
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(0, '127.0.0.1');
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'posthorn-worker-'));
+  tempDirs.push(dir);
+  return dir;
+}

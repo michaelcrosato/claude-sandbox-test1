@@ -4,6 +4,7 @@ export interface WorkerConfig {
   readonly requestTimeoutMs: number;
   readonly idlePollMs: number;
   readonly visibilityTimeoutMs: number;
+  readonly attemptBudget: number;
 }
 
 export interface PosthornConfig {
@@ -28,6 +29,7 @@ const DEFAULTS = {
   workerRequestTimeoutMs: 10_000,
   workerIdlePollMs: 1_000,
   workerVisibilityTimeoutMs: 30_000,
+  workerAttemptBudget: 8,
   endpointAutoDisableAfterMs: 432_000_000,
 } as const;
 
@@ -65,6 +67,12 @@ export function loadConfig(env: Env = process.env): PosthornConfig {
         env.POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS,
         'POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS',
         DEFAULTS.workerVisibilityTimeoutMs,
+        { min: 1 },
+      ),
+      attemptBudget: integerEnv(
+        env.POSTHORN_WORKER_ATTEMPT_BUDGET,
+        'POSTHORN_WORKER_ATTEMPT_BUDGET',
+        DEFAULTS.workerAttemptBudget,
         { min: 1 },
       ),
     }),

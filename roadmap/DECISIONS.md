@@ -8,3 +8,5 @@
 - GitHub repo: michaelcrosato/claude-sandbox-test1 (as specified by department runbook) (department)
 - Package manager / toolchain: npm, node ≥22.13, tsc, biome, vitest — all confirmed by existing package.json and charter docs (department)
 - F-0001 verification lane: local PowerShell can run Node 24 and product checks, but Git Bash lacks a native `node` binary and the Windows `node.exe` path/env bridge breaks existing hook fixtures → use Ubuntu CI as the authoritative full `verify.sh` evidence for this branch; reversible by installing native Node in the Bash environment.
+- F-0007 endpoint signing secrets: delivery requires recovering endpoint secrets, while F-0004 had only a digest → store new endpoint secrets with local AES-GCM protection and key metadata in SQLite; keep digest-only legacy rows fail-closed; reversible by adding external KMS/configured key support later.
+- F-0007 outbound delivery safety: receiver redirects and response bodies are not needed for webhook semantics → disable automatic fetch redirects and cancel response bodies after headers/status; reversible if a future feature adds explicit redirect allowlists or response-body auditing.

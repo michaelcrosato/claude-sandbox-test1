@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0007 done (crash-safe retry delivery worker)
+
+**What:** Added the importable delivery worker with SQLite lease claiming, Standard Webhooks signing, success/failure attempt recording, exponential retry scheduling, dead-lettering, timeout handling, and lease reclaim. Endpoint signing-secret persistence now stores recoverable protected material for new endpoints while legacy digest-only rows fail closed instead of sending unsigned traffic. Security review blocked redirect-following and response-body buffering; the worker now sends with redirects disabled and cancels response bodies.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0007/verify.log`. Fresh-context evaluator returned NEEDS_WORK only until CI evidence existed; focused checks were green. Security reviewer returned BLOCK then APPROVE after outbound HTTP hardening. Local checks passed: `npm run typecheck`, `npm test` (69 tests), `npm run build`, `npm run lint`, and `npx ts-node scripts/update-state.ts --validate`.
+
+**Surprises:** The assertion shield correctly blocked replacing a persisted-secret assertion; the implementation kept the historical `sha256:` compatibility prefix while using key-version metadata to distinguish recoverable protected secrets from legacy digest-only rows.
+
+**Next step:** Merge PR #36 after the final evidence commit goes green, then start F-0008 (idempotent message intake).
+
+---
+
 ## 2026-06-12 — F-0006 done (message intake and fanout queue)
 
 **What:** Added `POST /v1/messages`, tenant-authenticated message persistence, pending delivery task creation for enabled matching endpoints, and store helpers for message/delivery readback. Security review approved and suggested payload-depth hardening; the JSON validator is now iterative with depth/node caps and regression coverage for deeply nested payloads.

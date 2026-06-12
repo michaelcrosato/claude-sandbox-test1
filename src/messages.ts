@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { PosthornStorage } from './storage';
 
 export type MessageValidationErrorCode = 'invalid_request';
-export type DeliveryStatus = 'pending';
+export type DeliveryStatus = 'pending' | 'delivering' | 'succeeded' | 'dead_letter';
 
 export interface MessageRecord {
   readonly id: string;
@@ -264,11 +264,20 @@ function deliveryFromRow(row: DeliveryRow): DeliveryTaskRecord {
     id: String(row.id),
     messageId: String(row.message_id),
     endpointId: String(row.endpoint_id),
-    status: 'pending',
+    status: parseDeliveryStatus(row.status),
     attemptCount: Number(row.attempt_count),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function parseDeliveryStatus(value: unknown): DeliveryStatus {
+  const status = String(value);
+  if (status === 'pending' || status === 'delivering' || status === 'succeeded' || status === 'dead_letter') {
+    return status;
+  }
+
+  return 'pending';
 }
 
 interface MatchingEndpoint {

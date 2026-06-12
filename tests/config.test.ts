@@ -16,6 +16,7 @@ describe('loadConfig', () => {
         requestTimeoutMs: 10_000,
         idlePollMs: 1_000,
         visibilityTimeoutMs: 30_000,
+        attemptBudget: 8,
       },
       endpointAutoDisableAfterMs: 432_000_000,
     });
@@ -34,6 +35,7 @@ describe('loadConfig', () => {
         POSTHORN_WORKER_REQUEST_TIMEOUT_MS: '1500',
         POSTHORN_WORKER_IDLE_POLL_MS: '250',
         POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS: '5000',
+        POSTHORN_WORKER_ATTEMPT_BUDGET: '3',
         POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS: '0',
       }),
     ).toMatchObject({
@@ -48,6 +50,7 @@ describe('loadConfig', () => {
         requestTimeoutMs: 1500,
         idlePollMs: 250,
         visibilityTimeoutMs: 5000,
+        attemptBudget: 3,
       },
       endpointAutoDisableAfterMs: 0,
     });
@@ -63,6 +66,7 @@ describe('loadConfig', () => {
     ['POSTHORN_WORKER_REQUEST_TIMEOUT_MS', 'NaN'],
     ['POSTHORN_WORKER_IDLE_POLL_MS', '-10'],
     ['POSTHORN_WORKER_VISIBILITY_TIMEOUT_MS', '0'],
+    ['POSTHORN_WORKER_ATTEMPT_BUDGET', '0'],
     ['POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS', '-1'],
   ])('rejects invalid numeric config %s=%s', (name, value) => {
     expect(() => loadConfig({ [name]: value })).toThrow(name);

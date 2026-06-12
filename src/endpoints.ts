@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 
+import { protectEndpointSecret } from './secret-protection';
 import type { PosthornStorage } from './storage';
 import { createWebhookSecret } from './webhooks';
 
@@ -32,8 +33,6 @@ export class EndpointValidationError extends Error {
 }
 
 const ENDPOINT_ID_PREFIX = 'ep_';
-const SECRET_DIGEST_PREFIX = 'sha256:';
-const ENDPOINT_SECRET_KEY_VERSION = 'sha256-v1';
 const EVENT_TYPE_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const RESERVED_HEADER_NAMES = new Set([
@@ -61,6 +60,7 @@ export function createEndpoint(
   const id = generateEndpointId();
   const createdAt = now.toISOString();
   const secret = createWebhookSecret();
+  const protectedSecret = protectEndpointSecret(storage, secret, now);
 
   storage.db
     .prepare(`
@@ -86,9 +86,9 @@ export function createEndpoint(
       serializeEventTypes(eventTypes),
       JSON.stringify(headers),
       JSON.stringify({}),
-      hashEndpointSecret(secret),
-      ENDPOINT_SECRET_KEY_VERSION,
-      '',
+      protectedSecret.ciphertext,
+      protectedSecret.keyVersion,
+      protectedSecret.nonce,
       1,
       createdAt,
       createdAt,
@@ -181,10 +181,6 @@ export function deleteEndpoint(storage: PosthornStorage, appId: string, endpoint
 
 function generateEndpointId(): string {
   return `${ENDPOINT_ID_PREFIX}${randomBytes(16).toString('base64url')}`;
-}
-
-function hashEndpointSecret(secret: string): string {
-  return `${SECRET_DIGEST_PREFIX}${createHash('sha256').update(secret, 'utf8').digest('base64url')}`;
 }
 
 function requireObject(input: unknown): Record<string, unknown> {
