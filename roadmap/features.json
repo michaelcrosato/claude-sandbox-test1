@@ -1222,6 +1222,49 @@
         "roadmap/STATUS.md"
       ],
       "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0015",
+        "F-0016"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**",
+        "src/**"
+      ],
+      "id": "F-0029",
+      "epic": "operations",
+      "title": "Prometheus alerting and Grafana dashboard pack",
+      "spec_ref": "roadmap/ROADMAP.md#later",
+      "description": "Provide the Grafana dashboard and Prometheus alerting-rule artifacts promised by the roadmap so operators can monitor Posthorn metrics without inventing dashboards from scratch.",
+      "acceptance": [
+        "docs include a Prometheus alerting rules file for Posthorn health, dead letters, stuck deliveries, and delivery failure signals using only metrics that the product actually emits.",
+        "docs include an importable Grafana dashboard JSON with panels for accepted messages, delivery outcomes, task backlog by status, dead-letter reasons, uptime, and build info using a configurable Prometheus datasource.",
+        "Deployment docs and README reference the monitoring artifacts without claiming unsupported production integrations.",
+        "Tests validate that the monitoring artifacts are syntactically usable JSON/text files and only reference implemented metric names.",
+        "ROADMAP marks the Grafana dashboard / alerting rules portion of the monitoring bullet as shipped without rewriting operator-owned wording beyond shipped markers."
+      ],
+      "authorized_paths": [
+        "docs/**",
+        "tests/**",
+        "README.md",
+        "roadmap/ROADMAP.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0029.md",
+        "roadmap/evidence/F-0029/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
     }
   ]
 }
