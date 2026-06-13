@@ -34,7 +34,7 @@ export const POSTHORN_ADMIN_CLI_ROUTES: readonly ClientRouteMapping[] = Object.f
 ]);
 
 const CLIENT_HELP = `Usage:
-  posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>] [--delivery-method POST|PUT] [--payload-format envelope|payload_only]
+  posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>] [--delivery-method POST|PUT] [--payload-format envelope|payload_only|cloud_events_1_0]
   posthorn client send <eventType> <jsonPayload> [--idempotency-key <key>] [--deduplication-key <key>] [--deduplication-window-seconds <integer>]
   posthorn client list-endpoints
   posthorn client get-message <messageId>
@@ -216,7 +216,7 @@ function parseCreateEndpointArgs(args: readonly string[]): {
   readonly eventTypes?: readonly string[];
   readonly rateLimitPerSecond?: number;
   readonly deliveryMethod?: 'POST' | 'PUT';
-  readonly payloadFormat?: 'envelope' | 'payload_only';
+  readonly payloadFormat?: 'envelope' | 'payload_only' | 'cloud_events_1_0';
 } {
   const [url, ...eventTypes] = args;
   if (url === undefined || url.trim() === '') {
@@ -228,7 +228,7 @@ function parseCreateEndpointArgs(args: readonly string[]): {
     eventTypes?: string[];
     rateLimitPerSecond?: number;
     deliveryMethod?: 'POST' | 'PUT';
-    payloadFormat?: 'envelope' | 'payload_only';
+    payloadFormat?: 'envelope' | 'payload_only' | 'cloud_events_1_0';
   } = { url };
   const parsedEventTypes: string[] = [];
   for (let index = 0; index < eventTypes.length; index += 1) {
@@ -270,9 +270,9 @@ function parseCreateEndpointArgs(args: readonly string[]): {
   return input;
 }
 
-function parsePayloadFormatOption(input: string): 'envelope' | 'payload_only' {
-  if (input === 'envelope' || input === 'payload_only') return input;
-  throw new CliUsageError('--payload-format requires envelope or payload_only.');
+function parsePayloadFormatOption(input: string): 'envelope' | 'payload_only' | 'cloud_events_1_0' {
+  if (input === 'envelope' || input === 'payload_only' || input === 'cloud_events_1_0') return input;
+  throw new CliUsageError('--payload-format requires envelope or payload_only. cloud_events_1_0 is also supported.');
 }
 
 function parseDeliveryMethodOption(input: string): 'POST' | 'PUT' {

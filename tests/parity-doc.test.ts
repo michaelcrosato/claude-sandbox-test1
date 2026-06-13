@@ -102,6 +102,9 @@ describe('code-verified parity documentation', () => {
     expect(doc).toContain('Not verified');
     expect(doc).toContain('PostgreSQL/HA scale-out');
     expect(doc).toContain('Payload transformations');
+    expect(doc).toContain('CloudEvents');
+    expect(doc).toContain('CloudEvents JSON 1.0');
+    expect(doc).toContain('cloud_events_1_0');
     expect(doc).toContain('Deduplication rules beyond intake idempotency');
     expect(doc).toContain('Non-webhook destination connectors');
   });

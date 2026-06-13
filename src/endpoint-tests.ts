@@ -40,6 +40,7 @@ export class EndpointTestError extends Error {
 }
 
 const TEST_DELIVERY_ID_PREFIX = 'test_';
+const CLOUD_EVENTS_SOURCE = 'urn:posthorn';
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const USER_AGENT = 'posthorn-endpoint-test';
 const MANAGED_HEADER_NAMES = new Set([
@@ -70,7 +71,7 @@ export async function sendEndpointTest(
   const payload = resolvePayload(storage, appId, eventType, body);
   const id = generateTestDeliveryId();
   const attemptedAt = options.now?.() ?? new Date();
-  const rawBody = buildTestDeliveryBody(endpoint, id, eventType, payload.value);
+  const rawBody = buildTestDeliveryBody(endpoint, id, eventType, payload.value, attemptedAt);
   const startedAt = Date.now();
   let timeout: NodeJS.Timeout | null = null;
   const abortController = new AbortController();
@@ -141,9 +142,21 @@ function buildTestDeliveryBody(
   id: string,
   eventType: string,
   payload: JsonValue,
+  attemptedAt: Date,
 ): string {
   if (endpoint.payloadFormat === 'payload_only') {
     return JSON.stringify(payload);
+  }
+
+  if (endpoint.payloadFormat === 'cloud_events_1_0') {
+    return JSON.stringify({
+      specversion: '1.0',
+      id,
+      type: eventType,
+      source: CLOUD_EVENTS_SOURCE,
+      time: attemptedAt.toISOString(),
+      data: payload,
+    });
   }
 
   return JSON.stringify({ id, eventType, payload });

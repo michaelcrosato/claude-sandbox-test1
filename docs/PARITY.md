@@ -46,7 +46,7 @@ only when this checkout has product code plus a guard test or source-backed oper
 - Endpoint management, one-time endpoint secrets, endpoint secret rotation, and admin provisioning:
   `README.md`, `tests/endpoints-http.test.ts`, and `tests/admin-http.test.ts`.
 - Message intake, batch intake, producer idempotency, producer-supplied deduplication windows,
-  endpoint payload-only delivery, endpoint POST/PUT delivery methods, retry delivery, dead-lettering, and manual retry: `README.md`,
+  endpoint payload-only and `cloud_events_1_0` CloudEvents delivery, endpoint POST/PUT delivery methods, retry delivery, dead-lettering, and manual retry: `README.md`,
   `tests/messages-http.test.ts`, and `tests/worker.test.ts`.
 - Delivery auditability: `tests/deliveries-http.test.ts`,
   `tests/endpoint-observability-http.test.ts`, `tests/messages-http.test.ts`, and
@@ -65,10 +65,11 @@ These are the codeable gaps this matrix exposes. They are product work, not rele
 - **PostgreSQL/HA scale-out**: Posthorn has a deliberately simple single-pod SQLite deployment
   model today. A PostgreSQL-backed store and safe multi-worker deployment model are the next
   scale-out step.
-- **Arbitrary payload transformations**: Posthorn can send either its default delivery envelope
-  or the original JSON payload body per endpoint, and can deliver those signed webhook bodies as
-  `POST` or `PUT`. It does not yet offer arbitrary body templates, arbitrary method changes, URL
-  rewriting, header mutation rules, or routing-data transformations.
+- **Arbitrary payload transformations**: Posthorn can send its default delivery envelope, the
+  original JSON payload body, or the built-in `cloud_events_1_0` CloudEvents JSON 1.0 body per endpoint, and can
+  deliver those signed webhook bodies as `POST` or `PUT`. It does not yet offer arbitrary body
+  templates, arbitrary method changes, URL rewriting, header mutation rules, or routing-data
+  transformations.
 - **Arbitrary deduplication rules**: Posthorn deduplicates producer retries with an idempotency
   key and can suppress duplicate fanout by tenant, event type, producer-supplied deduplication
   key, and bounded time window. It does not yet offer arbitrary field extraction, JSONPath rules,

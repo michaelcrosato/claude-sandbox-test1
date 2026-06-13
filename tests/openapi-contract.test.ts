@@ -57,7 +57,7 @@ describe('OpenAPI contract', () => {
     });
     expect(body.components.schemas.Endpoint.properties.payloadFormat).toEqual({
       type: 'string',
-      enum: ['envelope', 'payload_only'],
+      enum: ['envelope', 'payload_only', 'cloud_events_1_0'],
     });
     expect(
       body.paths['/v1/endpoints'].post.requestBody.content['application/json'].schema.properties.rateLimitPerSecond,
@@ -68,7 +68,7 @@ describe('OpenAPI contract', () => {
       anyOf: [{ type: 'string', enum: ['POST', 'PUT'] }, { type: 'null' }],
     });
     expect(body.paths['/v1/endpoints'].post.requestBody.content['application/json'].schema.properties.payloadFormat).toEqual({
-      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }],
+      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only', 'cloud_events_1_0'] }, { type: 'null' }],
     });
     expect(
       body.paths['/v1/endpoints/{id}'].patch.requestBody.content['application/json'].schema.properties
@@ -84,7 +84,7 @@ describe('OpenAPI contract', () => {
     expect(
       body.paths['/v1/endpoints/{id}'].patch.requestBody.content['application/json'].schema.properties.payloadFormat,
     ).toEqual({
-      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }],
+      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only', 'cloud_events_1_0'] }, { type: 'null' }],
     });
     const messageSchema = body.paths['/v1/messages'].post.requestBody.content['application/json'].schema;
     expect(messageSchema.required).toEqual(['eventType', 'payload']);

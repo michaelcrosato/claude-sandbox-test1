@@ -15,7 +15,7 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 This checkout is in the product-foundation phase: it has the public TypeScript entry point,
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
-queue creation, endpoint delivery throttling, endpoint delivery methods, endpoint payload formats, message deduplication windows, idempotent message retries, the importable retry delivery worker, the per-attempt
+queue creation, endpoint delivery throttling, endpoint delivery methods, endpoint payload formats including CloudEvents JSON, message deduplication windows, idempotent message retries, the importable retry delivery worker, the per-attempt
 audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
 batch message intake, Python SDK, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the implemented Posthorn product contract being built through `roadmap/features.json`.
@@ -80,9 +80,9 @@ Key capabilities:
   webhook spikes while excess deliveries stay queued
 - **Endpoint delivery methods** — default to `POST`, or set `deliveryMethod: "PUT"`
   when a receiver expects signed webhook bodies over `PUT`
-- **Endpoint payload formats** — keep Posthorn's default delivery envelope, or set
-  `payloadFormat: "payload_only"` when a receiver expects the original JSON payload as the
-  signed request body
+- **Endpoint payload formats** — keep Posthorn's default delivery envelope, set
+  `payloadFormat: "payload_only"` for the original JSON payload, or use
+  `payloadFormat: "cloud_events_1_0"` for CloudEvents JSON 1.0 bodies
 - **Idempotent intake** — a producer's retried send deduplicates on the original, never
   double-fans-out
 - **Message deduplication windows** — optional producer-supplied `deduplicationKey` values
@@ -182,7 +182,7 @@ const endpoint = await client.createEndpoint({
   headers: { "X-API-Key": "my-receiver-api-key" }, // custom delivery headers (optional)
   rateLimitPerSecond: 10, // optional delivery throttle for this receiver
   deliveryMethod: "PUT", // optional: default is POST
-  payloadFormat: "payload_only", // optional: deliver payload JSON directly instead of the envelope
+  payloadFormat: "cloud_events_1_0", // optional: envelope, payload_only, or cloud_events_1_0
 });
 
 // Send an event:
@@ -280,7 +280,7 @@ export POSTHORN_API_KEY=phk_...                      # a key from the admin API
 posthorn client create-endpoint https://acme.example/hook user.created \
   --rate-limit-per-second 10 \
   --delivery-method PUT \
-  --payload-format payload_only                    # secret printed ONCE
+  --payload-format cloud_events_1_0               # secret printed ONCE
 posthorn client send user.created '{"id":42}' \
   --deduplication-key user.created:42 \
   --deduplication-window-seconds 3600                 # publish an event
@@ -323,7 +323,7 @@ endpoint = client.create_endpoint(
     event_types=["user.created"],
     rate_limit_per_second=10,
     delivery_method="PUT",
-    payload_format="payload_only",
+    payload_format="cloud_events_1_0",
 )
 
 # Send an event (idempotency_key is optional; a retry won't double-send):

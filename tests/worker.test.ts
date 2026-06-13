@@ -195,6 +195,58 @@ describe('delivery worker', () => {
     expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
   });
 
+  it('sends CloudEvents 1.0 JSON bodies and signs the exact body', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/cloud-events', {
+      eventTypes: ['user.cloud_event'],
+      deliveryMethod: 'PUT',
+      payloadFormat: 'cloud_events_1_0',
+    });
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.cloud_event',
+      payload: { id: 45, nested: { ok: true } },
+    }, NOW);
+    const captured = createCapturingFetch();
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(NOW.getTime() + 1_000),
+      fetch: captured.fetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(captured.request).not.toBeNull();
+    if (captured.request === null) throw new Error('Expected captured delivery request.');
+    const request = captured.request;
+    expect(request.method).toBe('PUT');
+    expect(request.redirect).toBe('manual');
+    const expectedBody = JSON.stringify({
+      specversion: '1.0',
+      id: message.message.id,
+      type: 'user.cloud_event',
+      source: 'urn:posthorn',
+      time: NOW.toISOString(),
+      data: { id: 45, nested: { ok: true } },
+    });
+    expect(request.body).toBe(expectedBody);
+    expect(JSON.parse(request.body)).toEqual({
+      specversion: '1.0',
+      id: message.message.id,
+      type: 'user.cloud_event',
+      source: 'urn:posthorn',
+      time: NOW.toISOString(),
+      data: { id: 45, nested: { ok: true } },
+    });
+    verifyWebhook(endpoint.secret, request.headers, request.body, {
+      nowSeconds: Math.floor((NOW.getTime() + 1_000) / 1000),
+    });
+    expect(() =>
+      verifyWebhook(endpoint.secret, request.headers, `${request.body}\n`, {
+        nowSeconds: Math.floor((NOW.getTime() + 1_000) / 1000),
+      }),
+    ).toThrow(WebhookVerificationError);
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
   it('signs deliveries with current and previous endpoint secrets during rotation overlap', async () => {
     const storage = makeStorage();
     const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/rotation-overlap');
@@ -854,7 +906,7 @@ function createLocalEndpoint(
     readonly headers?: Readonly<Record<string, string>>;
     readonly rateLimitPerSecond?: number | null;
     readonly deliveryMethod?: 'POST' | 'PUT' | null;
-    readonly payloadFormat?: 'envelope' | 'payload_only' | null;
+    readonly payloadFormat?: 'envelope' | 'payload_only' | 'cloud_events_1_0' | null;
   } = {},
 ): ReturnType<typeof createEndpoint> {
   const endpoint = createEndpoint(storage, APP_ID, {

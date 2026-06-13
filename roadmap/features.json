@@ -1537,6 +1537,51 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0033",
+        "F-0035"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0036/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0036",
+      "epic": "delivery-transformations",
+      "title": "CloudEvents delivery payload format",
+      "spec_ref": "docs/PARITY.md#posthorn-gaps",
+      "description": "Add a safe CloudEvents JSON delivery format as a closed endpoint payloadFormat option so tenants can send standard event-shaped webhook bodies without arbitrary templates or user code. This expands the payload-transformation parity path while preserving existing signing, delivery method, redirect, and URL safety behavior.",
+      "acceptance": [
+        "Endpoint create and update accept payloadFormat values of envelope, payload_only, or cloud_events_1_0; new and existing endpoints still default to envelope; null on update resets to envelope; malformed values return invalid_request.",
+        "CloudEvents deliveries use a deterministic JSON body with specversion 1.0, id, type, source, time, and data fields derived from the stored message, while preserving endpoint deliveryMethod and Standard Webhooks signatures over the exact raw body.",
+        "Endpoint test-send uses the same cloud_events_1_0 body shape with its test id, requested event type, current test time, and resolved payload, without persisting message, delivery, usage, or attempt rows.",
+        "OpenAPI, TypeScript SDK, tenant CLI, Python SDK, README, Python README, and docs/PARITY document cloud_events_1_0 as a closed built-in format without claiming arbitrary transformations are supported.",
+        "Tests cover create/update validation and serialization, worker body/signature behavior, endpoint test-send body/signature behavior, client/CLI/Python propagation, OpenAPI contract, README docs, and parity matrix wording."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "docs/PARITY.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0036.md",
+        "roadmap/evidence/F-0036/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

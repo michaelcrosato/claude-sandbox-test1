@@ -24,7 +24,7 @@ interface EndpointJson {
   readonly headers: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond: number | null;
   readonly deliveryMethod: 'POST' | 'PUT';
-  readonly payloadFormat: 'envelope' | 'payload_only';
+  readonly payloadFormat: 'envelope' | 'payload_only' | 'cloud_events_1_0';
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -124,12 +124,21 @@ describe('endpoint management HTTP routes', () => {
     expect(getResponse.body.endpoint).not.toHaveProperty('secret');
     expect(JSON.stringify(getResponse.body)).not.toContain(createResponse.body.secret);
 
+    const createCloudEvents = await requestJson<EndpointCreateJson>(address, 'POST', '/v1/endpoints', TENANT_A_KEY, {
+      url: 'https://example.com/webhooks/cloud-events',
+      payloadFormat: 'cloud_events_1_0',
+    });
+    expect(createCloudEvents.status).toBe(201);
+    expect(createCloudEvents.body.endpoint.payloadFormat).toBe('cloud_events_1_0');
+
     const createNullMethod = await requestJson<EndpointCreateJson>(address, 'POST', '/v1/endpoints', TENANT_A_KEY, {
       url: 'https://example.com/webhooks/null-method-default',
       deliveryMethod: null,
+      payloadFormat: null,
     });
     expect(createNullMethod.status).toBe(201);
     expect(createNullMethod.body.endpoint.deliveryMethod).toBe('POST');
+    expect(createNullMethod.body.endpoint.payloadFormat).toBe('envelope');
   });
 
   it('lists, fetches, updates, and deletes only the authenticated tenant endpoints', async () => {
@@ -209,6 +218,30 @@ describe('endpoint management HTTP routes', () => {
     );
     expect(resetDeliveryMethod.status).toBe(200);
     expect(resetDeliveryMethod.body.endpoint.deliveryMethod).toBe('POST');
+
+    const setCloudEvents = await requestJson<EndpointReadJson>(
+      address,
+      'PATCH',
+      `/v1/endpoints/${first.endpoint.id}`,
+      TENANT_A_KEY,
+      { deliveryMethod: 'PUT', payloadFormat: 'cloud_events_1_0' },
+    );
+    expect(setCloudEvents.status).toBe(200);
+    expect(setCloudEvents.body.endpoint.deliveryMethod).toBe('PUT');
+    expect(setCloudEvents.body.endpoint.payloadFormat).toBe('cloud_events_1_0');
+
+    const omitPayloadFormat = await requestJson<EndpointReadJson>(
+      address,
+      'PATCH',
+      `/v1/endpoints/${first.endpoint.id}`,
+      TENANT_A_KEY,
+      { headers: { 'X-Trace-Id': 'cloud-unchanged' } },
+    );
+    expect(omitPayloadFormat.status).toBe(200);
+    expect(omitPayloadFormat.body.endpoint.payloadFormat).toBe('cloud_events_1_0');
+
+    const listCloudEvents = await requestJson<EndpointListJson>(address, 'GET', '/v1/endpoints', TENANT_A_KEY);
+    expect(listCloudEvents.body.data.find((endpoint) => endpoint.id === first.endpoint.id)?.payloadFormat).toBe('cloud_events_1_0');
 
     const deleteResponse = await requestRaw(address, 'DELETE', `/v1/endpoints/${second.endpoint.id}`, TENANT_A_KEY);
     expect(deleteResponse.status).toBe(204);

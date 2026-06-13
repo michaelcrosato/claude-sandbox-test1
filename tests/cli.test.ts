@@ -115,6 +115,13 @@ describe('posthorn client CLI', () => {
     const list = await runCli(['client', 'list-endpoints'], env);
     expect(JSON.parse(list.stdout)).toEqual([expect.objectContaining({ id: created.endpoint.id })]);
 
+    const cloudEventsCreate = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli-cloud', 'cli.cloud', '--payload-format', 'cloud_events_1_0'],
+      env,
+    );
+    expect(cloudEventsCreate.exitCode).toBe(0);
+    expect(JSON.parse(cloudEventsCreate.stdout).endpoint.payloadFormat).toBe('cloud_events_1_0');
+
     const message = await runCli(['client', 'get-message', accepted.message.id], env);
     expect(JSON.parse(message.stdout)).toMatchObject({
       message: { id: accepted.message.id, eventType: 'cli.created', payload: { id: 42 } },
@@ -156,6 +163,7 @@ describe('posthorn client CLI', () => {
     );
     expect(malformedPayloadFormat.exitCode).toBe(1);
     expect(malformedPayloadFormat.stderr).toContain('--payload-format requires envelope or payload_only.');
+    expect(malformedPayloadFormat.stderr).toContain('cloud_events_1_0');
     expect(malformedPayloadFormat.stderr).not.toContain(TENANT_KEY);
 
     const malformedDeliveryMethod = await runCli(

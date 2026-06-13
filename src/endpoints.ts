@@ -22,7 +22,7 @@ export interface EndpointRecord {
 }
 
 export type EndpointDeliveryMethod = 'POST' | 'PUT';
-export type EndpointPayloadFormat = 'envelope' | 'payload_only';
+export type EndpointPayloadFormat = 'envelope' | 'payload_only' | 'cloud_events_1_0';
 
 export interface CreateEndpointResult {
   readonly endpoint: EndpointRecord;
@@ -540,8 +540,8 @@ function parsePayloadFormatForUpdate(input: unknown): EndpointPayloadFormat {
 }
 
 function parsePayloadFormat(input: unknown): EndpointPayloadFormat {
-  if (input === 'envelope' || input === 'payload_only') return input;
-  throw new EndpointValidationError('invalid_request', 'payloadFormat must be envelope, payload_only, or null.');
+  if (input === 'envelope' || input === 'payload_only' || input === 'cloud_events_1_0') return input;
+  throw new EndpointValidationError('invalid_request', 'payloadFormat must be envelope, payload_only, cloud_events_1_0, or null.');
 }
 
 function parseRotationOverlapSeconds(input: unknown): number {
@@ -587,6 +587,7 @@ function parseStoredDeliveryMethod(value: unknown): EndpointDeliveryMethod {
 }
 
 function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
+  if (value === 'cloud_events_1_0') return 'cloud_events_1_0';
   return value === 'payload_only' ? 'payload_only' : 'envelope';
 }
 

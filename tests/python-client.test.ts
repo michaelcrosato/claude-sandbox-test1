@@ -63,6 +63,13 @@ assert listed[0]["rateLimitPerSecond"] == 3
 assert listed[0]["deliveryMethod"] == "PUT"
 assert listed[0]["payloadFormat"] == "payload_only"
 
+cloud = client.create_endpoint(
+    "https://example.com/hooks/python-cloud",
+    event_types=["python.cloud"],
+    payload_format="cloud_events_1_0",
+)
+assert cloud["endpoint"]["payloadFormat"] == "cloud_events_1_0"
+
 first = client.send_message(
     "python.created",
     {"id": 1},
