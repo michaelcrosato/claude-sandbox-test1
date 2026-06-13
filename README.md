@@ -426,6 +426,9 @@ message IDs, event types, headers, API keys, signing secrets, or payload fields.
 
 For a production Docker Compose reference with a Prometheus scrape config, see
 **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+Prometheus alert rules are available in **[docs/prometheus-alerts.yml](docs/prometheus-alerts.yml)**,
+and an importable Grafana dashboard is available in
+**[docs/grafana-dashboard.json](docs/grafana-dashboard.json)**.
 
 ## Dashboard
 

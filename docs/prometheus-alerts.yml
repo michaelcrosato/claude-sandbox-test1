@@ -1,0 +1,56 @@
+groups:
+  - name: posthorn.rules
+    rules:
+      - alert: PosthornTargetDown
+        expr: up{job="posthorn"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Posthorn scrape target is down
+          description: Prometheus cannot scrape the Posthorn target for five minutes.
+
+      - alert: PosthornTargetMissing
+        expr: absent(up{job="posthorn"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Posthorn scrape target is missing
+          description: No Prometheus target with job="posthorn" is present.
+
+      - alert: PosthornDeadLetterBacklog
+        expr: sum(posthorn_delivery_tasks{status="dead_letter"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Posthorn has dead-lettered deliveries
+          description: Dead-lettered delivery tasks have been present for at least fifteen minutes.
+
+      - alert: PosthornNewDeadLetters
+        expr: increase(posthorn_deliveries_total{outcome="dead_lettered"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Posthorn produced new dead letters
+          description: At least one delivery moved to the dead-letter outcome in the last fifteen minutes.
+
+      - alert: PosthornStuckDelivering
+        expr: sum(posthorn_delivery_tasks{status="delivering"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Posthorn deliveries may be stuck
+          description: One or more deliveries have stayed in delivering state for thirty minutes.
+
+      - alert: PosthornRetryingSpike
+        expr: increase(posthorn_deliveries_total{outcome="retrying"}[15m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Posthorn delivery retries increased
+          description: More than ten delivery attempts entered retrying outcome in fifteen minutes.

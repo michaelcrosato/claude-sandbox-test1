@@ -82,6 +82,17 @@ The compose file reads `POSTHORN_ADMIN_TOKEN` from your shell and fails fast whe
 
 Prometheus uses [docs/prometheus.yml](prometheus.yml), which scrapes `posthorn:3000` at `/metrics`.
 
+## Monitoring Artifacts
+
+Use [docs/prometheus-alerts.yml](prometheus-alerts.yml) as a starting Prometheus rule group for
+Posthorn target health, dead letters, stuck deliveries, and retry spikes. The rules reference only
+the metrics served by `/metrics` plus Prometheus' own `up` scrape metric.
+
+Import [docs/grafana-dashboard.json](grafana-dashboard.json) into Grafana and select your
+Prometheus datasource when prompted. The dashboard summarizes accepted messages, delivery outcomes,
+delivery task backlog, dead-letter reasons, uptime, and build information without tenant labels or
+payload data.
+
 ## Data and Secrets
 
 The `/data` volume contains the SQLite database. That database stores tenant records, API-key hashes, endpoint signing secret ciphertext, and the local key material needed to reveal endpoint signing secrets. Back it up and restrict access like any other production secret-bearing store.

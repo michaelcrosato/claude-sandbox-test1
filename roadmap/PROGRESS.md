@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0029 done (Prometheus alerting and Grafana dashboard pack)
+
+**What:** Added operator monitoring artifacts for the existing `/metrics` endpoint: `docs/prometheus-alerts.yml` and `docs/grafana-dashboard.json`. The alert pack covers scrape health, dead-letter backlog, new dead letters, stuck deliveries, and retry spikes; the dashboard covers accepted messages, delivery outcomes, task backlog, dead-letter reasons, uptime, and build info.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0029/verify.log`. Evaluator returned PASS. Security review was skipped because this was a docs/artifact-only change with no runtime, auth, API, data, dependency, or workflow changes. Local checks passed: `npx vitest run tests/monitoring-artifacts.test.ts tests/deployment-artifacts.test.ts` (7 tests), `npm run typecheck`, `npm test` (160 tests), `npm run lint`, `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** The artifact tests are useful guardrails even for docs: they parse the Grafana JSON and reject unknown `posthorn_*` metric names so dashboards and alerts cannot drift ahead of the product metrics. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, mark PR #58 ready, then merge.
+
+---
+
 ## 2026-06-12 — F-0028 done (Admin command-line client)
 
 **What:** Added the `posthorn admin` command-line namespace for common control-plane work. Operators can now create/list/read/update/delete tenant apps, create/list/revoke API keys, read app usage, and rotate app system signing secrets from shell or CI with JSON output.
