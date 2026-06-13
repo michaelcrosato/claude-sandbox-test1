@@ -17,6 +17,8 @@ sent = client.send_message(
     event_type="user.created",
     payload={"id": 42},
     idempotency_key="req_42",
+    deduplication_key="user.created:42",
+    deduplication_window_seconds=3600,
 )
 
 attempts = client.list_message_attempts(sent["message"]["id"], limit=25)

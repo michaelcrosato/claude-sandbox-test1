@@ -476,19 +476,29 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
       }),
     };
   }
+  if (key === 'post /v1/messages') {
+    return {
+      required: true,
+      content: jsonContent(messageWriteSchema()),
+    };
+  }
+  if (key === 'post /v1/messages/batch') {
+    return {
+      required: true,
+      content: jsonContent({ type: 'array', minItems: 1, maxItems: 100, items: messageWriteSchema() }),
+    };
+  }
   if (
     key === 'post /v1/endpoints/{id}/test' ||
     key === 'post /v1/event-types' ||
     key === 'patch /v1/event-types/{id}' ||
-    key === 'post /v1/messages' ||
-    key === 'post /v1/messages/batch' ||
     key === 'post /v1/admin/apps' ||
     key === 'patch /v1/admin/apps/{id}' ||
     key === 'post /v1/admin/apps/{id}/keys'
   ) {
     return {
       required: key !== 'post /v1/admin/apps/{id}/keys',
-      content: jsonContent(key === 'post /v1/messages/batch' ? { type: 'array', minItems: 1, maxItems: 100 } : {}),
+      content: jsonContent({}),
     };
   }
   if (key === 'post /v1/endpoints') {
@@ -505,6 +515,20 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
   }
 
   return null;
+}
+
+function messageWriteSchema(): OpenApiSchema {
+  return {
+    type: 'object',
+    required: ['eventType', 'payload'],
+    properties: {
+      eventType: { type: 'string' },
+      payload: {},
+      idempotencyKey: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
+      deduplicationKey: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
+      deduplicationWindowSeconds: { anyOf: [{ type: 'integer', minimum: 1, maximum: 2_592_000 }, { type: 'null' }] },
+    },
+  };
 }
 
 function endpointWriteSchema(requireUrl: boolean): OpenApiSchema {

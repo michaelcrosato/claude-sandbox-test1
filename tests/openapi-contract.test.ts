@@ -74,6 +74,20 @@ describe('OpenAPI contract', () => {
     ).toEqual({
       anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }],
     });
+    const messageSchema = body.paths['/v1/messages'].post.requestBody.content['application/json'].schema;
+    expect(messageSchema.required).toEqual(['eventType', 'payload']);
+    expect(messageSchema.properties.idempotencyKey).toEqual({
+      anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }],
+    });
+    expect(messageSchema.properties.deduplicationKey).toEqual({
+      anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }],
+    });
+    expect(messageSchema.properties.deduplicationWindowSeconds).toEqual({
+      anyOf: [{ type: 'integer', minimum: 1, maximum: 2_592_000 }, { type: 'null' }],
+    });
+    expect(body.paths['/v1/messages/batch'].post.requestBody.content['application/json'].schema.items).toEqual(
+      messageSchema,
+    );
     expect(operationSet(body)).toEqual(operationSet(createOpenApiDocument()));
     expect(operationSet(body)).toEqual(new Set(IMPLEMENTED_ROUTES.map(routeKey)));
     expect(JSON.stringify(body)).not.toContain('phk_');

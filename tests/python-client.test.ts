@@ -60,7 +60,13 @@ assert listed[0]["headers"] == {"X-SDK": "python"}
 assert listed[0]["rateLimitPerSecond"] == 3
 assert listed[0]["payloadFormat"] == "payload_only"
 
-first = client.send_message("python.created", {"id": 1}, idempotency_key="python-1")
+first = client.send_message(
+    "python.created",
+    {"id": 1},
+    idempotency_key="python-1",
+    deduplication_key="python-deduped",
+    deduplication_window_seconds=3600,
+)
 same = client.send_message("python.created", {"id": 1}, idempotency_key="python-1")
 assert same == first
 assert first["fanout"]["matched"] == 1

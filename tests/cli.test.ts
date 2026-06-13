@@ -37,6 +37,7 @@ describe('posthorn client CLI', () => {
     expect(io.stdout).toContain('posthorn client create-endpoint');
     expect(io.stdout).toContain('--rate-limit-per-second');
     expect(io.stdout).toContain('--payload-format');
+    expect(io.stdout).toContain('--deduplication-key');
     expect(io.stdout).toContain('POSTHORN_URL');
     expect(io.stderr).toBe('');
   });
@@ -89,7 +90,19 @@ describe('posthorn client CLI', () => {
     expect(created.secret).toMatch(/^whsec_/);
     expect(create.stdout).not.toContain(TENANT_KEY);
 
-    const sent = await runCli(['client', 'send', 'cli.created', '{"id":42}', '--idempotency-key', 'cli-42'], env);
+    const sent = await runCli(
+      [
+        'client',
+        'send',
+        'cli.created',
+        '{"id":42}',
+        '--deduplication-key',
+        'cli-42',
+        '--deduplication-window-seconds',
+        '60',
+      ],
+      env,
+    );
     expect(sent.exitCode).toBe(0);
     const accepted = JSON.parse(sent.stdout) as { readonly message: { readonly id: string }; readonly fanout: { readonly matched: number } };
     expect(accepted.fanout.matched).toBe(1);
@@ -139,6 +152,14 @@ describe('posthorn client CLI', () => {
     expect(malformedPayloadFormat.exitCode).toBe(1);
     expect(malformedPayloadFormat.stderr).toContain('--payload-format requires envelope or payload_only.');
     expect(malformedPayloadFormat.stderr).not.toContain(TENANT_KEY);
+
+    const malformedDeduplicationWindow = await runCli(
+      ['client', 'send', 'cli.created', '{"id":42}', '--deduplication-key', 'cli-42', '--deduplication-window-seconds', 'abc'],
+      env,
+    );
+    expect(malformedDeduplicationWindow.exitCode).toBe(1);
+    expect(malformedDeduplicationWindow.stderr).toContain('--deduplication-window-seconds requires a positive safe integer.');
+    expect(malformedDeduplicationWindow.stderr).not.toContain(TENANT_KEY);
 
     const tokenAsCreateEndpointOption = await runCli(
       ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--bogus', TENANT_KEY],

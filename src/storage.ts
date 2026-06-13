@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS messages (
   payload_json TEXT NOT NULL,
   idempotency_key TEXT,
   payload_hash TEXT,
+  deduplication_key TEXT,
+  deduplication_expires_at TEXT,
   created_at TEXT NOT NULL,
   UNIQUE(app_id, idempotency_key)
 );
@@ -204,6 +206,7 @@ export function initializeSchema(db: DatabaseSync): void {
   migrateEndpointSecretRotationColumns(db);
   migrateEndpointRateLimitColumns(db);
   migrateEndpointPayloadFormatColumns(db);
+  migrateMessageDeduplicationColumns(db);
 }
 
 function migrateAppSystemSecretColumns(db: DatabaseSync): void {
@@ -268,6 +271,28 @@ function migrateEndpointPayloadFormatColumns(db: DatabaseSync): void {
       db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
     }
   }
+}
+
+function migrateMessageDeduplicationColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (
+      db.prepare('PRAGMA table_info(messages)').all() as Array<{
+        readonly name: unknown;
+      }>
+    ).map((row) => String(row.name)),
+  );
+
+  for (const column of MESSAGE_DEDUPLICATION_COLUMNS) {
+    if (!columns.has(column.name)) {
+      db.exec(`ALTER TABLE messages ADD COLUMN ${column.definition}`);
+    }
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS messages_deduplication_lookup_idx
+    ON messages(app_id, event_type, deduplication_key, deduplication_expires_at)
+    WHERE deduplication_key IS NOT NULL AND deduplication_expires_at IS NOT NULL
+  `);
 }
 
 const APP_SYSTEM_SECRET_COLUMNS = [
@@ -339,6 +364,17 @@ const ENDPOINT_PAYLOAD_FORMAT_COLUMNS = [
   {
     name: 'payload_format',
     definition: "payload_format TEXT NOT NULL DEFAULT 'envelope'",
+  },
+] as const;
+
+const MESSAGE_DEDUPLICATION_COLUMNS = [
+  {
+    name: 'deduplication_key',
+    definition: 'deduplication_key TEXT',
+  },
+  {
+    name: 'deduplication_expires_at',
+    definition: 'deduplication_expires_at TEXT',
   },
 ] as const;
 

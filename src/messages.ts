@@ -120,6 +120,9 @@ export class MessageConflictError extends Error {
 const MESSAGE_ID_PREFIX = 'msg_';
 const DELIVERY_ID_PREFIX = 'del_';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+const MAX_DEDUPLICATION_KEY_LENGTH = 200;
+const DEFAULT_DEDUPLICATION_WINDOW_SECONDS = 86_400;
+const MAX_DEDUPLICATION_WINDOW_SECONDS = 2_592_000;
 const DEFAULT_MESSAGES_PAGE_LIMIT = 25;
 const MAX_MESSAGES_PAGE_LIMIT = 100;
 const DEFAULT_ATTEMPTS_PAGE_LIMIT = 50;
@@ -155,6 +158,15 @@ export function acceptMessage(
         return existingResult;
       }
     }
+    const deduplication = parseDeduplication(body, now);
+    if (idempotencyKey === null && deduplication !== null) {
+      const duplicate = getActiveDeduplicatedMessage(storage, appId, eventType, deduplication.key, now);
+      if (duplicate !== null) {
+        const existingResult = acceptResultForExistingMessage(storage, appId, duplicate);
+        storage.db.exec('COMMIT');
+        return existingResult;
+      }
+    }
 
     assertMessageQuotaAvailable(storage, appId, now);
     matchingEndpoints = listMatchingEnabledEndpoints(storage, appId, eventType);
@@ -162,10 +174,29 @@ export function acceptMessage(
 
     storage.db
       .prepare(`
-        INSERT INTO messages (id, app_id, event_type, payload_json, idempotency_key, payload_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (
+          id,
+          app_id,
+          event_type,
+          payload_json,
+          idempotency_key,
+          payload_hash,
+          deduplication_key,
+          deduplication_expires_at,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(messageId, appId, eventType, payloadJson, idempotencyKey, requestHash, createdAt);
+      .run(
+        messageId,
+        appId,
+        eventType,
+        payloadJson,
+        idempotencyKey,
+        requestHash,
+        deduplication?.key ?? null,
+        deduplication?.expiresAt ?? null,
+        createdAt,
+      );
 
     const insertDelivery = storage.db.prepare(`
       INSERT INTO deliveries (
@@ -527,6 +558,53 @@ function parseIdempotencyKey(value: unknown): string | null {
   return idempotencyKey;
 }
 
+function parseDeduplication(body: Record<string, unknown>, now: Date): MessageDeduplicationInput | null {
+  const key = parseDeduplicationKey(body.deduplicationKey);
+  if (key === null) {
+    if (body.deduplicationWindowSeconds !== undefined && body.deduplicationWindowSeconds !== null) {
+      throw new MessageValidationError('deduplicationWindowSeconds requires deduplicationKey.');
+    }
+    return null;
+  }
+
+  const windowSeconds = parseDeduplicationWindowSeconds(body.deduplicationWindowSeconds);
+  return {
+    key,
+    expiresAt: new Date(now.getTime() + windowSeconds * 1000).toISOString(),
+  };
+}
+
+function parseDeduplicationKey(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw new MessageValidationError('deduplicationKey must be a string when supplied.');
+  }
+
+  if (containsControlCharacter(value)) {
+    throw new MessageValidationError('deduplicationKey must not contain control characters.');
+  }
+  const deduplicationKey = value.trim();
+  if (deduplicationKey === '' || deduplicationKey.length > MAX_DEDUPLICATION_KEY_LENGTH) {
+    throw new MessageValidationError('deduplicationKey must be a non-empty string up to 200 characters.');
+  }
+
+  return deduplicationKey;
+}
+
+function parseDeduplicationWindowSeconds(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_DEDUPLICATION_WINDOW_SECONDS;
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_DEDUPLICATION_WINDOW_SECONDS
+  ) {
+    throw new MessageValidationError('deduplicationWindowSeconds must be an integer between 1 and 2592000.');
+  }
+
+  return value;
+}
+
 function parseEventTypeFilter(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string' || !isValidEventTypeIdentifier(value)) {
@@ -618,6 +696,38 @@ function getMessageByIdempotencyKey(
       `,
     )
     .get(appId, idempotencyKey) as StoredIdempotentMessageRow | undefined;
+  if (row === undefined) return null;
+
+  return {
+    id: String(row.id),
+    eventType: String(row.event_type),
+    payload: JSON.parse(String(row.payload_json)) as JsonValue,
+    payloadHash: row.payload_hash === null || row.payload_hash === undefined ? null : String(row.payload_hash),
+    createdAt: String(row.created_at),
+  };
+}
+
+function getActiveDeduplicatedMessage(
+  storage: PosthornStorage,
+  appId: string,
+  eventType: string,
+  deduplicationKey: string,
+  now: Date,
+): StoredIdempotentMessage | null {
+  const row = storage.db
+    .prepare(
+      `
+        SELECT id, event_type, payload_json, payload_hash, created_at
+        FROM messages
+        WHERE app_id = ?
+          AND event_type = ?
+          AND deduplication_key = ?
+          AND deduplication_expires_at > ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+      `,
+    )
+    .get(appId, eventType, deduplicationKey, now.toISOString()) as StoredIdempotentMessageRow | undefined;
   if (row === undefined) return null;
 
   return {
@@ -806,6 +916,11 @@ function deliveryAttemptAuditFromRow(row: DeliveryAttemptAuditRow): DeliveryAtte
 
 interface MatchingEndpoint {
   readonly id: string;
+}
+
+interface MessageDeduplicationInput {
+  readonly key: string;
+  readonly expiresAt: string;
 }
 
 interface EndpointFanoutRow {

@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0034 done (Message deduplication windows)
+
+**What:** Added producer-supplied message deduplication windows. Message and batch intake now accept `deduplicationKey` plus optional `deduplicationWindowSeconds`; active duplicates within the same tenant, event type, key, and time window return the original accepted message/fanout without new message rows, delivery rows, or usage increments. Existing idempotency replay/conflict behavior still runs first.
+
+**Verified:** Evidence saved at `roadmap/evidence/F-0034/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npx vitest run tests/storage.test.ts tests/messages-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts` (63 tests), `npm run typecheck`, `npm run lint`, `npm test` (184 tests), `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** The important product boundary is order of operations: idempotency conflict handling must run before dedupe suppression so a conflicting idempotency key cannot be hidden by a matching dedupe key. The implementation stays intentionally narrow: producer-supplied keys only, no JSONPath, field extraction, templates, user code, endpoint-specific rules, or cleanup jobs.
+
+**Next step:** Push the CI evidence record, wait for PR #63 checks again, then mark it ready and merge on green.
+
+---
+
 ## 2026-06-12 — F-0033 done (Endpoint payload delivery formats)
 
 **What:** Added endpoint-level `payloadFormat` support. Endpoints now default to the existing `envelope` body and can opt into `payload_only` so the worker and endpoint test-send POST only the original JSON payload while signing that exact raw body. The field is exposed through endpoint create/update/read/list, OpenAPI, the TypeScript SDK, tenant CLI, Python SDK, README, and the parity matrix.

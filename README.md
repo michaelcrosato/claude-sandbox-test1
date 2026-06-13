@@ -15,7 +15,7 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 This checkout is in the product-foundation phase: it has the public TypeScript entry point,
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
-queue creation, endpoint delivery throttling, endpoint payload formats, idempotent message retries, the importable retry delivery worker, the per-attempt
+queue creation, endpoint delivery throttling, endpoint payload formats, message deduplication windows, idempotent message retries, the importable retry delivery worker, the per-attempt
 audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
 batch message intake, Python SDK, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the implemented Posthorn product contract being built through `roadmap/features.json`.
@@ -83,6 +83,8 @@ Key capabilities:
   signed request body
 - **Idempotent intake** — a producer's retried send deduplicates on the original, never
   double-fans-out
+- **Message deduplication windows** — optional producer-supplied `deduplicationKey` values
+  suppress duplicate fanout for a bounded window without exposing arbitrary field-extraction rules
 - **Zero-downtime secret rotation** — old + new secrets both verify during a configurable
   overlap window (default 24h), so receivers migrate at their own pace
 - **Auto-disable dead endpoints** — after dead-lettered deliveries show a configured window
@@ -103,8 +105,8 @@ Key capabilities:
 | GET | `/readyz` | none | implemented | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
 | GET | `/metrics` | none | implemented | Prometheus text exposition (operator metrics). |
 | GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
-| POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`). |
-| POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`). |
+| POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`; optional idempotency and deduplication keys). |
+| POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`; supports the same idempotency and deduplication fields). |
 | GET | `/v1/messages` | Bearer | implemented | List messages, newest-first (keyset-paginated; filters: `eventType`, `after`, `before`). |
 | GET | `/v1/messages/:id` | Bearer | implemented | Read a message + per-endpoint delivery statuses. |
 | POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
@@ -185,6 +187,8 @@ const { message, fanout } = await client.sendMessage({
   eventType: "user.created",
   payload: { id: 42 },
   idempotencyKey: "req_abc123", // optional; a retry won't double-send
+  deduplicationKey: "user.created:42", // optional; suppress noisy duplicates
+  deduplicationWindowSeconds: 3600, // optional; default is 24h, max is 30d
 });
 fanout?.matched; // number of endpoints a delivery was enqueued for
 
@@ -273,7 +277,9 @@ export POSTHORN_API_KEY=phk_...                      # a key from the admin API
 posthorn client create-endpoint https://acme.example/hook user.created \
   --rate-limit-per-second 10 \
   --payload-format payload_only                    # secret printed ONCE
-posthorn client send user.created '{"id":42}'        # publish an event
+posthorn client send user.created '{"id":42}' \
+  --deduplication-key user.created:42 \
+  --deduplication-window-seconds 3600                 # publish an event
 posthorn client list-endpoints | jq '.[].url'        # read commands print JSON → pipe to jq
 posthorn client get-message msg_...                  # delivery status for a message
 posthorn client usage                                # quota for the current period
@@ -320,6 +326,8 @@ result = client.send_message(
     event_type="user.created",
     payload={"id": 42},
     idempotency_key="req_abc123",
+    deduplication_key="user.created:42",
+    deduplication_window_seconds=3600,
 )
 result["fanout"]["matched"]  # number of endpoints a delivery was enqueued for
 
@@ -462,7 +470,7 @@ bash scripts/verify.sh
 
 **Supported Node:** Posthorn targets **Node ≥ 22.13**. The current foundation includes the product
 entry point, configuration loading, a SQLite-backed storage initializer, health/readiness HTTP
-endpoints, Standard Webhooks signing/verification utilities, tenant endpoint CRUD, endpoint delivery throttling, endpoint payload formats, message intake
+endpoints, Standard Webhooks signing/verification utilities, tenant endpoint CRUD, endpoint delivery throttling, endpoint payload formats, message deduplication windows, message intake
 with pending fanout queue creation, idempotent message retries, an importable retry delivery worker, admin tenant/API-key provisioning, build, lint, and Vitest wiring.
 
 ## Contributing & automation
