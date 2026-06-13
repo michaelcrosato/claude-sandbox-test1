@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS endpoints (
   previous_signing_secret_key_version TEXT,
   previous_signing_secret_nonce TEXT,
   previous_signing_secret_expires_at TEXT,
+  rate_limit_per_second INTEGER,
+  rate_limit_window_started_at TEXT,
+  rate_limit_window_count INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -108,6 +111,21 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   failure_reason TEXT,
   attempted_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS deliveries_status_due_idx
+ON deliveries(status, next_attempt_at, created_at);
+
+CREATE INDEX IF NOT EXISTS deliveries_status_lease_idx
+ON deliveries(status, lease_expires_at);
+
+CREATE INDEX IF NOT EXISTS deliveries_endpoint_status_updated_idx
+ON deliveries(endpoint_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS delivery_attempts_attempted_delivery_idx
+ON delivery_attempts(attempted_at, delivery_id);
+
+CREATE INDEX IF NOT EXISTS delivery_attempts_delivery_attempted_idx
+ON delivery_attempts(delivery_id, attempted_at);
 
 CREATE TABLE IF NOT EXISTS event_types (
   id TEXT PRIMARY KEY,
@@ -183,6 +201,7 @@ export function initializeSchema(db: DatabaseSync): void {
   db.exec(INITIAL_SCHEMA_SQL);
   migrateAppSystemSecretColumns(db);
   migrateEndpointSecretRotationColumns(db);
+  migrateEndpointRateLimitColumns(db);
 }
 
 function migrateAppSystemSecretColumns(db: DatabaseSync): void {
@@ -211,6 +230,22 @@ function migrateEndpointSecretRotationColumns(db: DatabaseSync): void {
   );
 
   for (const column of ENDPOINT_SECRET_ROTATION_COLUMNS) {
+    if (!columns.has(column.name)) {
+      db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
+    }
+  }
+}
+
+function migrateEndpointRateLimitColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (
+      db.prepare('PRAGMA table_info(endpoints)').all() as Array<{
+        readonly name: unknown;
+      }>
+    ).map((row) => String(row.name)),
+  );
+
+  for (const column of ENDPOINT_RATE_LIMIT_COLUMNS) {
     if (!columns.has(column.name)) {
       db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
     }
@@ -264,6 +299,21 @@ const ENDPOINT_SECRET_ROTATION_COLUMNS = [
   {
     name: 'previous_signing_secret_expires_at',
     definition: 'previous_signing_secret_expires_at TEXT',
+  },
+] as const;
+
+const ENDPOINT_RATE_LIMIT_COLUMNS = [
+  {
+    name: 'rate_limit_per_second',
+    definition: 'rate_limit_per_second INTEGER',
+  },
+  {
+    name: 'rate_limit_window_started_at',
+    definition: 'rate_limit_window_started_at TEXT',
+  },
+  {
+    name: 'rate_limit_window_count',
+    definition: 'rate_limit_window_count INTEGER NOT NULL DEFAULT 0',
   },
 ] as const;
 

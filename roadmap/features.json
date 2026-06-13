@@ -1267,6 +1267,53 @@
         "roadmap/STATUS.md"
       ],
       "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0004",
+        "F-0007",
+        "F-0022",
+        "F-0023",
+        "F-0028"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [
+        "roadmap/evidence/F-0030/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0030",
+      "epic": "reliability",
+      "title": "Endpoint delivery throttling",
+      "spec_ref": "README.md#key-capabilities",
+      "description": "Add optional per-endpoint outbound delivery throttling so tenants can protect customer receivers from sudden webhook spikes while Posthorn keeps excess work queued for later delivery.",
+      "acceptance": [
+        "Endpoint create and update accept an optional rateLimitPerSecond positive integer, allow null to clear it, validate malformed values with invalid_request, and read/list responses include the configured value without exposing secret material.",
+        "The storage schema persists the endpoint throttle setting for existing and new databases without breaking tenant isolation or existing endpoint behavior when the setting is unset.",
+        "The delivery worker respects each endpoint's configured per-second rate by leaving not-yet-eligible deliveries pending until the spacing window has elapsed, while other endpoints and unthrottled endpoints continue to be claimed normally.",
+        "OpenAPI, README, TypeScript SDK/CLI, and Python SDK documentation or helper surfaces reflect the implemented field without claiming unsupported throttle modes.",
+        "Tests cover create/update validation, read/list serialization, client/CLI propagation, worker throttling over time, and no throttling leak across endpoints or tenants."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0030.md",
+        "roadmap/evidence/F-0030/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
     }
   ]
 }

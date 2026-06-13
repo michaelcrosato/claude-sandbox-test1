@@ -45,14 +45,17 @@ created = client.create_endpoint(
     "https://example.com/hooks/python",
     event_types=["python.created"],
     headers={"X-SDK": "python"},
+    rate_limit_per_second=3,
 )
 assert created["endpoint"]["id"].startswith("ep_")
 assert created["secret"].startswith("whsec_")
+assert created["endpoint"]["rateLimitPerSecond"] == 3
 
 listed = client.list_endpoints()
 assert len(listed) == 1
 assert listed[0]["id"] == created["endpoint"]["id"]
 assert listed[0]["headers"] == {"X-SDK": "python"}
+assert listed[0]["rateLimitPerSecond"] == 3
 
 first = client.send_message("python.created", {"id": 1}, idempotency_key="python-1")
 same = client.send_message("python.created", {"id": 1}, idempotency_key="python-1")

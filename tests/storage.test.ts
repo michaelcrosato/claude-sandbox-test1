@@ -60,8 +60,24 @@ describe('openStorage', () => {
       expect(columns).toContain('previous_signing_secret_key_version');
       expect(columns).toContain('previous_signing_secret_nonce');
       expect(columns).toContain('previous_signing_secret_expires_at');
+      expect(columns).toContain('rate_limit_per_second');
+      expect(columns).toContain('rate_limit_window_started_at');
+      expect(columns).toContain('rate_limit_window_count');
       expect(columns).not.toContain('headers_json');
       expect(columns).not.toContain('signing_secret_hash');
+      const indexes = storage.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        .all()
+        .map((row) => String(row.name));
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          'deliveries_status_due_idx',
+          'deliveries_status_lease_idx',
+          'deliveries_endpoint_status_updated_idx',
+          'delivery_attempts_attempted_delivery_idx',
+          'delivery_attempts_delivery_attempted_idx',
+        ]),
+      );
     } finally {
       storage.close();
     }
@@ -133,6 +149,9 @@ describe('openStorage', () => {
       expect(columns.filter((name) => name === 'previous_signing_secret_key_version')).toHaveLength(1);
       expect(columns.filter((name) => name === 'previous_signing_secret_nonce')).toHaveLength(1);
       expect(columns.filter((name) => name === 'previous_signing_secret_expires_at')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'rate_limit_per_second')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'rate_limit_window_started_at')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'rate_limit_window_count')).toHaveLength(1);
     } finally {
       db.close();
     }

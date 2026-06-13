@@ -167,6 +167,7 @@ export function createOpenApiDocument(): OpenApiDocument {
           url: { type: 'string', format: 'uri' },
           eventTypes: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] },
           headers: { type: 'object', additionalProperties: { type: 'string' } },
+          rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
           enabled: { type: 'boolean' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
@@ -475,8 +476,6 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
     };
   }
   if (
-    key === 'post /v1/endpoints' ||
-    key === 'patch /v1/endpoints/{id}' ||
     key === 'post /v1/endpoints/{id}/test' ||
     key === 'post /v1/event-types' ||
     key === 'patch /v1/event-types/{id}' ||
@@ -491,8 +490,35 @@ function requestBodyForRoute(implementedRoute: ImplementedRoute): unknown | null
       content: jsonContent(key === 'post /v1/messages/batch' ? { type: 'array', minItems: 1, maxItems: 100 } : {}),
     };
   }
+  if (key === 'post /v1/endpoints') {
+    return {
+      required: true,
+      content: jsonContent(endpointWriteSchema(true)),
+    };
+  }
+  if (key === 'patch /v1/endpoints/{id}') {
+    return {
+      required: true,
+      content: jsonContent(endpointWriteSchema(false)),
+    };
+  }
 
   return null;
+}
+
+function endpointWriteSchema(requireUrl: boolean): OpenApiSchema {
+  const properties = {
+    url: { type: 'string', format: 'uri' },
+    eventTypes: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] },
+    headers: { type: 'object', additionalProperties: { type: 'string' } },
+    rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
+    ...(requireUrl ? {} : { enabled: { type: 'boolean' } }),
+  };
+  return {
+    type: 'object',
+    required: requireUrl ? ['url'] : [],
+    properties,
+  };
 }
 
 function pathParameters(path: string): readonly unknown[] {

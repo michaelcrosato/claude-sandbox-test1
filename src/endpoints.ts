@@ -13,6 +13,7 @@ export interface EndpointRecord {
   readonly url: string;
   readonly eventTypes: readonly string[] | null;
   readonly headers: Readonly<Record<string, string>>;
+  readonly rateLimitPerSecond: number | null;
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -80,6 +81,7 @@ export function createEndpoint(
   const url = parseEndpointUrl(requireString(body.url, 'url'));
   const eventTypes = parseEventTypes(body.eventTypes);
   const headers = parseHeaders(body.headers);
+  const rateLimitPerSecond = parseRateLimitPerSecond(body.rateLimitPerSecond);
   const id = generateEndpointId();
   const createdAt = now.toISOString();
   const secret = createWebhookSecret();
@@ -97,10 +99,11 @@ export function createEndpoint(
         signing_secret_ciphertext,
         signing_secret_key_version,
         signing_secret_nonce,
+        rate_limit_per_second,
         enabled,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       id,
@@ -112,6 +115,7 @@ export function createEndpoint(
       protectedSecret.ciphertext,
       protectedSecret.keyVersion,
       protectedSecret.nonce,
+      rateLimitPerSecond,
       1,
       createdAt,
       createdAt,
@@ -129,7 +133,7 @@ export function listEndpoints(storage: PosthornStorage, appId: string): readonly
   const rows = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ?
         ORDER BY created_at DESC, id DESC
@@ -143,7 +147,7 @@ export function getEndpoint(storage: PosthornStorage, appId: string, endpointId:
   const row = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ? AND id = ?
         LIMIT 1
@@ -166,6 +170,7 @@ export function getEndpointDeliveryTarget(
                url,
                event_types_json,
                non_secret_headers_json,
+               rate_limit_per_second,
                enabled,
                created_at,
                updated_at,
@@ -290,6 +295,12 @@ export function updateEndpoint(
   if (Object.hasOwn(body, 'headers')) {
     updates.push('non_secret_headers_json = ?');
     values.push(JSON.stringify(parseHeaders(body.headers)));
+  }
+  if (Object.hasOwn(body, 'rateLimitPerSecond')) {
+    updates.push('rate_limit_per_second = ?');
+    values.push(parseRateLimitPerSecond(body.rateLimitPerSecond));
+    updates.push('rate_limit_window_started_at = NULL');
+    updates.push('rate_limit_window_count = 0');
   }
   if (Object.hasOwn(body, 'enabled')) {
     updates.push('enabled = ?');
@@ -473,6 +484,15 @@ function parseEnabled(input: unknown): boolean {
   return input;
 }
 
+function parseRateLimitPerSecond(input: unknown): number | null {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== 'number' || !Number.isSafeInteger(input) || input < 1) {
+    throw new EndpointValidationError('invalid_request', 'rateLimitPerSecond must be a positive integer or null.');
+  }
+
+  return input;
+}
+
 function parseRotationOverlapSeconds(input: unknown): number {
   const body = input === undefined ? {} : requireObject(input);
   const value = body.overlapSeconds;
@@ -502,6 +522,7 @@ function endpointFromRow(row: EndpointRow): EndpointRecord {
     url: String(row.url),
     eventTypes: parseStoredEventTypes(row.event_types_json),
     headers: parseStoredHeaders(row.non_secret_headers_json),
+    rateLimitPerSecond: nullableInteger(row.rate_limit_per_second),
     enabled: Number(row.enabled) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -523,6 +544,12 @@ function endpointDeliveryTargetFromRow(row: EndpointDeliveryTargetRow): Endpoint
 
 function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
+}
+
+function nullableInteger(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function parseStoredEventTypes(value: unknown): readonly string[] | null {
@@ -549,6 +576,7 @@ interface EndpointRow {
   readonly url: unknown;
   readonly event_types_json: unknown;
   readonly non_secret_headers_json: unknown;
+  readonly rate_limit_per_second: unknown;
   readonly enabled: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
