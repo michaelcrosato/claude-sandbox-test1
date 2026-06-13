@@ -1,0 +1,11 @@
+Posthorn has been installed as a single-pod SQLite-backed service.
+
+The pod expects POSTHORN_ADMIN_TOKEN from Secret {{ include "posthorn.adminSecretName" . }} key {{ .Values.admin.existingSecretKey }}.
+
+To create that Secret before install:
+  kubectl create secret generic {{ include "posthorn.adminSecretName" . }} \
+    --from-literal={{ .Values.admin.existingSecretKey }}='<long random value>'
+
+To test the service from inside the cluster:
+  kubectl run posthorn-smoke --rm -it --restart=Never --image=curlimages/curl -- \
+    curl -fsS http://{{ include "posthorn.fullname" . }}:{{ .Values.service.port }}/healthz

@@ -54,7 +54,7 @@ curl -sX POST localhost:3000/v1/messages \
 # -> 202 Accepted; the delivery worker signs and POSTs it to your registered endpoint
 ```
 
-For production deployment with Prometheus monitoring and Docker Compose, see
+For production deployment with Prometheus monitoring, Docker Compose, and a starter Helm chart, see
 **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## Why Posthorn
@@ -429,8 +429,9 @@ Metric labels are intentionally low-cardinality: delivery `outcome`, delivery ta
 dead-letter `reason`, and build `version`. They never include tenant IDs, endpoint URLs,
 message IDs, event types, headers, API keys, signing secrets, or payload fields.
 
-For a production Docker Compose reference with a Prometheus scrape config, see
+For production Docker Compose and starter Helm references with a Prometheus scrape config, see
 **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+The Helm chart is a single-pod SQLite Kubernetes reference; PostgreSQL-backed scale-out remains future work.
 Prometheus alert rules are available in **[docs/prometheus-alerts.yml](docs/prometheus-alerts.yml)**,
 and an importable Grafana dashboard is available in
 **[docs/grafana-dashboard.json](docs/grafana-dashboard.json)**.

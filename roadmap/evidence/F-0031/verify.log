@@ -1,0 +1,20 @@
+VERIFY-COMMIT: fb8ba7440da893e4c7f8d40ffddf0616999558d8
+VERIFY: PASS (exit 0)
+
+Fresh reviews:
+- evaluator: NEEDS_WORK for replicaCount exposure and README boundary wording; fixed by hard-coding one replica and documenting starter single-pod SQLite/PostgreSQL-future scope.
+- evaluator re-review: PASS
+- security-reviewer: NEEDS_WORK for service account token automount, replicaCount exposure, and writable root filesystem; fixed by disabling token automount, hard-coding one replica, and defaulting readOnlyRootFilesystem=true.
+- security-reviewer re-review: APPROVE
+
+Local checks:
+- npx vitest run tests/helm-chart.test.ts tests/deployment-artifacts.test.ts (9 passed)
+- npm run typecheck
+- npm test (168 passed)
+- npm run lint
+- npm run build
+- npx ts-node scripts/update-state.ts --validate
+- git diff --check
+- npx ts-node scripts/assertion-shield.ts
+
+Note: helm CLI is not installed in this environment, so chart verification is static artifact coverage here. Local bash scripts/verify.sh remains blocked on this Windows Git Bash setup by the known hook-fixture native node path issue; Ubuntu CI verify will be authoritative after PR.
