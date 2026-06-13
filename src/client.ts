@@ -84,6 +84,8 @@ export interface SendMessageInput {
   readonly eventType: string;
   readonly payload: JsonValue;
   readonly idempotencyKey?: string;
+  readonly deduplicationKey?: string;
+  readonly deduplicationWindowSeconds?: number;
 }
 
 export interface ListMessageAttemptsInput {

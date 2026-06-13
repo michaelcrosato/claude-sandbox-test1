@@ -112,11 +112,25 @@ describe('PosthornClient', () => {
     expect(batch.results[0]?.ok).toBe(true);
     expect(batch.results[1]).toMatchObject({ ok: false, error: { code: 'invalid_request' } });
 
+    const deduped = await client.sendMessage({
+      eventType: 'sdk.deduped',
+      payload: { id: 4 },
+      deduplicationKey: 'sdk-deduped-4',
+      deduplicationWindowSeconds: 3600,
+    });
+    const duplicate = await client.sendMessage({
+      eventType: 'sdk.deduped',
+      payload: { id: 4, noisy: true },
+      deduplicationKey: 'sdk-deduped-4',
+      deduplicationWindowSeconds: 3600,
+    });
+    expect(duplicate).toEqual(deduped);
+
     const usage = await client.getUsage();
     expect(usage.usage).toMatchObject({
       appId: 'app_sdk',
       month: '2026-06',
-      messagesAccepted: 2,
+      messagesAccepted: 3,
       deliveryAttempts: 1,
     });
 
@@ -524,6 +538,12 @@ function assertClientInputTypes(): void {
   };
   const endpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: 1, cursor: 'cursor' };
   const endpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: 7 };
+  const sendMessage: Parameters<PosthornClient['sendMessage']>[0] = {
+    eventType: 'sdk.created',
+    payload: { id: 1 },
+    deduplicationKey: 'dedupe-key',
+    deduplicationWindowSeconds: 60,
+  };
   const invalidCreateEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
     url: 'https://example.com/hook',
     // @ts-expect-error endpoint rate limits are typed as numbers, not strings.
@@ -534,6 +554,12 @@ function assertClientInputTypes(): void {
     // @ts-expect-error endpoint payload format is a closed enum.
     payloadFormat: 'payload',
   };
+  const invalidSendMessage: Parameters<PosthornClient['sendMessage']>[0] = {
+    eventType: 'sdk.created',
+    payload: { id: 1 },
+    // @ts-expect-error deduplication windows are typed as numbers, not strings.
+    deduplicationWindowSeconds: '60',
+  };
   // @ts-expect-error endpoint delivery limits are typed as numbers, not strings.
   const invalidEndpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: '1' };
   // @ts-expect-error endpoint stats days are typed as numbers, not strings.
@@ -543,8 +569,10 @@ function assertClientInputTypes(): void {
     updateEndpoint,
     endpointDeliveries,
     endpointStats,
+    sendMessage,
     invalidCreateEndpoint,
     invalidPayloadFormatEndpoint,
+    invalidSendMessage,
     invalidEndpointDeliveries,
     invalidEndpointStats,
   ];

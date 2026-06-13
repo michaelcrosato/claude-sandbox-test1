@@ -389,6 +389,174 @@ describe('message intake HTTP route', () => {
     expect(countDeliveries(storage, 'app_a')).toBe(1);
   });
 
+  it('deduplicates active producer keys without new fanout, usage, or response metadata leaks', async () => {
+    const { address, storage } = await startSeededGateway({ now: () => NOW });
+    const endpoint = createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/deduped',
+      eventTypes: ['user.created'],
+    }).endpoint;
+
+    const first = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 15 },
+      deduplicationKey: 'dedupe-user-15',
+      deduplicationWindowSeconds: 3600,
+    });
+    const duplicate = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 15, noisy: true },
+      deduplicationKey: 'dedupe-user-15',
+      deduplicationWindowSeconds: 3600,
+    });
+
+    expect(first.status).toBe(202);
+    expect(duplicate.status).toBe(202);
+    expect(duplicate.body).toEqual(first.body);
+    expect(first.body.fanout.endpointIds).toEqual([endpoint.id]);
+    expect(countMessages(storage, 'app_a')).toBe(1);
+    expect(countDeliveries(storage, 'app_a')).toBe(1);
+    expect(countAcceptedMessages(storage, 'app_a')).toBe(1);
+
+    const persisted = storage.db
+      .prepare('SELECT deduplication_key, deduplication_expires_at FROM messages WHERE id = ?')
+      .get(first.body.message.id) as { readonly deduplication_key: string; readonly deduplication_expires_at: string };
+    expect(persisted.deduplication_key).toBe('dedupe-user-15');
+    expect(persisted.deduplication_expires_at).toBe('2026-06-12T13:00:00.000Z');
+
+    const message = await requestJson<MessageStatusJson>(
+      address,
+      'GET',
+      `/v1/messages/${first.body.message.id}`,
+      TENANT_A_KEY,
+    );
+    const list = await requestJson<MessageListJson>(address, 'GET', '/v1/messages', TENANT_A_KEY);
+    expect(JSON.stringify(message.body)).not.toContain('dedupe-user-15');
+    expect(JSON.stringify(message.body)).not.toContain('deduplication');
+    expect(JSON.stringify(list.body)).not.toContain('dedupe-user-15');
+    expect(JSON.stringify(list.body)).not.toContain('deduplication');
+  });
+
+  it('scopes deduplication by tenant and event type and lets expired windows accept new messages', async () => {
+    let nowMs = NOW.getTime();
+    const { address, storage } = await startSeededGateway({ now: () => new Date(nowMs) });
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/dedupe-user',
+      eventTypes: ['user.created'],
+    });
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/dedupe-invoice',
+      eventTypes: ['invoice.paid'],
+    });
+    createEndpoint(storage, 'app_b', {
+      url: 'https://example.com/hooks/dedupe-other-tenant',
+      eventTypes: ['user.created'],
+    });
+
+    const first = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 16 },
+      deduplicationKey: 'shared-key',
+      deduplicationWindowSeconds: 60,
+    });
+    const differentEvent = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 'inv_16' },
+      deduplicationKey: 'shared-key',
+      deduplicationWindowSeconds: 60,
+    });
+    const differentTenant = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_B_KEY, {
+      eventType: 'user.created',
+      payload: { id: 16 },
+      deduplicationKey: 'shared-key',
+      deduplicationWindowSeconds: 60,
+    });
+    nowMs += 60_000;
+    const expired = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 16, afterWindow: true },
+      deduplicationKey: 'shared-key',
+      deduplicationWindowSeconds: 60,
+    });
+
+    expect(first.status).toBe(202);
+    expect(differentEvent.status).toBe(202);
+    expect(differentTenant.status).toBe(202);
+    expect(expired.status).toBe(202);
+    expect(new Set([first.body.message.id, differentEvent.body.message.id, expired.body.message.id]).size).toBe(3);
+    expect(differentTenant.body.message.id).not.toBe(first.body.message.id);
+    expect(countMessages(storage, 'app_a')).toBe(3);
+    expect(countMessages(storage, 'app_b')).toBe(1);
+    expect(countDeliveries(storage, 'app_a')).toBe(3);
+    expect(countDeliveries(storage, 'app_b')).toBe(1);
+  });
+
+  it('validates deduplication inputs', async () => {
+    const { address } = await startSeededGateway();
+
+    for (const deduplicationKey of [1, false, '', '   ', `${'a'.repeat(201)}`, 'bad\tkey']) {
+      await expectMessageError(address, {
+        eventType: 'user.created',
+        payload: {},
+        deduplicationKey,
+      });
+    }
+    for (const deduplicationWindowSeconds of [0, -1, 1.5, 2_592_001, '60', false]) {
+      await expectMessageError(address, {
+        eventType: 'user.created',
+        payload: {},
+        deduplicationKey: 'bad-window',
+        deduplicationWindowSeconds,
+      });
+    }
+    await expectMessageError(address, {
+      eventType: 'user.created',
+      payload: {},
+      deduplicationWindowSeconds: 60,
+    });
+  });
+
+  it('keeps idempotency conflicts ahead of deduplication suppression', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/dedupe-idempotency',
+      eventTypes: ['user.created'],
+    });
+    const first = await requestJson<AcceptedMessageJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 17 },
+      idempotencyKey: 'dedupe-idempotency',
+      deduplicationKey: 'dedupe-idempotency-key',
+      deduplicationWindowSeconds: 3600,
+    });
+    const replayWithMalformedDedupe = await requestJson<AcceptedMessageJson>(
+      address,
+      'POST',
+      '/v1/messages',
+      TENANT_A_KEY,
+      {
+        eventType: 'user.created',
+        payload: { id: 17 },
+        idempotencyKey: 'dedupe-idempotency',
+        deduplicationWindowSeconds: 0,
+      },
+    );
+    const conflict = await requestJson<ErrorJson>(address, 'POST', '/v1/messages', TENANT_A_KEY, {
+      eventType: 'user.created',
+      payload: { id: 18 },
+      idempotencyKey: 'dedupe-idempotency',
+      deduplicationKey: 'dedupe-idempotency-key',
+      deduplicationWindowSeconds: 0,
+    });
+
+    expect(first.status).toBe(202);
+    expect(replayWithMalformedDedupe.status).toBe(202);
+    expect(replayWithMalformedDedupe.body).toEqual(first.body);
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error.code).toBe('idempotency_conflict');
+    expect(countMessages(storage, 'app_a')).toBe(1);
+    expect(countDeliveries(storage, 'app_a')).toBe(1);
+  });
+
   it('rejects malformed batch envelopes and oversized batches', async () => {
     const { address } = await startSeededGateway();
 
@@ -485,6 +653,40 @@ describe('message intake HTTP route', () => {
     });
     expect(countMessages(storage, 'app_a')).toBe(1);
     expect(countDeliveries(storage, 'app_a')).toBe(1);
+  });
+
+  it('applies deduplication within a batch without duplicate fanout', async () => {
+    const { address, storage } = await startSeededGateway();
+    createEndpoint(storage, 'app_a', {
+      url: 'https://example.com/hooks/batch-deduped',
+      eventTypes: ['user.created'],
+    });
+
+    const batch = await requestJson<BatchJson>(address, 'POST', '/v1/messages/batch', TENANT_A_KEY, [
+      {
+        eventType: 'user.created',
+        payload: { id: 33 },
+        deduplicationKey: 'batch-dedupe',
+        deduplicationWindowSeconds: 3600,
+      },
+      {
+        eventType: 'user.created',
+        payload: { id: 33, noisy: true },
+        deduplicationKey: 'batch-dedupe',
+        deduplicationWindowSeconds: 3600,
+      },
+      { eventType: 'user.created', payload: {}, deduplicationWindowSeconds: 60 },
+    ]);
+
+    expect(batch.status).toBe(200);
+    const first = expectBatchOk(batch.body.results[0]);
+    const second = expectBatchOk(batch.body.results[1]);
+    const third = expectBatchError(batch.body.results[2]);
+    expect(second).toEqual(first);
+    expect(third.error.code).toBe('invalid_request');
+    expect(countMessages(storage, 'app_a')).toBe(1);
+    expect(countDeliveries(storage, 'app_a')).toBe(1);
+    expect(countAcceptedMessages(storage, 'app_a')).toBe(1);
   });
 
   it('keeps batch retry fanout stable when endpoints change after the first send', async () => {
@@ -1017,6 +1219,13 @@ function countDeliveries(storage: PosthornStorage, appId: string): number {
         WHERE messages.app_id = ?
       `,
     )
+    .get(appId) as unknown as { readonly count: number };
+  return Number(row.count);
+}
+
+function countAcceptedMessages(storage: PosthornStorage, appId: string): number {
+  const row = storage.db
+    .prepare('SELECT COALESCE(SUM(messages_accepted), 0) AS count FROM usage_months WHERE app_id = ?')
     .get(appId) as unknown as { readonly count: number };
   return Number(row.count);
 }

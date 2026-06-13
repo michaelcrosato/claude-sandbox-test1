@@ -52,10 +52,16 @@ class PosthornClient:
         event_type: str,
         payload: Any,
         idempotency_key: Optional[str] = None,
+        deduplication_key: Optional[str] = None,
+        deduplication_window_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {"eventType": event_type, "payload": payload}
         if idempotency_key is not None:
             body["idempotencyKey"] = idempotency_key
+        if deduplication_key is not None:
+            body["deduplicationKey"] = deduplication_key
+        if deduplication_window_seconds is not None:
+            body["deduplicationWindowSeconds"] = deduplication_window_seconds
         return self._request("POST", "/v1/messages", body)
 
     def send_message_batch(self, items: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:

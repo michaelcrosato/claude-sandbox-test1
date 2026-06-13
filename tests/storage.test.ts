@@ -84,6 +84,27 @@ describe('openStorage', () => {
     }
   });
 
+  it('keeps message deduplication metadata nullable and indexed', () => {
+    const storage = openStorage({ dataDir: ':memory:' });
+    try {
+      const columns = storage.db
+        .prepare('PRAGMA table_info(messages)')
+        .all()
+        .map((row) => String(row.name));
+
+      expect(columns).toContain('deduplication_key');
+      expect(columns).toContain('deduplication_expires_at');
+
+      const indexSql = storage.db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'messages_deduplication_lookup_idx'")
+        .get() as { readonly sql: string };
+      expect(indexSql.sql).toContain('app_id, event_type, deduplication_key, deduplication_expires_at');
+      expect(indexSql.sql).toContain('deduplication_key IS NOT NULL');
+    } finally {
+      storage.close();
+    }
+  });
+
   it('keeps app system signing secrets protected and migrates legacy app tables', () => {
     const db = new DatabaseSync(':memory:');
     try {
@@ -217,6 +238,62 @@ describe('openStorage', () => {
       expect(db.prepare('SELECT payload_format FROM endpoints WHERE id = ?').get('ep_legacy')).toEqual({
         payload_format: 'envelope',
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('adds message deduplication columns and lookup index for existing SQLite files', () => {
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          idempotency_key TEXT,
+          payload_hash TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(app_id, idempotency_key)
+        );
+        INSERT INTO messages (
+          id,
+          app_id,
+          event_type,
+          payload_json,
+          idempotency_key,
+          payload_hash,
+          created_at
+        ) VALUES (
+          'msg_legacy',
+          'app_legacy',
+          'user.created',
+          '{"id":1}',
+          NULL,
+          NULL,
+          '2026-06-12T00:00:00.000Z'
+        );
+      `);
+
+      initializeSchema(db);
+      initializeSchema(db);
+
+      const columns = db
+        .prepare('PRAGMA table_info(messages)')
+        .all()
+        .map((row) => String(row.name));
+      expect(columns.filter((name) => name === 'deduplication_key')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'deduplication_expires_at')).toHaveLength(1);
+      expect(db.prepare('SELECT deduplication_key, deduplication_expires_at FROM messages WHERE id = ?').get('msg_legacy')).toEqual({
+        deduplication_key: null,
+        deduplication_expires_at: null,
+      });
+      const indexes = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        .all()
+        .map((row) => String(row.name));
+      expect(indexes.filter((name) => name === 'messages_deduplication_lookup_idx')).toHaveLength(1);
     } finally {
       db.close();
     }

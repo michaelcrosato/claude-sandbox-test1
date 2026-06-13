@@ -92,7 +92,10 @@ describe('code-verified parity documentation', () => {
     expect(statusFor('Payload transformations', 'Posthorn')).toBe('Not yet');
     }).toThrow();
     expect(statusFor('Payload transformations', 'Posthorn')).toBe('Partial');
+    expect(() => {
     expect(statusFor('Deduplication rules beyond intake idempotency', 'Posthorn')).toBe('Not yet');
+    }).toThrow();
+    expect(statusFor('Deduplication rules beyond intake idempotency', 'Posthorn')).toBe('Partial');
     expect(statusFor('Non-webhook destination connectors', 'Posthorn')).toBe('Not yet');
 
     const doc = parityDoc();

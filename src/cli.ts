@@ -35,7 +35,7 @@ export const POSTHORN_ADMIN_CLI_ROUTES: readonly ClientRouteMapping[] = Object.f
 
 const CLIENT_HELP = `Usage:
   posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>] [--payload-format envelope|payload_only]
-  posthorn client send <eventType> <jsonPayload> [--idempotency-key <key>]
+  posthorn client send <eventType> <jsonPayload> [--idempotency-key <key>] [--deduplication-key <key>] [--deduplication-window-seconds <integer>]
   posthorn client list-endpoints
   posthorn client get-message <messageId>
   posthorn client usage
@@ -367,9 +367,13 @@ function parseSendArgs(args: readonly string[]): {
   readonly eventType: string;
   readonly payload: JsonValue;
   readonly idempotencyKey?: string;
+  readonly deduplicationKey?: string;
+  readonly deduplicationWindowSeconds?: number;
 } {
   const operands: string[] = [];
   let idempotencyKey: string | undefined;
+  let deduplicationKey: string | undefined;
+  let deduplicationWindowSeconds: number | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--idempotency-key') {
@@ -378,6 +382,22 @@ function parseSendArgs(args: readonly string[]): {
         throw new CliUsageError('--idempotency-key requires a value.');
       }
       idempotencyKey = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--deduplication-key') {
+      if (deduplicationKey !== undefined) {
+        throw new CliUsageError('send accepts --deduplication-key once.');
+      }
+      deduplicationKey = optionValue('send', arg, args[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === '--deduplication-window-seconds') {
+      if (deduplicationWindowSeconds !== undefined) {
+        throw new CliUsageError('send accepts --deduplication-window-seconds once.');
+      }
+      deduplicationWindowSeconds = parsePositiveSafeInteger(optionValue('send', arg, args[index + 1]), arg);
       index += 1;
       continue;
     }
@@ -395,6 +415,8 @@ function parseSendArgs(args: readonly string[]): {
     eventType: operands[0],
     payload: parseJsonPayload(operands[1]),
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+    ...(deduplicationKey === undefined ? {} : { deduplicationKey }),
+    ...(deduplicationWindowSeconds === undefined ? {} : { deduplicationWindowSeconds }),
   };
 }
 

@@ -1449,6 +1449,50 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0033"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0034/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0034",
+      "epic": "delivery-deduplication",
+      "title": "Message deduplication windows",
+      "spec_ref": "docs/PARITY.md#posthorn-gaps",
+      "description": "Add a safe producer-supplied message deduplication key with a bounded time window so tenants can suppress duplicate delivery fanout beyond exact idempotent retries, without arbitrary JSONPath or field extraction rules.",
+      "acceptance": [
+        "Message intake and batch intake accept optional deduplicationKey and deduplicationWindowSeconds values, validate malformed values with invalid_request, and keep existing idempotencyKey conflict behavior unchanged.",
+        "When an active message with the same tenant, eventType, and deduplicationKey exists inside the deduplication window, intake returns the original accepted message and original fanout without creating a new message, delivery rows, or usage increment.",
+        "Deduplication is tenant-scoped and eventType-scoped, expires after the configured window, and is backed by indexed SQLite state with an idempotent migration for existing database files.",
+        "OpenAPI, TypeScript SDK, tenant CLI, Python SDK, README, and docs/PARITY document the feature as a partial deduplication capability without claiming arbitrary field/window rules.",
+        "Tests cover storage migration, create/batch dedup behavior, tenant/event/window boundaries, quota/usage behavior, validation, client/CLI/Python propagation, OpenAPI contract, README docs, and parity matrix wording."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "docs/PARITY.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0034.md",
+        "roadmap/evidence/F-0034/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

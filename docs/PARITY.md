@@ -32,7 +32,7 @@ release task.
 | Kubernetes reference | Implemented | Not verified | Not verified | Not verified | Out of scope |
 | PostgreSQL/HA scale-out | Not yet | Not verified | Not verified | Not verified | Out of scope |
 | Payload transformations | Partial | Implemented | Not verified | Implemented | Out of scope |
-| Deduplication rules beyond intake idempotency | Not yet | Not verified | Not verified | Implemented | Partial |
+| Deduplication rules beyond intake idempotency | Partial | Not verified | Not verified | Implemented | Partial |
 | Non-webhook destination connectors | Not yet | Not verified | Not verified | Implemented | Implemented |
 
 ## Posthorn Evidence
@@ -45,9 +45,9 @@ only when this checkout has product code plus a guard test or source-backed oper
 - Standard Webhooks signing and verification: `README.md` and `tests/webhooks.test.ts`.
 - Endpoint management, one-time endpoint secrets, endpoint secret rotation, and admin provisioning:
   `README.md`, `tests/endpoints-http.test.ts`, and `tests/admin-http.test.ts`.
-- Message intake, batch intake, producer idempotency, endpoint payload-only delivery, retry
-  delivery, dead-lettering, and manual retry: `README.md`, `tests/messages-http.test.ts`,
-  and `tests/worker.test.ts`.
+- Message intake, batch intake, producer idempotency, producer-supplied deduplication windows,
+  endpoint payload-only delivery, retry delivery, dead-lettering, and manual retry: `README.md`,
+  `tests/messages-http.test.ts`, and `tests/worker.test.ts`.
 - Delivery auditability: `tests/deliveries-http.test.ts`,
   `tests/endpoint-observability-http.test.ts`, `tests/messages-http.test.ts`, and
   `tests/openapi-contract.test.ts`.
@@ -68,8 +68,10 @@ These are the codeable gaps this matrix exposes. They are product work, not rele
 - **Arbitrary payload transformations**: Posthorn can send either its default delivery envelope
   or the original JSON payload body per endpoint. It does not yet offer arbitrary body templates,
   method changes, URL rewriting, header mutation rules, or routing-data transformations.
-- **Deduplication rules beyond intake idempotency**: Posthorn deduplicates producer retries with an
-  idempotency key, but it does not yet offer configurable field/window deduplication rules.
+- **Arbitrary deduplication rules**: Posthorn deduplicates producer retries with an idempotency
+  key and can suppress duplicate fanout by tenant, event type, producer-supplied deduplication
+  key, and bounded time window. It does not yet offer arbitrary field extraction, JSONPath rules,
+  or endpoint-specific deduplication policies.
 - **Non-webhook destination connectors**: Posthorn targets HTTP webhooks. Queue, stream, storage,
   and event-bus destinations are not implemented.
 
