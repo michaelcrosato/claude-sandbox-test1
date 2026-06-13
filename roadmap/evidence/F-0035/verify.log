@@ -1,9 +1,12 @@
-VERIFY-COMMIT: pending-local-before-pr
+VERIFY-COMMIT: 0123532d7fea5f76044779ae05732e917e91f30b
 
 Feature: F-0035 Endpoint delivery HTTP methods
 
 Pull request:
-- Pending.
+- PR #64: https://github.com/michaelcrosato/claude-sandbox-test1/pull/64
+- GitHub CI on PR #64 head 0123532d7fea5f76044779ae05732e917e91f30b:
+  - verify: pass, run 27455215528, job 81158395737, completed 2026-06-13T03:29:32Z
+  - e2e: pass, run 27455215535, job 81158395742, completed 2026-06-13T03:28:25Z
 
 Fresh reviews:
 - evaluator: NEEDS_WORK on first pass for missing tests around create-null default and PATCH omitted-unchanged behavior; fixed with added endpoint HTTP assertions and reran the local gate.

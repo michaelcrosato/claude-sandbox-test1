@@ -6,7 +6,7 @@ The product scaffold, SQLite storage foundation, health/readiness HTTP server, S
 
 ## Ready for your QA
 
-F-0035 is ready for a PR. It lets tenants choose `POST` or `PUT` for signed endpoint deliveries while keeping the safe webhook body and signing rules.
+F-0035 is ready in PR #64. It lets tenants choose `POST` or `PUT` for signed endpoint deliveries while keeping the safe webhook body and signing rules.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-The latest local product checks passed with 186 tests. Fresh evaluator and security review passed after one test-coverage fix.
+Automated checks passed on PR #64. The latest local product checks passed with 186 tests. Fresh evaluator and security review passed after one test-coverage fix.

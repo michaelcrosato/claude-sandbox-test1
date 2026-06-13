@@ -12,7 +12,7 @@
 
 **Surprises:** The implementation was straightforward, but the evaluator caught that the contract needed explicit tests for `deliveryMethod: null` on create and preserving a `PUT` method when later patches omit the field. The feature stays intentionally narrow: only `POST` and `PUT`, with no arbitrary methods, templates, URL rewrites, content-type changes, header mutation rules, or non-webhook connectors.
 
-**Next step:** Push the branch, open the PR, wait for CI, then add the PR-number/CI record and merge on green.
+**Next step:** Push the PR/CI evidence record, wait for PR #64 checks again, then mark it ready and merge on green.
 
 ---
 
