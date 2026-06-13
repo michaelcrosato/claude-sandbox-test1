@@ -4,6 +4,8 @@
 # Stack-aware: runs whatever gates the repo defines; engine meta-gates always run.
 set -u
 cd "$(dirname "$0")/.." || exit 1
+# shellcheck source=scripts/bash-node-bridge.sh
+. "$PWD/scripts/bash-node-bridge.sh"
 
 E2E=false
 [ "${1:-}" = "--e2e" ] && E2E=true
