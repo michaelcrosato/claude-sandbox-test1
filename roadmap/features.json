@@ -1228,9 +1228,11 @@
         "F-0015",
         "F-0016"
       ],
-      "status": "in_progress",
-      "passes": false,
-      "evidence": [],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0029/verify.log"
+      ],
       "attempts": 0,
       "blocked_reason": null,
       "forbidden_paths": [
