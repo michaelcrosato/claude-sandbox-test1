@@ -12,7 +12,7 @@
 
 **Surprises:** The important product boundary is order of operations: idempotency conflict handling must run before dedupe suppression so a conflicting idempotency key cannot be hidden by a matching dedupe key. The implementation stays intentionally narrow: producer-supplied keys only, no JSONPath, field extraction, templates, user code, endpoint-specific rules, or cleanup jobs.
 
-**Next step:** Wait for PR #63 CI, then add the CI record and merge on green.
+**Next step:** Push the CI evidence record, wait for PR #63 checks again, then mark it ready and merge on green.
 
 ---
 

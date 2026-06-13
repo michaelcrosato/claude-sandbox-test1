@@ -4,7 +4,9 @@ Feature: F-0034 Message deduplication windows
 
 Pull request:
 - PR #63: https://github.com/michaelcrosato/claude-sandbox-test1/pull/63
-- GitHub CI: pending.
+- GitHub CI on PR #63 head becf983a2708729fc0852ec9e53dfe5e22bb779e:
+  - verify: pass, run 27454521616, job 81156334523, completed 2026-06-13T02:58:58Z
+  - e2e: pass, run 27454521615, job 81156318938, completed 2026-06-13T02:57:28Z
 
 Fresh reviews:
 - evaluator: PASS

@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-The latest local product checks passed with 184 tests. GitHub CI for PR #63 is pending.
+Automated checks passed on PR #63. The latest local product checks passed with 184 tests.
