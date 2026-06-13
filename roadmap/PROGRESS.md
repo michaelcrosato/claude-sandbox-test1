@@ -12,7 +12,7 @@
 
 **Surprises:** The first evaluator pass caught a process gap rather than a code gap: green checks are not enough without the durable verify log. The payload-format scope stayed intentionally narrow: no templates, user code, JSONPath, method changes, URL rewrites, header mutation rules, or content-type customization.
 
-**Next step:** Push F-0033, open the PR, wait for CI, then add the PR-number/CI record and merge on green.
+**Next step:** Wait for PR #62 CI, then add the CI record and merge on green.
 
 ---
 

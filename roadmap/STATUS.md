@@ -6,7 +6,7 @@ The product scaffold, SQLite storage foundation, health/readiness HTTP server, S
 
 ## Ready for your QA
 
-F-0033 is ready to push and open as a PR. It adds endpoint payload formats so receivers can choose Posthorn's default envelope or the original JSON payload body.
+F-0033 is ready in PR #62. It adds endpoint payload formats so receivers can choose Posthorn's default envelope or the original JSON payload body.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-The latest local product checks passed with 177 tests. GitHub CI for F-0033 is pending PR creation.
+The latest local product checks passed with 177 tests. GitHub CI for PR #62 is pending.

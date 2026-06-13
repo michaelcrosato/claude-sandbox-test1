@@ -2,6 +2,10 @@ VERIFY-COMMIT: pending-local-before-pr
 
 Feature: F-0033 Endpoint payload delivery formats
 
+Pull request:
+- PR #62: https://github.com/michaelcrosato/claude-sandbox-test1/pull/62
+- GitHub CI: pending.
+
 Fresh reviews:
 - evaluator: NEEDS_WORK for missing roadmap/evidence/F-0033/verify.log despite green local checks; fixed by creating this evidence record.
 - evaluator re-review: PASS
