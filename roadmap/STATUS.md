@@ -6,7 +6,7 @@ The product scaffold, SQLite storage foundation, health/readiness HTTP server, S
 
 ## Ready for your QA
 
-F-0034 is ready to push and open as a PR. It adds producer-supplied message deduplication windows for suppressing duplicate fanout.
+F-0034 is ready in PR #63. It adds producer-supplied message deduplication windows for suppressing duplicate fanout.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-The latest local product checks passed with 184 tests. GitHub CI for F-0034 is pending PR creation.
+The latest local product checks passed with 184 tests. GitHub CI for PR #63 is pending.

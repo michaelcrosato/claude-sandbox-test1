@@ -2,6 +2,10 @@ VERIFY-COMMIT: pending-local-before-pr
 
 Feature: F-0034 Message deduplication windows
 
+Pull request:
+- PR #63: https://github.com/michaelcrosato/claude-sandbox-test1/pull/63
+- GitHub CI: pending.
+
 Fresh reviews:
 - evaluator: PASS
 - security-reviewer: APPROVE
