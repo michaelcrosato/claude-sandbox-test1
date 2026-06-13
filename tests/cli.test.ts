@@ -4,6 +4,7 @@ import {
   createGateway,
   hashApiKey,
   IMPLEMENTED_ROUTES,
+  POSTHORN_ADMIN_CLI_ROUTES,
   POSTHORN_CLI_ROUTES,
   runPosthornCli,
   type CliStreams,
@@ -13,6 +14,7 @@ import {
 } from '../src/index';
 import { openStorage } from '../src/storage';
 
+const ADMIN_TOKEN = '0123456789abcdef';
 const TENANT_KEY = `phk_${Buffer.alloc(32, 61).toString('base64url')}`;
 
 const activeGateways: Gateway[] = [];
@@ -34,6 +36,17 @@ describe('posthorn client CLI', () => {
     expect(exitCode).toBe(0);
     expect(io.stdout).toContain('posthorn client create-endpoint');
     expect(io.stdout).toContain('POSTHORN_URL');
+    expect(io.stderr).toBe('');
+  });
+
+  it('prints admin help without requiring environment configuration', async () => {
+    const io = captureStreams();
+    const exitCode = await runPosthornCli(['admin', 'help'], {}, { streams: io.streams });
+
+    expect(exitCode).toBe(0);
+    expect(io.stdout).toContain('posthorn admin create-app');
+    expect(io.stdout).toContain('posthorn admin rotate-system-secret');
+    expect(io.stdout).toContain('POSTHORN_ADMIN_TOKEN');
     expect(io.stderr).toBe('');
   });
 
@@ -96,9 +109,144 @@ describe('posthorn client CLI', () => {
     expect(apiError.stderr).not.toContain(TENANT_KEY);
   });
 
+  it('runs common admin operations against the HTTP gateway with JSON output', async () => {
+    const { address } = await startAdminGateway();
+    const env = adminCliEnv(address);
+
+    const create = await runCli(
+      ['admin', 'create-app', 'Admin Tenant', '--monthly-message-quota', '10'],
+      env,
+    );
+    expect(create.exitCode).toBe(0);
+    const created = JSON.parse(create.stdout) as {
+      readonly app: {
+        readonly id: string;
+        readonly name: string;
+        readonly monthlyMessageQuota: number | null;
+      };
+    };
+    expect(created.app).toMatchObject({
+      id: expect.stringMatching(/^app_/),
+      name: 'Admin Tenant',
+      monthlyMessageQuota: 10,
+    });
+    expect(create.stdout).not.toContain(ADMIN_TOKEN);
+
+    const list = await runCli(['admin', 'list-apps'], env);
+    expect(JSON.parse(list.stdout)).toEqual([created.app]);
+
+    const read = await runCli(['admin', 'get-app', created.app.id], env);
+    expect(JSON.parse(read.stdout)).toEqual({ app: created.app });
+
+    const updated = await runCli(
+      ['admin', 'update-app', created.app.id, '--name', 'Admin Tenant Plus', '--monthly-message-quota', 'null'],
+      env,
+    );
+    expect(JSON.parse(updated.stdout)).toEqual({
+      app: {
+        ...created.app,
+        name: 'Admin Tenant Plus',
+        monthlyMessageQuota: null,
+      },
+    });
+
+    const key = await runCli(['admin', 'create-key', created.app.id, 'Primary'], env);
+    expect(key.exitCode).toBe(0);
+    const createdKey = JSON.parse(key.stdout) as {
+      readonly apiKey: { readonly id: string; readonly appId: string; readonly name: string | null };
+      readonly secret: string;
+    };
+    expect(createdKey).toMatchObject({
+      apiKey: {
+        id: expect.stringMatching(/^ak_/),
+        appId: created.app.id,
+        name: 'Primary',
+      },
+      secret: expect.stringMatching(/^phk_/),
+    });
+    expect(key.stdout).not.toContain(ADMIN_TOKEN);
+
+    const keys = await runCli(['admin', 'list-keys', created.app.id], env);
+    expect(JSON.parse(keys.stdout)).toEqual([createdKey.apiKey]);
+    expect(keys.stdout).not.toContain(createdKey.secret);
+
+    const usage = await runCli(['admin', 'usage', created.app.id], env);
+    expect(JSON.parse(usage.stdout)).toMatchObject({
+      appId: created.app.id,
+      messagesAccepted: 0,
+      deliveryAttempts: 0,
+      quota: {
+        monthlyMessageQuota: null,
+        remaining: null,
+        exceeded: false,
+      },
+    });
+
+    const rotated = await runCli(['admin', 'rotate-system-secret', created.app.id, '--overlap-seconds', '120'], env);
+    expect(JSON.parse(rotated.stdout)).toMatchObject({
+      app: {
+        ...created.app,
+        name: 'Admin Tenant Plus',
+        monthlyMessageQuota: null,
+      },
+      secret: expect.stringMatching(/^whsec_/),
+      previousSecretExpiresAt: null,
+    });
+    expect(rotated.stdout).not.toContain(ADMIN_TOKEN);
+
+    const revoked = await runCli(['admin', 'revoke-key', createdKey.apiKey.id], env);
+    expect(JSON.parse(revoked.stdout)).toEqual({ revoked: true });
+
+    const deleted = await runCli(['admin', 'delete-app', created.app.id], env);
+    expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
+    const afterDelete = await runCli(['admin', 'list-apps'], env);
+    expect(JSON.parse(afterDelete.stdout)).toEqual([]);
+  });
+
+  it('prints actionable admin errors to stderr without leaking admin tokens or one-time secrets', async () => {
+    const { address } = await startAdminGateway();
+    const env = adminCliEnv(address);
+
+    const missingEnv = await runCli(['admin', 'list-apps'], {});
+    expect(missingEnv.exitCode).toBe(1);
+    expect(missingEnv.stdout).toBe('');
+    expect(missingEnv.stderr).toContain('Missing POSTHORN_URL or POSTHORN_ADMIN_TOKEN');
+
+    const malformedQuota = await runCli(['admin', 'create-app', 'Bad Tenant', '--monthly-message-quota', 'abc'], env);
+    expect(malformedQuota.exitCode).toBe(1);
+    expect(malformedQuota.stderr).toContain('--monthly-message-quota requires a non-negative safe integer or null.');
+    expect(malformedQuota.stderr).not.toContain(ADMIN_TOKEN);
+
+    const missingUpdateFields = await runCli(['admin', 'update-app', 'app_missing'], env);
+    expect(missingUpdateFields.exitCode).toBe(1);
+    expect(missingUpdateFields.stderr).toContain('update-app requires --name or --monthly-message-quota.');
+    expect(missingUpdateFields.stderr).not.toContain(ADMIN_TOKEN);
+
+    const malformedOverlap = await runCli(['admin', 'rotate-system-secret', 'app_missing', '--overlap-seconds', 'abc'], env);
+    expect(malformedOverlap.exitCode).toBe(1);
+    expect(malformedOverlap.stderr).toContain('--overlap-seconds requires a non-negative safe integer.');
+
+    const app = JSON.parse((await runCli(['admin', 'create-app', 'Secret Tenant'], env)).stdout) as {
+      readonly app: { readonly id: string };
+    };
+    const key = JSON.parse((await runCli(['admin', 'create-key', app.app.id], env)).stdout) as {
+      readonly secret: string;
+    };
+    const apiError = await runCli(['admin', 'get-app', app.app.id], {
+      POSTHORN_URL: address.url,
+      POSTHORN_ADMIN_TOKEN: 'wrong-admin-token',
+    });
+    expect(apiError.exitCode).toBe(1);
+    expect(apiError.stdout).toBe('');
+    expect(apiError.stderr).toContain('API error 401 (unauthorized):');
+    expect(apiError.stderr).not.toContain(ADMIN_TOKEN);
+    expect(apiError.stderr).not.toContain(key.secret);
+  });
+
   it('keeps CLI command routes covered by implemented OpenAPI routes', () => {
     const implemented = new Set(IMPLEMENTED_ROUTES.map(routeKey));
     const cliRoutes = new Set(POSTHORN_CLI_ROUTES.map(routeKey));
+    const adminCliRoutes = new Set(POSTHORN_ADMIN_CLI_ROUTES.map(routeKey));
 
     expect(cliRoutes).toEqual(
       new Set([
@@ -109,7 +257,24 @@ describe('posthorn client CLI', () => {
         'GET /v1/usage',
       ]),
     );
+    expect(adminCliRoutes).toEqual(
+      new Set([
+        'POST /v1/admin/apps',
+        'GET /v1/admin/apps',
+        'GET /v1/admin/apps/{id}',
+        'PATCH /v1/admin/apps/{id}',
+        'DELETE /v1/admin/apps/{id}',
+        'GET /v1/admin/apps/{id}/usage',
+        'POST /v1/admin/apps/{id}/rotate-system-secret',
+        'POST /v1/admin/apps/{id}/keys',
+        'GET /v1/admin/apps/{id}/keys',
+        'DELETE /v1/admin/keys/{id}',
+      ]),
+    );
     for (const route of cliRoutes) {
+      expect(implemented.has(route), route).toBe(true);
+    }
+    for (const route of adminCliRoutes) {
       expect(implemented.has(route), route).toBe(true);
     }
   });
@@ -123,6 +288,24 @@ async function startSeededGateway(): Promise<{ address: GatewayAddress; storage:
       host: '127.0.0.1',
       dataDir: ':memory:',
       port: 0,
+    },
+    {
+      openStorage: () => storage,
+      now: () => new Date('2026-06-12T12:00:00.000Z'),
+    },
+  );
+  activeGateways.push(gateway);
+  return { address: await gateway.start(), storage };
+}
+
+async function startAdminGateway(): Promise<{ address: GatewayAddress; storage: PosthornStorage }> {
+  const storage = openStorage({ dataDir: ':memory:' });
+  const gateway = createGateway(
+    {
+      host: '127.0.0.1',
+      dataDir: ':memory:',
+      port: 0,
+      adminToken: ADMIN_TOKEN,
     },
     {
       openStorage: () => storage,
@@ -153,6 +336,13 @@ function cliEnv(address: GatewayAddress): Readonly<Record<string, string>> {
   return {
     POSTHORN_URL: address.url,
     POSTHORN_API_KEY: TENANT_KEY,
+  };
+}
+
+function adminCliEnv(address: GatewayAddress): Readonly<Record<string, string>> {
+  return {
+    POSTHORN_URL: address.url,
+    POSTHORN_ADMIN_TOKEN: ADMIN_TOKEN,
   };
 }
 

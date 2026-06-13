@@ -1178,6 +1178,48 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0024",
+        "F-0027"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0028",
+      "epic": "developer-tools",
+      "title": "Admin command-line client",
+      "spec_ref": "roadmap/ROADMAP.md#later",
+      "description": "Add a posthorn admin CLI namespace for common control-plane operations so operators can provision tenants, manage API keys, read usage, and rotate app system signing secrets from shell or CI without writing TypeScript.",
+      "acceptance": [
+        "posthorn admin help documents the admin commands and the POSTHORN_URL plus POSTHORN_ADMIN_TOKEN environment variables without requiring credentials.",
+        "Admin CLI commands cover common implemented admin routes: create/list/read/update/delete apps, create/list/revoke API keys, read app usage, and rotate app system signing secrets, printing JSON to stdout and one-time secrets only on create/rotate commands.",
+        "Missing environment, malformed inputs, and non-2xx API responses return a non-zero exit with actionable stderr that does not leak POSTHORN_ADMIN_TOKEN or one-time secret values.",
+        "Tests exercise the admin CLI against the HTTP gateway and pin its route map to implemented OpenAPI admin routes.",
+        "README and ROADMAP describe the implemented admin CLI honestly without claiming unimplemented commands."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "tests/**",
+        "README.md",
+        "roadmap/ROADMAP.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0028.md",
+        "roadmap/evidence/F-0028/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
     }
   ]
 }

@@ -73,6 +73,8 @@ describe('Docker deployment artifacts', () => {
     expect(readme).toContain('-p 127.0.0.1:3000:3000');
     expect(readme).toContain('localhost:3000/v1/endpoints');
     expect(readme).toContain('curl -fsS localhost:3000/healthz');
+    expect(readme).toContain('admin create-app');
+    expect(readme).toContain('POSTHORN_ADMIN_TOKEN');
     expect(readme).not.toContain('posthorn admin');
     expect(readme).not.toContain('.env.example');
     expect(readme).not.toContain('ready-made alerting rules');
