@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0031 done (Helm chart deployment reference)
+
+**What:** Added a starter Helm chart under `charts/posthorn` for the current single-pod SQLite deployment model. The chart includes a deployment, service, PVC, optional chart-created admin-token secret, support for an existing admin-token secret, health/readiness probes, and hardened pod defaults without claiming PostgreSQL, Redis, ingress, ServiceMonitor, or horizontal scaling support.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0031/verify.log`. Evaluator returned NEEDS_WORK for exposing `replicaCount` and under-documenting the README boundary, then PASS after the chart was pinned to one pod and the README clarified starter single-pod SQLite scope. Security reviewer returned NEEDS_WORK for service-account token automount, replica exposure, and writable root filesystem defaults, then APPROVE after hardening. Local checks passed: `npx vitest run tests/helm-chart.test.ts tests/deployment-artifacts.test.ts` (9 tests), `npm run typecheck`, `npm test` (168 tests), `npm run lint`, `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** A chart value as innocent as `replicaCount` would imply unsupported scale-out against SQLite. The final chart hard-codes one replica until the product has a PostgreSQL backend. Helm CLI is not installed in this local environment, so chart verification here is static artifact coverage plus Ubuntu CI.
+
+**Next step:** Push the final evidence/state record, wait for PR #60 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0030 done (Endpoint delivery throttling)
 
 **What:** Added optional `rateLimitPerSecond` on tenant endpoints. Tenants can set, update, clear, and read a per-endpoint delivery throttle through the HTTP API, TypeScript SDK, tenant CLI, and Python SDK; the worker keeps excess deliveries pending while other endpoints continue normally.

@@ -1320,8 +1320,8 @@
         "F-0016",
         "F-0029"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "done",
+      "passes": true,
       "evidence": [
         "roadmap/evidence/F-0031/verify.log"
       ],

@@ -7,6 +7,10 @@ Fresh reviews:
 - security-reviewer: NEEDS_WORK for service account token automount, replicaCount exposure, and writable root filesystem; fixed by disabling token automount, hard-coding one replica, and defaulting readOnlyRootFilesystem=true.
 - security-reviewer re-review: APPROVE
 
+GitHub CI on PR #60:
+- verify: pass, run 27452482334, job 81150459445, completed 2026-06-13T01:30:01Z
+- e2e: pass, run 27452482335, job 81150459481, completed 2026-06-13T01:28:47Z
+
 Local checks:
 - npx vitest run tests/helm-chart.test.ts tests/deployment-artifacts.test.ts (9 passed)
 - npm run typecheck
