@@ -1314,6 +1314,52 @@
         "roadmap/STATUS.md"
       ],
       "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0016",
+        "F-0029"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0031/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**",
+        "src/**",
+        "clients/**"
+      ],
+      "id": "F-0031",
+      "epic": "operations",
+      "title": "Helm chart deployment reference",
+      "spec_ref": "roadmap/ROADMAP.md#later",
+      "description": "Add a starter Helm chart for running the single-container Posthorn service on Kubernetes with persistent SQLite storage, health probes, and admin-token secret wiring, without claiming PostgreSQL scale-out support.",
+      "acceptance": [
+        "A Helm chart exists under charts/posthorn with Chart.yaml, values.yaml, templates, and helpers for the Posthorn deployment, service, persistent volume claim, and admin-token secret wiring.",
+        "Default values deploy one Posthorn pod, persist /data, set POSTHORN_DATA_DIR=/data, expose port 3000 through a ClusterIP service, and configure health/readiness probes against implemented routes.",
+        "The chart avoids plaintext default secrets, supports an existing admin token secret, and does not render Redis, PostgreSQL, ingress, ServiceMonitor, or horizontal scaling features that the product does not yet support.",
+        "Deployment docs and README reference the Helm chart as a starter Kubernetes reference while keeping Docker Compose documented and PostgreSQL backend listed as future scale-out work.",
+        "Tests validate the chart files and templates contain the required Kubernetes resources, safe secret defaults, implemented probe paths, and no unsupported dependencies or secret-shaped sample values."
+      ],
+      "authorized_paths": [
+        "charts/**",
+        "docs/**",
+        "tests/**",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0031.md",
+        "roadmap/evidence/F-0031/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 2
     }
   ]
 }

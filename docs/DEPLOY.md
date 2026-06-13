@@ -1,4 +1,4 @@
-# Deploy Posthorn with Docker
+# Deploy Posthorn
 
 Posthorn runs as one Node process with SQLite-backed state in `/data`. The container does not need Redis or Postgres.
 
@@ -81,6 +81,37 @@ docker compose down
 The compose file reads `POSTHORN_ADMIN_TOKEN` from your shell and fails fast when it is missing. Avoid sharing `docker compose config` output because Compose renders environment values into the generated config.
 
 Prometheus uses [docs/prometheus.yml](prometheus.yml), which scrapes `posthorn:3000` at `/metrics`.
+
+## Helm Chart Reference
+
+`charts/posthorn` is a starter Helm chart for Kubernetes. It runs the same single-pod, single-container
+Posthorn service with SQLite state persisted at `/data`; it is not a multi-replica or scale-out
+chart. The PostgreSQL backend is not implemented yet.
+
+Create an admin-token Secret before installing:
+
+```bash
+kubectl create namespace posthorn
+kubectl create secret generic posthorn-admin \
+  --namespace posthorn \
+  --from-literal=posthorn-admin-token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+```
+
+Install the chart from the repo:
+
+```bash
+helm install posthorn ./charts/posthorn \
+  --namespace posthorn \
+  --set admin.existingSecret=posthorn-admin \
+  --set admin.existingSecretKey=posthorn-admin-token \
+  --set image.repository=posthorn \
+  --set image.tag=local
+```
+
+The chart defaults to one pod, a `ClusterIP` service on port `3000`, a persistent volume claim for
+`/data`, and `/healthz` plus `/readyz` probes. It intentionally does not include Ingress,
+ServiceMonitor, horizontal scaling, Redis, or PostgreSQL templates; add those only when the product
+supports the related runtime behavior.
 
 ## Monitoring Artifacts
 
