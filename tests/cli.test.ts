@@ -36,6 +36,7 @@ describe('posthorn client CLI', () => {
     expect(exitCode).toBe(0);
     expect(io.stdout).toContain('posthorn client create-endpoint');
     expect(io.stdout).toContain('--rate-limit-per-second');
+    expect(io.stdout).toContain('--payload-format');
     expect(io.stdout).toContain('POSTHORN_URL');
     expect(io.stderr).toBe('');
   });
@@ -56,7 +57,16 @@ describe('posthorn client CLI', () => {
     const env = cliEnv(address);
 
     const create = await runCli(
-      ['client', 'create-endpoint', 'https://example.com/hooks/cli', 'cli.created', '--rate-limit-per-second', '2'],
+      [
+        'client',
+        'create-endpoint',
+        'https://example.com/hooks/cli',
+        'cli.created',
+        '--rate-limit-per-second',
+        '2',
+        '--payload-format',
+        'payload_only',
+      ],
       env,
     );
     expect(create.exitCode).toBe(0);
@@ -66,6 +76,7 @@ describe('posthorn client CLI', () => {
         readonly url: string;
         readonly eventTypes: readonly string[] | null;
         readonly rateLimitPerSecond: number | null;
+        readonly payloadFormat: string;
       };
       readonly secret: string;
     };
@@ -73,6 +84,7 @@ describe('posthorn client CLI', () => {
       url: 'https://example.com/hooks/cli',
       eventTypes: ['cli.created'],
       rateLimitPerSecond: 2,
+      payloadFormat: 'payload_only',
     });
     expect(created.secret).toMatch(/^whsec_/);
     expect(create.stdout).not.toContain(TENANT_KEY);
@@ -119,6 +131,14 @@ describe('posthorn client CLI', () => {
     expect(malformedRateLimit.exitCode).toBe(1);
     expect(malformedRateLimit.stderr).toContain('--rate-limit-per-second requires a positive safe integer.');
     expect(malformedRateLimit.stderr).not.toContain(TENANT_KEY);
+
+    const malformedPayloadFormat = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--payload-format', 'payload'],
+      env,
+    );
+    expect(malformedPayloadFormat.exitCode).toBe(1);
+    expect(malformedPayloadFormat.stderr).toContain('--payload-format requires envelope or payload_only.');
+    expect(malformedPayloadFormat.stderr).not.toContain(TENANT_KEY);
 
     const tokenAsCreateEndpointOption = await runCli(
       ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--bogus', TENANT_KEY],

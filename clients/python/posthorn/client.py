@@ -31,6 +31,7 @@ class PosthornClient:
         event_types: Optional[Iterable[str]] = None,
         headers: Optional[Mapping[str, str]] = None,
         rate_limit_per_second: Optional[int] = None,
+        payload_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {"url": url}
         if event_types is not None:
@@ -39,6 +40,8 @@ class PosthornClient:
             body["headers"] = dict(headers)
         if rate_limit_per_second is not None:
             body["rateLimitPerSecond"] = rate_limit_per_second
+        if payload_format is not None:
+            body["payloadFormat"] = payload_format
         return self._request("POST", "/v1/endpoints", body)
 
     def list_endpoints(self) -> list:

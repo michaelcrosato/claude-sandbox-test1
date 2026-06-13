@@ -168,6 +168,7 @@ export function createOpenApiDocument(): OpenApiDocument {
           eventTypes: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] },
           headers: { type: 'object', additionalProperties: { type: 'string' } },
           rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
+          payloadFormat: { type: 'string', enum: ['envelope', 'payload_only'] },
           enabled: { type: 'boolean' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
@@ -512,6 +513,7 @@ function endpointWriteSchema(requireUrl: boolean): OpenApiSchema {
     eventTypes: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] },
     headers: { type: 'object', additionalProperties: { type: 'string' } },
     rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
+    payloadFormat: { anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }] },
     ...(requireUrl ? {} : { enabled: { type: 'boolean' } }),
   };
   return {

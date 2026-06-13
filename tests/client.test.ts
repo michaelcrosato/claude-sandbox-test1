@@ -43,10 +43,12 @@ describe('PosthornClient', () => {
       eventTypes: ['sdk.created'],
       headers: { 'X-Trace-Id': 'sdk-test' },
       rateLimitPerSecond: 4,
+      payloadFormat: 'payload_only',
     });
     expect(created.endpoint.id).toMatch(/^ep_/);
     expect(created.secret).toMatch(/^whsec_/);
     expect(created.endpoint.rateLimitPerSecond).toBe(4);
+    expect(created.endpoint.payloadFormat).toBe('payload_only');
 
     expect((await client.listEndpoints()).data).toEqual([created.endpoint]);
     expect(await client.getEndpoint(created.endpoint.id)).toEqual({ endpoint: created.endpoint });
@@ -55,6 +57,7 @@ describe('PosthornClient', () => {
       headers: { 'X-Trace-Id': 'sdk-updated' },
       eventTypes: null,
       rateLimitPerSecond: null,
+      payloadFormat: null,
       enabled: true,
     });
     expect(updated.endpoint).toMatchObject({
@@ -62,6 +65,7 @@ describe('PosthornClient', () => {
       eventTypes: null,
       headers: { 'X-Trace-Id': 'sdk-updated' },
       rateLimitPerSecond: null,
+      payloadFormat: 'envelope',
       enabled: true,
     });
 
@@ -512,14 +516,23 @@ function assertClientInputTypes(): void {
   const createEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
     url: 'https://example.com/hook',
     rateLimitPerSecond: 1,
+    payloadFormat: 'payload_only',
   };
-  const updateEndpoint: Parameters<PosthornClient['updateEndpoint']>[1] = { rateLimitPerSecond: null };
+  const updateEndpoint: Parameters<PosthornClient['updateEndpoint']>[1] = {
+    rateLimitPerSecond: null,
+    payloadFormat: null,
+  };
   const endpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: 1, cursor: 'cursor' };
   const endpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: 7 };
   const invalidCreateEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
     url: 'https://example.com/hook',
     // @ts-expect-error endpoint rate limits are typed as numbers, not strings.
     rateLimitPerSecond: '1',
+  };
+  const invalidPayloadFormatEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
+    url: 'https://example.com/hook',
+    // @ts-expect-error endpoint payload format is a closed enum.
+    payloadFormat: 'payload',
   };
   // @ts-expect-error endpoint delivery limits are typed as numbers, not strings.
   const invalidEndpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: '1' };
@@ -531,6 +544,7 @@ function assertClientInputTypes(): void {
     endpointDeliveries,
     endpointStats,
     invalidCreateEndpoint,
+    invalidPayloadFormatEndpoint,
     invalidEndpointDeliveries,
     invalidEndpointStats,
   ];

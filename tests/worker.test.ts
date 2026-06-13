@@ -128,6 +128,35 @@ describe('delivery worker', () => {
     expect(readAttempts(storage, message.fanout.deliveryIds[0])[0]?.duration_ms).toBeGreaterThanOrEqual(0);
   });
 
+  it('sends and signs only the original payload for payload_only endpoints', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/payload-only', {
+      eventTypes: ['user.payload_only'],
+      payloadFormat: 'payload_only',
+    });
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.payload_only',
+      payload: { id: 43, nested: { ok: true } },
+    });
+    const captured = createCapturingFetch();
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: captured.fetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(captured.request).not.toBeNull();
+    if (captured.request === null) throw new Error('Expected captured delivery request.');
+    expect(JSON.parse(captured.request.body)).toEqual({ id: 43, nested: { ok: true } });
+    expect(captured.request.body).not.toContain(message.message.id);
+    expect(captured.request.body).not.toContain('user.payload_only');
+    verifyWebhook(endpoint.secret, captured.request.headers, captured.request.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
   it('signs deliveries with current and previous endpoint secrets during rotation overlap', async () => {
     const storage = makeStorage();
     const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/rotation-overlap');
@@ -785,6 +814,7 @@ function createLocalEndpoint(
     readonly eventTypes?: readonly string[];
     readonly headers?: Readonly<Record<string, string>>;
     readonly rateLimitPerSecond?: number | null;
+    readonly payloadFormat?: 'envelope' | 'payload_only' | null;
   } = {},
 ): ReturnType<typeof createEndpoint> {
   const endpoint = createEndpoint(storage, APP_ID, {

@@ -14,10 +14,13 @@ export interface EndpointRecord {
   readonly eventTypes: readonly string[] | null;
   readonly headers: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond: number | null;
+  readonly payloadFormat: EndpointPayloadFormat;
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export type EndpointPayloadFormat = 'envelope' | 'payload_only';
 
 export interface CreateEndpointResult {
   readonly endpoint: EndpointRecord;
@@ -82,6 +85,7 @@ export function createEndpoint(
   const eventTypes = parseEventTypes(body.eventTypes);
   const headers = parseHeaders(body.headers);
   const rateLimitPerSecond = parseRateLimitPerSecond(body.rateLimitPerSecond);
+  const payloadFormat = parsePayloadFormatForCreate(body.payloadFormat);
   const id = generateEndpointId();
   const createdAt = now.toISOString();
   const secret = createWebhookSecret();
@@ -100,10 +104,11 @@ export function createEndpoint(
         signing_secret_key_version,
         signing_secret_nonce,
         rate_limit_per_second,
+        payload_format,
         enabled,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       id,
@@ -116,6 +121,7 @@ export function createEndpoint(
       protectedSecret.keyVersion,
       protectedSecret.nonce,
       rateLimitPerSecond,
+      payloadFormat,
       1,
       createdAt,
       createdAt,
@@ -133,7 +139,7 @@ export function listEndpoints(storage: PosthornStorage, appId: string): readonly
   const rows = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, payload_format, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ?
         ORDER BY created_at DESC, id DESC
@@ -147,7 +153,7 @@ export function getEndpoint(storage: PosthornStorage, appId: string, endpointId:
   const row = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, payload_format, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ? AND id = ?
         LIMIT 1
@@ -171,6 +177,7 @@ export function getEndpointDeliveryTarget(
                event_types_json,
                non_secret_headers_json,
                rate_limit_per_second,
+               payload_format,
                enabled,
                created_at,
                updated_at,
@@ -301,6 +308,10 @@ export function updateEndpoint(
     values.push(parseRateLimitPerSecond(body.rateLimitPerSecond));
     updates.push('rate_limit_window_started_at = NULL');
     updates.push('rate_limit_window_count = 0');
+  }
+  if (Object.hasOwn(body, 'payloadFormat')) {
+    updates.push('payload_format = ?');
+    values.push(parsePayloadFormatForUpdate(body.payloadFormat));
   }
   if (Object.hasOwn(body, 'enabled')) {
     updates.push('enabled = ?');
@@ -493,6 +504,21 @@ function parseRateLimitPerSecond(input: unknown): number | null {
   return input;
 }
 
+function parsePayloadFormatForCreate(input: unknown): EndpointPayloadFormat {
+  if (input === undefined || input === null) return 'envelope';
+  return parsePayloadFormat(input);
+}
+
+function parsePayloadFormatForUpdate(input: unknown): EndpointPayloadFormat {
+  if (input === null) return 'envelope';
+  return parsePayloadFormat(input);
+}
+
+function parsePayloadFormat(input: unknown): EndpointPayloadFormat {
+  if (input === 'envelope' || input === 'payload_only') return input;
+  throw new EndpointValidationError('invalid_request', 'payloadFormat must be envelope, payload_only, or null.');
+}
+
 function parseRotationOverlapSeconds(input: unknown): number {
   const body = input === undefined ? {} : requireObject(input);
   const value = body.overlapSeconds;
@@ -523,10 +549,15 @@ function endpointFromRow(row: EndpointRow): EndpointRecord {
     eventTypes: parseStoredEventTypes(row.event_types_json),
     headers: parseStoredHeaders(row.non_secret_headers_json),
     rateLimitPerSecond: nullableInteger(row.rate_limit_per_second),
+    payloadFormat: parseStoredPayloadFormat(row.payload_format),
     enabled: Number(row.enabled) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
+  return value === 'payload_only' ? 'payload_only' : 'envelope';
 }
 
 function endpointDeliveryTargetFromRow(row: EndpointDeliveryTargetRow): EndpointDeliveryTarget {
@@ -577,6 +608,7 @@ interface EndpointRow {
   readonly event_types_json: unknown;
   readonly non_secret_headers_json: unknown;
   readonly rate_limit_per_second: unknown;
+  readonly payload_format: unknown;
   readonly enabled: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;

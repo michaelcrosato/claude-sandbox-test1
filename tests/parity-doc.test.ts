@@ -88,7 +88,10 @@ describe('code-verified parity documentation', () => {
     expect(statusFor('Self-hosted single-container mode', 'Posthorn')).toBe('Implemented');
     expect(statusFor('Kubernetes reference', 'Posthorn')).toBe('Implemented');
     expect(statusFor('PostgreSQL/HA scale-out', 'Posthorn')).toBe('Not yet');
+    expect(() => {
     expect(statusFor('Payload transformations', 'Posthorn')).toBe('Not yet');
+    }).toThrow();
+    expect(statusFor('Payload transformations', 'Posthorn')).toBe('Partial');
     expect(statusFor('Deduplication rules beyond intake idempotency', 'Posthorn')).toBe('Not yet');
     expect(statusFor('Non-webhook destination connectors', 'Posthorn')).toBe('Not yet');
 

@@ -1405,6 +1405,50 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0032"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0033/verify.log"
+      ],
+      "attempts": 0,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0033",
+      "epic": "delivery-transformations",
+      "title": "Endpoint payload delivery formats",
+      "spec_ref": "docs/PARITY.md#posthorn-gaps",
+      "description": "Add a safe declarative payload transformation step by letting each endpoint choose whether delivered webhooks use the current Posthorn envelope or the original payload only. This closes part of the payload-transformation parity gap without arbitrary user code execution.",
+      "acceptance": [
+        "Endpoint create and update accept an optional payloadFormat value of envelope or payload_only, default existing and new endpoints to envelope, allow null on update to reset to envelope, and reject malformed values with invalid_request.",
+        "Endpoint read/list responses, OpenAPI, TypeScript SDK, tenant CLI, Python SDK, and README document the payloadFormat field without claiming arbitrary transformations are supported.",
+        "The delivery worker signs and sends the exact body selected by payloadFormat: envelope preserves the existing {id,eventType,payload} body and payload_only sends only the stored message payload JSON.",
+        "Endpoint test-send uses the same payloadFormat behavior as real deliveries and reports the same result metadata without persisting delivery rows.",
+        "Tests cover storage migration, endpoint create/update validation and serialization, worker delivery body/signature behavior, endpoint test-send body behavior, client/CLI/Python propagation, OpenAPI contract, README docs, and parity matrix wording."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "docs/PARITY.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0033.md",
+        "roadmap/evidence/F-0033/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

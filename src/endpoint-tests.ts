@@ -70,7 +70,7 @@ export async function sendEndpointTest(
   const payload = resolvePayload(storage, appId, eventType, body);
   const id = generateTestDeliveryId();
   const attemptedAt = options.now?.() ?? new Date();
-  const rawBody = JSON.stringify({ id, eventType, payload: payload.value });
+  const rawBody = buildTestDeliveryBody(endpoint, id, eventType, payload.value);
   const startedAt = Date.now();
   let timeout: NodeJS.Timeout | null = null;
   const abortController = new AbortController();
@@ -134,6 +134,19 @@ export async function sendEndpointTest(
   } finally {
     if (timeout !== null) clearTimeout(timeout);
   }
+}
+
+function buildTestDeliveryBody(
+  endpoint: EndpointDeliveryTarget,
+  id: string,
+  eventType: string,
+  payload: JsonValue,
+): string {
+  if (endpoint.payloadFormat === 'payload_only') {
+    return JSON.stringify(payload);
+  }
+
+  return JSON.stringify({ id, eventType, payload });
 }
 
 function resolvePayload(

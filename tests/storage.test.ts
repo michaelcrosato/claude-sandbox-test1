@@ -63,6 +63,7 @@ describe('openStorage', () => {
       expect(columns).toContain('rate_limit_per_second');
       expect(columns).toContain('rate_limit_window_started_at');
       expect(columns).toContain('rate_limit_window_count');
+      expect(columns).toContain('payload_format');
       expect(columns).not.toContain('headers_json');
       expect(columns).not.toContain('signing_secret_hash');
       const indexes = storage.db
@@ -152,6 +153,70 @@ describe('openStorage', () => {
       expect(columns.filter((name) => name === 'rate_limit_per_second')).toHaveLength(1);
       expect(columns.filter((name) => name === 'rate_limit_window_started_at')).toHaveLength(1);
       expect(columns.filter((name) => name === 'rate_limit_window_count')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'payload_format')).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('adds endpoint payload format with envelope defaults for existing SQLite files', () => {
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE endpoints (
+          id TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL,
+          url TEXT NOT NULL,
+          event_types_json TEXT,
+          non_secret_headers_json TEXT,
+          secret_header_refs_json TEXT,
+          signing_secret_ciphertext TEXT NOT NULL,
+          signing_secret_key_version TEXT NOT NULL,
+          signing_secret_nonce TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO endpoints (
+          id,
+          app_id,
+          url,
+          event_types_json,
+          non_secret_headers_json,
+          secret_header_refs_json,
+          signing_secret_ciphertext,
+          signing_secret_key_version,
+          signing_secret_nonce,
+          enabled,
+          created_at,
+          updated_at
+        ) VALUES (
+          'ep_legacy',
+          'app_legacy',
+          'https://example.com/hook',
+          NULL,
+          '{}',
+          '{}',
+          'ciphertext',
+          'local-aes-256-gcm-v1',
+          'nonce',
+          1,
+          '2026-06-12T00:00:00.000Z',
+          '2026-06-12T00:00:00.000Z'
+        );
+      `);
+
+      initializeSchema(db);
+      initializeSchema(db);
+
+      const columns = db
+        .prepare('PRAGMA table_info(endpoints)')
+        .all()
+        .map((row) => String(row.name));
+      expect(columns.filter((name) => name === 'payload_format')).toHaveLength(1);
+      expect(db.prepare('SELECT payload_format FROM endpoints WHERE id = ?').get('ep_legacy')).toEqual({
+        payload_format: 'envelope',
+      });
     } finally {
       db.close();
     }
