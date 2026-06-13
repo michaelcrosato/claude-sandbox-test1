@@ -68,7 +68,7 @@ For production deployment with Prometheus monitoring, Docker Compose, and a star
 | Entry price | $0 → $490/mo | $99/mo | **$0, generous free tier** |
 
 See [`docs/PARITY.md`](docs/PARITY.md) for the full, code-verified feature matrix vs. Svix,
-Convoy, and Hookdeck — including the short worklist of gaps Posthorn is closing.
+Convoy, Hookdeck, and Stripe — including the short worklist of gaps Posthorn is closing.
 
 Key capabilities:
 
