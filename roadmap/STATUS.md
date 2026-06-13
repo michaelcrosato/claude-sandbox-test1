@@ -2,11 +2,11 @@
 
 ## Shipped this week
 
-The product scaffold, SQLite storage foundation, health/readiness HTTP server, Standard Webhooks utilities, tenant endpoint CRUD, endpoint signing secret rotation, admin app system secret rotation, endpoint delivery history/stats, app-wide delivery listing, filtered message history, message intake, idempotent retries, crash-safe delivery worker, automatic endpoint disabling, per-attempt audit log, admin tenant/API-key provisioning, usage metering/quota enforcement, batch message intake, OpenAPI contract, expanded TypeScript SDK/CLI, admin CLI, Python SDK, TypeScript admin SDK, Prometheus metrics, monitoring dashboard and alerting artifacts, Docker deployment reference, event type catalog, endpoint test-send, portal sessions, and browser dashboards are complete. Posthorn now has the core path for accepting, signing, rotating, retrying, recording, provisioning, metering, batching, documenting, operating, and debugging webhook delivery flows.
+The product scaffold, SQLite storage foundation, health/readiness HTTP server, Standard Webhooks utilities, tenant endpoint CRUD, endpoint signing secret rotation, admin app system secret rotation, endpoint delivery throttling, endpoint delivery history/stats, app-wide delivery listing, filtered message history, message intake, idempotent retries, crash-safe delivery worker, automatic endpoint disabling, per-attempt audit log, admin tenant/API-key provisioning, usage metering/quota enforcement, batch message intake, OpenAPI contract, expanded TypeScript SDK/CLI, admin CLI, Python SDK, TypeScript admin SDK, Prometheus metrics, monitoring dashboard and alerting artifacts, Docker deployment reference, event type catalog, endpoint test-send, portal sessions, and browser dashboards are complete. Posthorn now has the core path for accepting, signing, throttling, rotating, retrying, recording, provisioning, metering, batching, documenting, operating, and debugging webhook delivery flows.
 
 ## Ready for your QA
 
-F-0029 is ready in PR #58. It adds Prometheus alert rules and an importable Grafana dashboard for the existing metrics endpoint.
+F-0030 is ready in PR #59. It adds optional per-endpoint delivery throttling so tenants can protect slower webhook receivers without blocking delivery to other endpoints.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-✅ Automated checks passed on PR #58. The latest local product checks passed with 160 tests.
+✅ Automated checks passed on PR #59. The latest local product checks passed with 163 tests.

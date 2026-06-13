@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0030 done (Endpoint delivery throttling)
+
+**What:** Added optional `rateLimitPerSecond` on tenant endpoints. Tenants can set, update, clear, and read a per-endpoint delivery throttle through the HTTP API, TypeScript SDK, tenant CLI, and Python SDK; the worker keeps excess deliveries pending while other endpoints continue normally.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0030/verify.log`. Evaluator returned PASS. Security reviewer returned NEEDS_WORK twice for worker-claim DoS risks, then APPROVE after the throttle moved to durable per-endpoint claim-window state with indexes and a starvation regression. Local checks passed: `npx vitest run tests/storage.test.ts tests/worker.test.ts tests/endpoints-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts` (56 tests), `npm run typecheck`, `npm test` (163 tests), `npm run lint`, `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** A naive throttle based on recent `delivery_attempts` history can become a denial-of-service vector because it scans historical rows while holding SQLite's write lock. The final design stores only the current per-endpoint claim window on `endpoints`, filters exhausted endpoints before candidate selection, and updates the counter in the same transaction as delivery leases. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the final evidence/state record, wait for PR #59 checks again, then mark the PR ready and merge.
+
+---
+
 ## 2026-06-12 — F-0029 done (Prometheus alerting and Grafana dashboard pack)
 
 **What:** Added operator monitoring artifacts for the existing `/metrics` endpoint: `docs/prometheus-alerts.yml` and `docs/grafana-dashboard.json`. The alert pack covers scrape health, dead-letter backlog, new dead letters, stuck deliveries, and retry spikes; the dashboard covers accepted messages, delivery outcomes, task backlog, dead-letter reasons, uptime, and build info.
