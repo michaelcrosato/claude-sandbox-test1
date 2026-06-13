@@ -4,8 +4,16 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
+# shellcheck source=scripts/bash-node-bridge.sh
+. "$ROOT/scripts/bash-node-bridge.sh"
 HOOKS=".claude/hooks"
 FIX="tmp/hook-tests"
+TSNODE="$ROOT/node_modules/ts-node/dist/bin.js"
+TMPROOT="$ROOT/tmp/hook-tests-runtime"
+rm -rf "$TMPROOT"
+mkdir -p "$TMPROOT"
+export TMPDIR="$TMPROOT"
+trap 'rm -rf "$TMPROOT"' EXIT
 PASS=0; FAIL=0
 
 check() { # check <name> <expected-exit> <actual-exit>
@@ -97,7 +105,8 @@ printf '%s' "$OUT" | grep -q "SESSION BRIEF" ; check "emits brief content" 0 "$?
 echo "── update-state.ts (fixture: $FIX)"
 rm -rf "$FIX"; mkdir -p "$FIX"
 export STATE_FILE="$FIX/features.json"
-US() { npx ts-node scripts/update-state.ts "$@" >/dev/null 2>&1; echo $?; }
+run_update_state() { node "$TSNODE" "$ROOT/scripts/update-state.ts" "$@"; }
+US() { run_update_state "$@" >/dev/null 2>&1; echo $?; }
 cat > "$STATE_FILE" <<'EOF'
 { "features": [ { "id": "F-9101", "epic": "t", "title": "t", "spec_ref": "t", "description": "t",
   "acceptance": ["a"], "authorized_paths": [], "forbidden_paths": [], "dependencies": [],
@@ -107,17 +116,17 @@ check "validate accepts valid fixture"          0 "$(US --validate)"
 cat > "$FIX/stale-policy.json" <<'EOF'
 { "tiers": { "reasoning": { "model": "x", "last_verified": "2020-01-01" } } }
 EOF
-OUT="$(MODEL_POLICY_FILE="$FIX/stale-policy.json" npx ts-node scripts/update-state.ts --validate 2>&1)"; RC=$?
+OUT="$(MODEL_POLICY_FILE="$FIX/stale-policy.json" run_update_state --validate 2>&1)"; RC=$?
 check "validate exits 0 despite stale policy"   0 "$RC"
 printf '%s' "$OUT" | grep -q "stale" ; check "validate warns on stale model-policy" 0 "$?"
 printf '%s\n' '{"date":"2026-06-10","feature":"F-9101"}' > "$FIX/metrics-good.jsonl"
-check "validate accepts well-formed metrics"    0 "$(METRICS_FILE="$FIX/metrics-good.jsonl" npx ts-node scripts/update-state.ts --validate >/dev/null 2>&1; echo $?)"
+check "validate accepts well-formed metrics"    0 "$(METRICS_FILE="$FIX/metrics-good.jsonl" run_update_state --validate >/dev/null 2>&1; echo $?)"
 printf '%s\n' 'not json at all' > "$FIX/metrics-bad.jsonl"
-check "validate rejects malformed metrics line" 1 "$(METRICS_FILE="$FIX/metrics-bad.jsonl" npx ts-node scripts/update-state.ts --validate >/dev/null 2>&1; echo $?)"
+check "validate rejects malformed metrics line" 1 "$(METRICS_FILE="$FIX/metrics-bad.jsonl" run_update_state --validate >/dev/null 2>&1; echo $?)"
 printf '%s\n' '{"feature":"F-9101"}' > "$FIX/metrics-nodate.jsonl"
-check "validate rejects metrics missing date"   1 "$(METRICS_FILE="$FIX/metrics-nodate.jsonl" npx ts-node scripts/update-state.ts --validate >/dev/null 2>&1; echo $?)"
+check "validate rejects metrics missing date"   1 "$(METRICS_FILE="$FIX/metrics-nodate.jsonl" run_update_state --validate >/dev/null 2>&1; echo $?)"
 printf '{"date":"2026-06-10","feature":"F-9101","notes":"%s"}\n' "$(printf 'x%.0s' $(seq 1 600))" > "$FIX/metrics-long.jsonl"
-check "validate rejects oversized metrics record" 1 "$(METRICS_FILE="$FIX/metrics-long.jsonl" npx ts-node scripts/update-state.ts --validate >/dev/null 2>&1; echo $?)"
+check "validate rejects oversized metrics record" 1 "$(METRICS_FILE="$FIX/metrics-long.jsonl" run_update_state --validate >/dev/null 2>&1; echo $?)"
 check "add rejects malformed JSON"              1 "$(US --add 'not-json')"
 check "add rejects passes:true at birth"        1 "$(US --add '{"id":"F-9102","epic":"t","title":"t","spec_ref":"t","description":"t","acceptance":["a"],"authorized_paths":[],"priority":1,"status":"pending","passes":true,"evidence":["x"],"attempts":0,"blocked_reason":null}')"
 check "add rejects dangling dependency"         1 "$(US --add '{"id":"F-9103","epic":"t","title":"t","spec_ref":"t","description":"t","acceptance":["a"],"authorized_paths":[],"dependencies":["F-9999"],"priority":1,"status":"pending","passes":false,"evidence":[],"attempts":0,"blocked_reason":null}')"
@@ -155,7 +164,6 @@ unset STATE_FILE
 rm -rf "$FIX"
 
 echo "── assertion-shield.ts (fixture repo)"
-TSNODE="$ROOT/node_modules/ts-node/dist/bin.js"
 AS="$(mktemp -d)"
 (
   cd "$AS" && git init -q && git config user.email t@t && git config user.name t
@@ -343,7 +351,7 @@ NO_WARN_FOUND="$(printf '%s' "$NO_SRC_OUT" | grep -c 'PRODUCT MODE\|product mode
 check "product-mode warning: absent when no src/" 0 "$(if [ "$NO_WARN_FOUND" -eq 0 ]; then echo 0; else echo 1; fi)"
 
 # ── 7. Seeded state validity ──────────────────────────────────────────────────
-VALIDATE_RC="$(STATE_FILE="$IT/roadmap/features.json" npx ts-node scripts/update-state.ts --validate >/dev/null 2>&1; echo $?)"
+VALIDATE_RC="$(STATE_FILE="$IT/roadmap/features.json" run_update_state --validate >/dev/null 2>&1; echo $?)"
 check "seeded features.json validates against schema" 0 "$VALIDATE_RC"
 
 # ── 8. Merge-copy: adopter files survive install ──────────────────────────────

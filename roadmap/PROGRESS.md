@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-06-13 — autoloop resumed + kaizen (Bash gate portability)
+
+### kaizen
+
+**Signal:** The F-0036 PR was green but still draft/open, and this Windows Bash environment exposed `node.exe` to shell gates while some gate scripts call bare `node`. Root onboarding docs also still pointed at legacy paths that the current control plane no longer uses.
+
+**What:** Marked PR #65 ready and merged it into `develop`. Preserved the in-progress maintenance edits, moved them onto `fix/kaizen-bash-node-bridge`, replaced stale root onboarding pointers with the current `AGENTS.md` -> `CLAUDE.md`/`roadmap/` flow, and added a small Bash bridge so gate scripts can run `node` through `node.exe` when needed. The bridge now refuses to trust a preexisting shim directory unless it points back to this repo's runner.
+
+**Verified:** Evidence saved at `roadmap/evidence/kaizen-2026-06-13/verify.log`. Local `bash scripts/verify.sh` passed: typecheck, lint, 188 product tests, build, placeholder check, state validation for 36 passing features, assertion shield, engine lint, shellcheck, and 139 hook contract tests. Targeted `bash scripts/test-hooks.sh` also passed after the bridge hardening. `git diff --check` passed.
+
+**Sentinel scan:** `roadmap/features.json` validates with 36 done / 36 passing and no pending backlog. PR #65 had green CI and is merged; open PR list was empty before this maintenance PR. Recent GitHub runs were green, local stale remote refs were pruned, model-policy verification dates are current, and Dependabot alerts are disabled or unavailable to the current token rather than actionable.
+
+**Next step:** Open the maintenance PR, wait for CI, merge on green, then the next autoloop pass can enter downtime unless the operator adds new roadmap work.
+
+---
+
 ## 2026-06-12 — F-0036 done (CloudEvents delivery payload format)
 
 **What:** Added a closed `cloud_events_1_0` endpoint payload format. Endpoints can now keep the default Posthorn envelope, send only the original payload JSON, or send a deterministic CloudEvents JSON 1.0 body; real deliveries use the stored message creation time, and endpoint test-send uses the diagnostic send time.

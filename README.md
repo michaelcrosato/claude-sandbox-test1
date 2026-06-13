@@ -482,11 +482,11 @@ with pending fanout queue creation, idempotent message retries, an importable re
 
 Working on Posthorn (human or AI agent)? Start here:
 
-- **[GOAL.md](GOAL.md)** — what this project is and its current state (canonical: [docs/GOAL.md](docs/GOAL.md)).
-- **[ROADMAP.md](ROADMAP.md)** — phased plan and the open worklist.
-- **[AGENTS.md](AGENTS.md)** — rules, conventions, and the maintenance loop for autonomous agents.
-- **[tickets/](tickets/)** — atomic, executable units of work.
-- **[docs/ai/REPO_MAP.md](docs/ai/REPO_MAP.md)** — where everything lives in `src/`.
+- **[AGENTS.md](AGENTS.md)** — entrypoint for agents; it points to the binding rules in **[CLAUDE.md](CLAUDE.md)**.
+- **[AI_OPERATIONS_PLAN.md](AI_OPERATIONS_PLAN.md)** — how the autonomous operations system is meant to run.
+- **[roadmap/ROADMAP.md](roadmap/ROADMAP.md)** — human-owned priorities in plain English.
+- **[roadmap/features.json](roadmap/features.json)** — machine backlog; update it only with `npx ts-node scripts/update-state.ts`.
+- **[roadmap/STATUS.md](roadmap/STATUS.md)** and **[roadmap/PROGRESS.md](roadmap/PROGRESS.md)** — operator status and agent handoff history.
 
 ## License
 

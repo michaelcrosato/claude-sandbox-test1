@@ -1,26 +1,35 @@
 # GOAL.md
 
-> **The canonical goal lives in [docs/GOAL.md](docs/GOAL.md)** — it is the lifecycle gate the
-> autonomous loop reads (`CURRENT_STATE`, the ordered backlog, the per-item definition of done,
-> and the credential-gated exclusions). This root file is a thin pointer so the goal is
-> discoverable from the repo root. **Do not fork it — edit docs/GOAL.md.**
+This root file is a compatibility index for agents and humans who look for a
+top-level goal file. Do not treat it as machine state.
 
-**Purpose.** Posthorn — reliable outbound webhook-delivery infrastructure for SaaS teams:
-single-container, SQLite-by-default (no Redis), [Standard Webhooks](https://www.standardwebhooks.com/)-compliant,
-embeddable as a library, MIT-licensed.
+## Purpose
 
-**Current state.** v1.0 feature-complete: the 11-item commercial-readiness backlog in
-[docs/GOAL.md](docs/GOAL.md) is done, and [docs/PARITY.md](docs/PARITY.md) is the code-verified
-competitor matrix with every codeable gap closed. Gates are green (`typecheck`, ~2060 tests,
-`build`). Everything left for a public release is **credential-gated and human-only** (see
-*Exclusions* in docs/GOAL.md).
+Posthorn is reliable outbound webhook-delivery infrastructure for SaaS teams:
+single-container, SQLite-by-default, Standard Webhooks-compatible, embeddable as
+a library, and MIT-licensed.
 
-**Non-goals.** General event bus, inbound webhook routing, CRM/workflow engine, multi-protocol
-destination hub, or any dependency on Redis / an external broker in the core path.
+Non-goals: a general event bus, inbound webhook router, CRM/workflow engine,
+multi-protocol destination hub, or a Redis/external-broker dependency in the
+core path.
 
-**Definition of done (every change).** `npm run typecheck` clean · `npm test` green ·
-`npm run build` succeeds — plus the route/store/env-var/smoke rules in docs/GOAL.md. Gate with
-`bash scripts/agent/check.sh` (or `npm run agent:check`).
+## Current Sources of Truth
 
-**Start here:** agents → [AGENTS.md](AGENTS.md) · humans → [README.md](README.md) · plan &
-tickets → [ROADMAP.md](ROADMAP.md), [tickets/](tickets/) · repo map → [docs/ai/REPO_MAP.md](docs/ai/REPO_MAP.md).
+- Product architecture and public behavior: [README.md](README.md).
+- Agent operating rules: [AGENTS.md](AGENTS.md) -> [CLAUDE.md](CLAUDE.md).
+- Operations blueprint: [AI_OPERATIONS_PLAN.md](AI_OPERATIONS_PLAN.md).
+- Human-owned priorities: [roadmap/ROADMAP.md](roadmap/ROADMAP.md).
+- Machine backlog/state: [roadmap/features.json](roadmap/features.json).
+- Operator status and handoff: [roadmap/STATUS.md](roadmap/STATUS.md),
+  [roadmap/PROGRESS.md](roadmap/PROGRESS.md), and
+  [roadmap/QUESTIONS.md](roadmap/QUESTIONS.md).
+
+## Definition of Done
+
+Every autonomous change must follow the `CLAUDE.md` session protocol: update
+state through `npx ts-node scripts/update-state.ts`, preserve evidence under
+`roadmap/evidence/`, run `bash scripts/verify.sh`, get fresh evaluation where
+required, and record decisions in `roadmap/DECISIONS.md`.
+
+Agents should not use legacy `docs/GOAL.md`, `tickets/`, `docs/ai/REPO_MAP.md`,
+or `scripts/agent/*` paths; they are not part of the current checkout.
