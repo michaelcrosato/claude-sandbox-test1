@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0036 done (CloudEvents delivery payload format)
+
+**What:** Added a closed `cloud_events_1_0` endpoint payload format. Endpoints can now keep the default Posthorn envelope, send only the original payload JSON, or send a deterministic CloudEvents JSON 1.0 body; real deliveries use the stored message creation time, and endpoint test-send uses the diagnostic send time.
+
+**Verified:** Evidence saved at `roadmap/evidence/F-0036/verify.log`. Evaluator returned PASS. Security reviewer returned APPROVE. Local checks passed: `npx vitest run tests/endpoints-http.test.ts tests/worker.test.ts tests/endpoint-test-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts` (67 tests), `npm run typecheck`, `npm run lint`, `npm test` (188 tests), `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** Assertion-shield risk showed up before commit work: changing existing payload-only assertions in place would weaken the old guardrails. The final tests keep those assertions and add CloudEvents coverage beside them.
+
+**Next step:** Push the PR/CI evidence record, wait for PR #65 checks again, then mark it ready and merge on green.
+
+---
+
 ## 2026-06-12 — F-0035 done (Endpoint delivery HTTP methods)
 
 **What:** Added endpoint-level `deliveryMethod` support. Endpoints default to `POST` and can opt into `PUT`; create with `null` also defaults to `POST`, update with `null` resets to `POST`, and updates that omit the field keep the current value. Real deliveries and endpoint test-send now use the stored method while preserving payload-format body selection, Standard Webhooks signing over the exact raw body, JSON content type, custom non-secret headers, manual redirects, and existing URL safety behavior.

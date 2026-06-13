@@ -96,6 +96,7 @@ const DEFAULT_WORKER_OPTIONS = {
 } as const;
 
 const DELIVERY_ATTEMPT_ID_PREFIX = 'datt_';
+const CLOUD_EVENTS_SOURCE = 'urn:posthorn';
 const USER_AGENT = 'posthorn-delivery-worker';
 const CLAIM_CANDIDATE_POOL_MULTIPLIER = 16;
 const MANAGED_HEADER_NAMES = new Set([
@@ -276,7 +277,8 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
              endpoints.previous_signing_secret_expires_at,
              messages.id AS message_id,
              messages.event_type,
-             messages.payload_json
+             messages.payload_json,
+             messages.created_at AS message_created_at
       FROM deliveries
       INNER JOIN endpoints ON endpoints.id = deliveries.endpoint_id
       INNER JOIN messages ON messages.id = deliveries.message_id
@@ -683,6 +685,17 @@ function buildDeliveryBody(task: ClaimedDelivery): string {
     return JSON.stringify(payload);
   }
 
+  if (task.payloadFormat === 'cloud_events_1_0') {
+    return JSON.stringify({
+      specversion: '1.0',
+      id: task.messageId,
+      type: task.eventType,
+      source: CLOUD_EVENTS_SOURCE,
+      time: task.messageCreatedAt,
+      data: payload,
+    });
+  }
+
   return JSON.stringify({
     id: task.messageId,
     eventType: task.eventType,
@@ -839,10 +852,12 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
     messageId: String(row.message_id),
     eventType: String(row.event_type),
     payloadJson: String(row.payload_json),
+    messageCreatedAt: String(row.message_created_at),
   };
 }
 
 function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
+  if (value === 'cloud_events_1_0') return 'cloud_events_1_0';
   return value === 'payload_only' ? 'payload_only' : 'envelope';
 }
 
@@ -915,6 +930,7 @@ interface ClaimedDelivery {
   readonly messageId: string;
   readonly eventType: string;
   readonly payloadJson: string;
+  readonly messageCreatedAt: string;
 }
 
 interface ClaimCandidate {
@@ -959,6 +975,7 @@ interface ClaimedDeliveryRow {
   readonly message_id: unknown;
   readonly event_type: unknown;
   readonly payload_json: unknown;
+  readonly message_created_at: unknown;
 }
 
 interface DeliveryAttemptInsert {

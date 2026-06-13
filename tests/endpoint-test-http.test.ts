@@ -183,6 +183,51 @@ describe('endpoint test-send HTTP route', () => {
     expect(countRows(storage, 'usage_months')).toBe(0);
   });
 
+  it('uses endpoint CloudEvents payloadFormat for signed test webhook bodies', async () => {
+    const delivered: DeliveredRequest[] = [];
+    const { address, storage, endpointId, endpointSecret } = await startSeededGateway(
+      async (url, init) => {
+        delivered.push({ url, init });
+        return { status: 204 };
+      },
+      { deliveryMethod: 'PUT', payloadFormat: 'cloud_events_1_0' },
+    );
+
+    const result = await requestJson<EndpointTestJson>(address, 'POST', `/v1/endpoints/${endpointId}/test`, TENANT_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 'inv_127', total: 1270 },
+    });
+
+    expect(result.status).toBe(200);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].init.method).toBe('PUT');
+    expect(delivered[0].init.redirect).toBe('manual');
+    const expectedBody = JSON.stringify({
+      specversion: '1.0',
+      id: result.body.test.id,
+      type: 'invoice.paid',
+      source: 'urn:posthorn',
+      time: NOW.toISOString(),
+      data: { id: 'inv_127', total: 1270 },
+    });
+    expect(delivered[0].init.body).toBe(expectedBody);
+    expect(JSON.parse(delivered[0].init.body)).toEqual({
+      specversion: '1.0',
+      id: result.body.test.id,
+      type: 'invoice.paid',
+      source: 'urn:posthorn',
+      time: NOW.toISOString(),
+      data: { id: 'inv_127', total: 1270 },
+    });
+    verifyWebhook(endpointSecret, delivered[0].init.headers, delivered[0].init.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    expect(countRows(storage, 'messages')).toBe(0);
+    expect(countRows(storage, 'deliveries')).toBe(0);
+    expect(countRows(storage, 'delivery_attempts')).toBe(0);
+    expect(countRows(storage, 'usage_months')).toBe(0);
+  });
+
   it('signs test webhooks with current and previous endpoint secrets during rotation overlap', async () => {
     const delivered: DeliveredRequest[] = [];
     const { address, storage, endpointId, endpointSecret } = await startSeededGateway(async (url, init) => {
@@ -250,7 +295,7 @@ interface DeliveredRequest {
 
 async function startSeededGateway(
   deliveryFetch: DeliveryFetch,
-  endpointInput: { readonly deliveryMethod?: 'POST' | 'PUT'; readonly payloadFormat?: 'envelope' | 'payload_only' } = {},
+  endpointInput: { readonly deliveryMethod?: 'POST' | 'PUT'; readonly payloadFormat?: 'envelope' | 'payload_only' | 'cloud_events_1_0' } = {},
 ): Promise<{
   address: GatewayAddress;
   storage: PosthornStorage;

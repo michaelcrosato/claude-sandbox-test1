@@ -55,6 +55,13 @@ describe('PosthornClient', () => {
     expect((await client.listEndpoints()).data).toEqual([created.endpoint]);
     expect(await client.getEndpoint(created.endpoint.id)).toEqual({ endpoint: created.endpoint });
 
+    const cloudEventsEndpoint = await client.createEndpoint({
+      url: 'https://example.com/hooks/sdk-cloud-events',
+      eventTypes: ['sdk.cloud'],
+      payloadFormat: 'cloud_events_1_0',
+    });
+    expect(cloudEventsEndpoint.endpoint.payloadFormat).toBe('cloud_events_1_0');
+
     const updated = await client.updateEndpoint(created.endpoint.id, {
       headers: { 'X-Trace-Id': 'sdk-updated' },
       eventTypes: null,
@@ -138,6 +145,7 @@ describe('PosthornClient', () => {
       deliveryAttempts: 1,
     });
 
+    await client.deleteEndpoint(cloudEventsEndpoint.endpoint.id);
     await client.deleteEndpoint(created.endpoint.id);
     expect((await client.listEndpoints()).data).toEqual([]);
   });
@@ -537,6 +545,10 @@ function assertClientInputTypes(): void {
     deliveryMethod: 'PUT',
     payloadFormat: 'payload_only',
   };
+  const createCloudEventsEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
+    url: 'https://example.com/hook',
+    payloadFormat: 'cloud_events_1_0',
+  };
   const updateEndpoint: Parameters<PosthornClient['updateEndpoint']>[1] = {
     rateLimitPerSecond: null,
     deliveryMethod: null,
@@ -577,6 +589,7 @@ function assertClientInputTypes(): void {
   const invalidEndpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: '7' };
   void [
     createEndpoint,
+    createCloudEventsEndpoint,
     updateEndpoint,
     endpointDeliveries,
     endpointStats,

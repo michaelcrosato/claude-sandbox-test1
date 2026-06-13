@@ -169,7 +169,7 @@ export function createOpenApiDocument(): OpenApiDocument {
           headers: { type: 'object', additionalProperties: { type: 'string' } },
           rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
           deliveryMethod: { type: 'string', enum: ['POST', 'PUT'] },
-          payloadFormat: { type: 'string', enum: ['envelope', 'payload_only'] },
+          payloadFormat: { type: 'string', enum: ['envelope', 'payload_only', 'cloud_events_1_0'] },
           enabled: { type: 'boolean' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
@@ -539,7 +539,7 @@ function endpointWriteSchema(requireUrl: boolean): OpenApiSchema {
     headers: { type: 'object', additionalProperties: { type: 'string' } },
     rateLimitPerSecond: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] },
     deliveryMethod: { anyOf: [{ type: 'string', enum: ['POST', 'PUT'] }, { type: 'null' }] },
-    payloadFormat: { anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }] },
+    payloadFormat: { anyOf: [{ type: 'string', enum: ['envelope', 'payload_only', 'cloud_events_1_0'] }, { type: 'null' }] },
     ...(requireUrl ? {} : { enabled: { type: 'boolean' } }),
   };
   return {

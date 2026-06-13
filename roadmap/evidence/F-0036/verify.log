@@ -1,0 +1,31 @@
+VERIFY-COMMIT: 67161d002b23ddc5ff37ab77b56ddf0144751f51
+
+Feature: F-0036 CloudEvents delivery payload format
+
+Pull request:
+- PR #65: https://github.com/michaelcrosato/claude-sandbox-test1/pull/65
+- GitHub CI on PR #65 head 67161d002b23ddc5ff37ab77b56ddf0144751f51:
+  - verify: pass, run 27455691848, job 81159718997, completed 2026-06-13T03:50:59Z
+  - e2e: pass, run 27455691869, job 81159719034, completed 2026-06-13T03:49:50Z
+
+Fresh reviews:
+- evaluator: PASS
+- security-reviewer: APPROVE
+
+Local checks:
+- npx vitest run tests/endpoints-http.test.ts tests/worker.test.ts tests/endpoint-test-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts (67 passed)
+- npm run typecheck
+- npm run lint
+- npm test (188 passed)
+- npm run build
+- npx ts-node scripts/update-state.ts --validate (36 features, 35 passing before final state flip)
+- git diff --check
+- npx ts-node scripts/assertion-shield.ts
+
+Notes:
+- The CloudEvents scope is intentionally limited to the closed `cloud_events_1_0` payloadFormat value. No arbitrary templates, scripts, JSONPath extraction, header mutation rules, URL rewrites, content-type customization, or non-webhook connectors were added.
+- Real delivery uses the stored message creation time for the CloudEvents `time` field. Endpoint test-send uses the diagnostic send time.
+- Standard Webhooks signing still signs the exact raw body that is sent. Tests assert exact JSON strings and tampered-body verification failures.
+- Full npm test generated clients/python/posthorn/__pycache__; it was removed after the run.
+
+VERIFY: PASS (exit 0)

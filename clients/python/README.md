@@ -12,6 +12,7 @@ endpoint = client.create_endpoint(
     event_types=["user.created"],
     rate_limit_per_second=10,
     delivery_method="PUT",
+    payload_format="cloud_events_1_0",
 )
 
 sent = client.send_message(
