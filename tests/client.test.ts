@@ -43,11 +43,13 @@ describe('PosthornClient', () => {
       eventTypes: ['sdk.created'],
       headers: { 'X-Trace-Id': 'sdk-test' },
       rateLimitPerSecond: 4,
+      deliveryMethod: 'PUT',
       payloadFormat: 'payload_only',
     });
     expect(created.endpoint.id).toMatch(/^ep_/);
     expect(created.secret).toMatch(/^whsec_/);
     expect(created.endpoint.rateLimitPerSecond).toBe(4);
+    expect(created.endpoint.deliveryMethod).toBe('PUT');
     expect(created.endpoint.payloadFormat).toBe('payload_only');
 
     expect((await client.listEndpoints()).data).toEqual([created.endpoint]);
@@ -57,6 +59,7 @@ describe('PosthornClient', () => {
       headers: { 'X-Trace-Id': 'sdk-updated' },
       eventTypes: null,
       rateLimitPerSecond: null,
+      deliveryMethod: null,
       payloadFormat: null,
       enabled: true,
     });
@@ -65,6 +68,7 @@ describe('PosthornClient', () => {
       eventTypes: null,
       headers: { 'X-Trace-Id': 'sdk-updated' },
       rateLimitPerSecond: null,
+      deliveryMethod: 'POST',
       payloadFormat: 'envelope',
       enabled: true,
     });
@@ -530,10 +534,12 @@ function assertClientInputTypes(): void {
   const createEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
     url: 'https://example.com/hook',
     rateLimitPerSecond: 1,
+    deliveryMethod: 'PUT',
     payloadFormat: 'payload_only',
   };
   const updateEndpoint: Parameters<PosthornClient['updateEndpoint']>[1] = {
     rateLimitPerSecond: null,
+    deliveryMethod: null,
     payloadFormat: null,
   };
   const endpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: 1, cursor: 'cursor' };
@@ -554,6 +560,11 @@ function assertClientInputTypes(): void {
     // @ts-expect-error endpoint payload format is a closed enum.
     payloadFormat: 'payload',
   };
+  const invalidDeliveryMethodEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
+    url: 'https://example.com/hook',
+    // @ts-expect-error endpoint delivery method is a closed enum.
+    deliveryMethod: 'PATCH',
+  };
   const invalidSendMessage: Parameters<PosthornClient['sendMessage']>[0] = {
     eventType: 'sdk.created',
     payload: { id: 1 },
@@ -572,6 +583,7 @@ function assertClientInputTypes(): void {
     sendMessage,
     invalidCreateEndpoint,
     invalidPayloadFormatEndpoint,
+    invalidDeliveryMethodEndpoint,
     invalidSendMessage,
     invalidEndpointDeliveries,
     invalidEndpointStats,

@@ -88,7 +88,7 @@ export async function sendEndpointTest(
     }, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
 
     const response = await fetchImpl(endpoint.url, {
-      method: 'POST',
+      method: endpoint.deliveryMethod,
       headers: buildDeliveryHeaders(endpoint.headers, signedHeaders),
       body: rawBody,
       redirect: 'manual',

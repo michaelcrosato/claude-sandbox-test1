@@ -14,12 +14,14 @@ export interface EndpointRecord {
   readonly eventTypes: readonly string[] | null;
   readonly headers: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond: number | null;
+  readonly deliveryMethod: EndpointDeliveryMethod;
   readonly payloadFormat: EndpointPayloadFormat;
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
+export type EndpointDeliveryMethod = 'POST' | 'PUT';
 export type EndpointPayloadFormat = 'envelope' | 'payload_only';
 
 export interface CreateEndpointResult {
@@ -85,6 +87,7 @@ export function createEndpoint(
   const eventTypes = parseEventTypes(body.eventTypes);
   const headers = parseHeaders(body.headers);
   const rateLimitPerSecond = parseRateLimitPerSecond(body.rateLimitPerSecond);
+  const deliveryMethod = parseDeliveryMethodForCreate(body.deliveryMethod);
   const payloadFormat = parsePayloadFormatForCreate(body.payloadFormat);
   const id = generateEndpointId();
   const createdAt = now.toISOString();
@@ -104,11 +107,12 @@ export function createEndpoint(
         signing_secret_key_version,
         signing_secret_nonce,
         rate_limit_per_second,
+        delivery_method,
         payload_format,
         enabled,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       id,
@@ -121,6 +125,7 @@ export function createEndpoint(
       protectedSecret.keyVersion,
       protectedSecret.nonce,
       rateLimitPerSecond,
+      deliveryMethod,
       payloadFormat,
       1,
       createdAt,
@@ -139,7 +144,7 @@ export function listEndpoints(storage: PosthornStorage, appId: string): readonly
   const rows = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, payload_format, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, delivery_method, payload_format, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ?
         ORDER BY created_at DESC, id DESC
@@ -153,7 +158,7 @@ export function getEndpoint(storage: PosthornStorage, appId: string, endpointId:
   const row = storage.db
     .prepare(
       `
-        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, payload_format, enabled, created_at, updated_at
+        SELECT id, url, event_types_json, non_secret_headers_json, rate_limit_per_second, delivery_method, payload_format, enabled, created_at, updated_at
         FROM endpoints
         WHERE app_id = ? AND id = ?
         LIMIT 1
@@ -177,6 +182,7 @@ export function getEndpointDeliveryTarget(
                event_types_json,
                non_secret_headers_json,
                rate_limit_per_second,
+               delivery_method,
                payload_format,
                enabled,
                created_at,
@@ -308,6 +314,10 @@ export function updateEndpoint(
     values.push(parseRateLimitPerSecond(body.rateLimitPerSecond));
     updates.push('rate_limit_window_started_at = NULL');
     updates.push('rate_limit_window_count = 0');
+  }
+  if (Object.hasOwn(body, 'deliveryMethod')) {
+    updates.push('delivery_method = ?');
+    values.push(parseDeliveryMethodForUpdate(body.deliveryMethod));
   }
   if (Object.hasOwn(body, 'payloadFormat')) {
     updates.push('payload_format = ?');
@@ -504,6 +514,21 @@ function parseRateLimitPerSecond(input: unknown): number | null {
   return input;
 }
 
+function parseDeliveryMethodForCreate(input: unknown): EndpointDeliveryMethod {
+  if (input === undefined || input === null) return 'POST';
+  return parseDeliveryMethod(input);
+}
+
+function parseDeliveryMethodForUpdate(input: unknown): EndpointDeliveryMethod {
+  if (input === null) return 'POST';
+  return parseDeliveryMethod(input);
+}
+
+function parseDeliveryMethod(input: unknown): EndpointDeliveryMethod {
+  if (input === 'POST' || input === 'PUT') return input;
+  throw new EndpointValidationError('invalid_request', 'deliveryMethod must be POST, PUT, or null.');
+}
+
 function parsePayloadFormatForCreate(input: unknown): EndpointPayloadFormat {
   if (input === undefined || input === null) return 'envelope';
   return parsePayloadFormat(input);
@@ -549,11 +574,16 @@ function endpointFromRow(row: EndpointRow): EndpointRecord {
     eventTypes: parseStoredEventTypes(row.event_types_json),
     headers: parseStoredHeaders(row.non_secret_headers_json),
     rateLimitPerSecond: nullableInteger(row.rate_limit_per_second),
+    deliveryMethod: parseStoredDeliveryMethod(row.delivery_method),
     payloadFormat: parseStoredPayloadFormat(row.payload_format),
     enabled: Number(row.enabled) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function parseStoredDeliveryMethod(value: unknown): EndpointDeliveryMethod {
+  return value === 'PUT' ? 'PUT' : 'POST';
 }
 
 function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
@@ -608,6 +638,7 @@ interface EndpointRow {
   readonly event_types_json: unknown;
   readonly non_secret_headers_json: unknown;
   readonly rate_limit_per_second: unknown;
+  readonly delivery_method: unknown;
   readonly payload_format: unknown;
   readonly enabled: unknown;
   readonly created_at: unknown;

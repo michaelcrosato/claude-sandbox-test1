@@ -1,0 +1,30 @@
+VERIFY-COMMIT: pending-local-before-pr
+
+Feature: F-0035 Endpoint delivery HTTP methods
+
+Pull request:
+- Pending.
+
+Fresh reviews:
+- evaluator: NEEDS_WORK on first pass for missing tests around create-null default and PATCH omitted-unchanged behavior; fixed with added endpoint HTTP assertions and reran the local gate.
+- evaluator: PASS on second pass.
+- security-reviewer: APPROVE
+
+Local checks:
+- npx vitest run tests/storage.test.ts tests/endpoints-http.test.ts tests/worker.test.ts tests/endpoint-test-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts (73 passed)
+- npm run typecheck
+- npm run lint
+- npm test (186 passed)
+- npm run build
+- npx ts-node scripts/update-state.ts --validate (35 features, 34 passing before final state flip)
+- git diff --check
+- npx ts-node scripts/assertion-shield.ts
+
+Notes:
+- The delivery method scope is intentionally limited to POST and PUT. No arbitrary HTTP methods, request templates, URL rewrites, content-type customization, header mutation rules, or non-webhook connectors were added.
+- Real delivery and endpoint test-send both keep the selected raw body, Standard Webhooks signature over that exact body, JSON content type, custom non-secret headers, manual redirect handling, and existing URL safety behavior.
+- Full npm test generated clients/python/posthorn/__pycache__; it was removed after the run.
+- After the first evaluator review, tests/endpoints-http.test.ts now explicitly covers create with deliveryMethod:null defaulting to POST and PATCH requests that omit deliveryMethod preserving an existing PUT value.
+- The first commit attempt was blocked by assertion-shield because a storage assertion line had been strengthened in place. The original payload-format assertion was restored and the delivery-method assertion was added alongside it; the full local gate was rerun afterward.
+
+VERIFY: PASS (exit 0)

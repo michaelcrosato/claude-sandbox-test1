@@ -76,6 +76,7 @@ describe('endpoint test-send HTTP route', () => {
     });
     expect(delivered).toHaveLength(1);
     expect(delivered[0].url).toBe('https://example.com/hooks/test');
+    expect(delivered[0].init.method).toBe('POST');
     expect(delivered[0].init.redirect).toBe('manual');
     expect(delivered[0].init.headers['X-Customer']).toBe('acme');
     expect(delivered[0].init.headers['content-type']).toBe('application/json; charset=utf-8');
@@ -148,6 +149,40 @@ describe('endpoint test-send HTTP route', () => {
     });
   });
 
+  it('uses endpoint deliveryMethod for signed test webhooks without durable mutation', async () => {
+    const delivered: DeliveredRequest[] = [];
+    const { address, storage, endpointId, endpointSecret } = await startSeededGateway(
+      async (url, init) => {
+        delivered.push({ url, init });
+        return { status: 204 };
+      },
+      { deliveryMethod: 'PUT', payloadFormat: 'payload_only' },
+    );
+
+    const result = await requestJson<EndpointTestJson>(address, 'POST', `/v1/endpoints/${endpointId}/test`, TENANT_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 'inv_126', total: 1260 },
+    });
+
+    expect(result.status).toBe(200);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].init.method).toBe('PUT');
+    expect(delivered[0].init.redirect).toBe('manual');
+    expect(delivered[0].init.body).toBe(JSON.stringify({ id: 'inv_126', total: 1260 }));
+    verifyWebhook(endpointSecret, delivered[0].init.headers, delivered[0].init.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    expect(() =>
+      verifyWebhook(endpointSecret, delivered[0].init.headers, `${delivered[0].init.body}\n`, {
+        nowSeconds: Math.floor(NOW.getTime() / 1000),
+      }),
+    ).toThrow();
+    expect(countRows(storage, 'messages')).toBe(0);
+    expect(countRows(storage, 'deliveries')).toBe(0);
+    expect(countRows(storage, 'delivery_attempts')).toBe(0);
+    expect(countRows(storage, 'usage_months')).toBe(0);
+  });
+
   it('signs test webhooks with current and previous endpoint secrets during rotation overlap', async () => {
     const delivered: DeliveredRequest[] = [];
     const { address, storage, endpointId, endpointSecret } = await startSeededGateway(async (url, init) => {
@@ -215,7 +250,7 @@ interface DeliveredRequest {
 
 async function startSeededGateway(
   deliveryFetch: DeliveryFetch,
-  endpointInput: { readonly payloadFormat?: 'envelope' | 'payload_only' } = {},
+  endpointInput: { readonly deliveryMethod?: 'POST' | 'PUT'; readonly payloadFormat?: 'envelope' | 'payload_only' } = {},
 ): Promise<{
   address: GatewayAddress;
   storage: PosthornStorage;

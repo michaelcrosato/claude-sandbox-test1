@@ -36,6 +36,7 @@ describe('posthorn client CLI', () => {
     expect(exitCode).toBe(0);
     expect(io.stdout).toContain('posthorn client create-endpoint');
     expect(io.stdout).toContain('--rate-limit-per-second');
+    expect(io.stdout).toContain('--delivery-method');
     expect(io.stdout).toContain('--payload-format');
     expect(io.stdout).toContain('--deduplication-key');
     expect(io.stdout).toContain('POSTHORN_URL');
@@ -65,6 +66,8 @@ describe('posthorn client CLI', () => {
         'cli.created',
         '--rate-limit-per-second',
         '2',
+        '--delivery-method',
+        'PUT',
         '--payload-format',
         'payload_only',
       ],
@@ -77,6 +80,7 @@ describe('posthorn client CLI', () => {
         readonly url: string;
         readonly eventTypes: readonly string[] | null;
         readonly rateLimitPerSecond: number | null;
+        readonly deliveryMethod: string;
         readonly payloadFormat: string;
       };
       readonly secret: string;
@@ -85,6 +89,7 @@ describe('posthorn client CLI', () => {
       url: 'https://example.com/hooks/cli',
       eventTypes: ['cli.created'],
       rateLimitPerSecond: 2,
+      deliveryMethod: 'PUT',
       payloadFormat: 'payload_only',
     });
     expect(created.secret).toMatch(/^whsec_/);
@@ -152,6 +157,14 @@ describe('posthorn client CLI', () => {
     expect(malformedPayloadFormat.exitCode).toBe(1);
     expect(malformedPayloadFormat.stderr).toContain('--payload-format requires envelope or payload_only.');
     expect(malformedPayloadFormat.stderr).not.toContain(TENANT_KEY);
+
+    const malformedDeliveryMethod = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--delivery-method', 'PATCH'],
+      env,
+    );
+    expect(malformedDeliveryMethod.exitCode).toBe(1);
+    expect(malformedDeliveryMethod.stderr).toContain('--delivery-method requires POST or PUT.');
+    expect(malformedDeliveryMethod.stderr).not.toContain(TENANT_KEY);
 
     const malformedDeduplicationWindow = await runCli(
       ['client', 'send', 'cli.created', '{"id":42}', '--deduplication-key', 'cli-42', '--deduplication-window-seconds', 'abc'],
