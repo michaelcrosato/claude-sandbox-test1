@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-⚠️ PR #61 checks are running. The latest local product checks passed with 174 tests.
+✅ Automated checks passed on PR #61. The latest local product checks passed with 174 tests.
