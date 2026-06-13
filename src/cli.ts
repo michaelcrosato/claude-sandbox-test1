@@ -123,7 +123,7 @@ async function runClientCommand(
       writeJson(streams.stdout, (await client.getUsage()).usage);
       return 0;
     default:
-      throw new CliUsageError(`Unknown command: ${command}. Run "posthorn client help".`);
+      throw new CliUsageError('Unknown command. Run "posthorn client help".');
   }
 }
 
@@ -181,7 +181,7 @@ async function runAdminCommand(
       return 0;
     }
     default:
-      throw new CliUsageError(`Unknown admin command: ${command}. Run "posthorn admin help".`);
+      throw new CliUsageError('Unknown admin command. Run "posthorn admin help".');
   }
 }
 
@@ -273,7 +273,7 @@ function parseAdminAppOptions(
       index += 1;
       continue;
     }
-    throw new CliUsageError(`Unknown option for ${command}: ${arg ?? ''}.`);
+    throw new CliUsageError(`Unknown option for ${command}.`);
   }
 }
 
@@ -312,7 +312,7 @@ function parseRotateSystemSecretArgs(args: readonly string[]): {
       index += 1;
       continue;
     }
-    throw new CliUsageError(`Unknown option for rotate-system-secret: ${arg ?? ''}.`);
+    throw new CliUsageError('Unknown option for rotate-system-secret.');
   }
 
   return { appId, input };
@@ -337,7 +337,7 @@ function parseSendArgs(args: readonly string[]): {
       continue;
     }
     if (arg?.startsWith('--') === true) {
-      throw new CliUsageError(`Unknown option: ${arg}.`);
+      throw new CliUsageError('Unknown option.');
     }
     if (arg !== undefined) operands.push(arg);
   }

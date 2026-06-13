@@ -222,6 +222,16 @@ describe('posthorn client CLI', () => {
     expect(missingUpdateFields.stderr).toContain('update-app requires --name or --monthly-message-quota.');
     expect(missingUpdateFields.stderr).not.toContain(ADMIN_TOKEN);
 
+    const tokenAsCommand = await runCli(['admin', ADMIN_TOKEN], env);
+    expect(tokenAsCommand.exitCode).toBe(1);
+    expect(tokenAsCommand.stderr).toContain('Unknown admin command.');
+    expect(tokenAsCommand.stderr).not.toContain(ADMIN_TOKEN);
+
+    const tokenAsOption = await runCli(['admin', 'update-app', 'app_missing', ADMIN_TOKEN], env);
+    expect(tokenAsOption.exitCode).toBe(1);
+    expect(tokenAsOption.stderr).toContain('Unknown option for update-app.');
+    expect(tokenAsOption.stderr).not.toContain(ADMIN_TOKEN);
+
     const malformedOverlap = await runCli(['admin', 'rotate-system-secret', 'app_missing', '--overlap-seconds', 'abc'], env);
     expect(malformedOverlap.exitCode).toBe(1);
     expect(malformedOverlap.stderr).toContain('--overlap-seconds requires a non-negative safe integer.');
@@ -232,6 +242,11 @@ describe('posthorn client CLI', () => {
     const key = JSON.parse((await runCli(['admin', 'create-key', app.app.id], env)).stdout) as {
       readonly secret: string;
     };
+    const secretAsOption = await runCli(['admin', 'rotate-system-secret', app.app.id, key.secret], env);
+    expect(secretAsOption.exitCode).toBe(1);
+    expect(secretAsOption.stderr).toContain('Unknown option for rotate-system-secret.');
+    expect(secretAsOption.stderr).not.toContain(key.secret);
+
     const apiError = await runCli(['admin', 'get-app', app.app.id], {
       POSTHORN_URL: address.url,
       POSTHORN_ADMIN_TOKEN: 'wrong-admin-token',
