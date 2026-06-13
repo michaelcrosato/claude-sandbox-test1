@@ -253,11 +253,11 @@ try {
 }
 ```
 
-### Command-line client
+### Command-line clients
 
-The same tenant surface, from your shell or a CI job — no code. `posthorn client`
-talks to a (possibly remote) gateway over HTTP using a normal API key; it is the
-no-code counterpart to the SDK above. Point it at the gateway with two environment variables:
+The same tenant and control-plane surfaces, from your shell or a CI job — no code.
+`posthorn client` talks to a gateway with a tenant API key; the admin namespace uses
+the control-plane token and is disabled unless the server has `POSTHORN_ADMIN_TOKEN` set.
 
 ```bash
 export POSTHORN_URL=https://posthorn.acme.example   # the gateway base URL
@@ -269,6 +269,18 @@ posthorn client list-endpoints | jq '.[].url'        # read commands print JSON 
 posthorn client get-message msg_...                  # delivery status for a message
 posthorn client usage                                # quota for the current period
 posthorn client help                                 # full command list
+
+export POSTHORN_ADMIN_TOKEN=...                      # the control-plane token
+posthorn \
+  admin create-app Acme --monthly-message-quota 100000
+posthorn \
+  admin create-key app_... Production                  # API key secret printed ONCE
+posthorn \
+  admin usage app_...                                  # billing usage for one tenant
+posthorn \
+  admin rotate-system-secret app_... --overlap-seconds 3600
+posthorn \
+  admin help
 ```
 
 Commands print JSON to stdout, including one-time secrets returned by mutating calls.

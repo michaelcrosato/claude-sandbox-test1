@@ -45,7 +45,7 @@ export type {
 } from './client';
 export { POSTHORN_ADMIN_CLIENT_ROUTES, POSTHORN_CLIENT_ROUTES, PosthornAdminClient, PosthornApiError, PosthornClient } from './client';
 export type { CliOptions, CliStreams } from './cli';
-export { POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
+export { POSTHORN_ADMIN_CLI_ROUTES, POSTHORN_CLI_ROUTES, runPosthornCli } from './cli';
 export type {
   CreateEndpointResult,
   EndpointDeliveryTarget,

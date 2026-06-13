@@ -25,7 +25,7 @@
 - Consumer portal session minting (`POST /v1/portal/sessions`) and event-type catalog (`/v1/event-types`).
 - OpenAPI 3.1 contract (`GET /openapi.json`) — machine-readable spec for client codegen.
 - TypeScript SDK (`PosthornClient`) and Python SDK (`clients/python`) — both tested against the live `/openapi.json` so they cannot drift.
-- CLI clients (`posthorn client` and `posthorn admin`) — no-code equivalents for shell/CI use.
+- ✅ shipped (PR #57) CLI clients (`posthorn client` and `posthorn admin`) — no-code equivalents for shell/CI use.
 - Prometheus metrics endpoint (`GET /metrics`) and Grafana dashboard / alerting rules.
 - Browser dashboard (`/dashboard`) for admin panel and tenant panel (message history, delivery statuses, audit log).
 - Helm chart, Docker Compose production reference, and PostgreSQL backend for scale-out.
