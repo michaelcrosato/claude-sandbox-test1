@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0028 done (Admin command-line client)
+
+**What:** Added the `posthorn admin` command-line namespace for common control-plane work. Operators can now create/list/read/update/delete tenant apps, create/list/revoke API keys, read app usage, and rotate app system signing secrets from shell or CI with JSON output.
+
+**Verified:** GitHub CI passed `verify` and `e2e`; evidence saved at `roadmap/evidence/F-0028/verify.log`. Evaluator returned NEEDS_WORK for `create-key app --bogus` being treated as an API-key name and minting a secret, then PASS after option-like names were rejected before API calls. Security reviewer returned NEEDS_WORK for malformed CLI errors echoing raw argv values, then APPROVE after unknown command/option errors stopped reflecting tokens or one-time secrets. Local checks passed: `npx vitest run tests/cli.test.ts tests/deployment-artifacts.test.ts` (11 tests), `npm run typecheck`, `npm test` (157 tests), `npm run lint`, `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** CLI usage errors are a credential surface because operators may paste tokens or one-time secrets into the wrong position. The admin CLI now avoids echoing unknown commands/options, and tests pass both admin tokens and generated API keys through malformed argv to prove stderr stays clean. Local `bash scripts/verify.sh` still fails only in the known Windows Git Bash hook-fixture environment where native `node` is unavailable; Ubuntu CI is authoritative and passed.
+
+**Next step:** Push the evidence/state record, mark PR #57 ready, then merge.
+
+---
+
 ## 2026-06-12 — F-0027 done (Admin app system secret rotation)
 
 **What:** Added admin-controlled app system signing secret rotation. Operators can rotate an app-level `whsec_` secret through the HTTP API and TypeScript admin client; the raw secret is returned only once, protected storage metadata stays out of read/list/update responses, and previous secret metadata is retained for a bounded overlap window.
