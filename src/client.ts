@@ -13,6 +13,7 @@ import type {
 import type { EndpointTestResult } from './endpoint-tests';
 import type {
   CreateEndpointResult,
+  EndpointDeliveryMethod,
   EndpointPayloadFormat,
   EndpointRecord,
   RotateEndpointSecretInput,
@@ -68,6 +69,7 @@ export interface CreateEndpointInput {
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond?: number | null;
+  readonly deliveryMethod?: EndpointDeliveryMethod | null;
   readonly payloadFormat?: EndpointPayloadFormat | null;
 }
 
@@ -76,6 +78,7 @@ export interface UpdateEndpointInput {
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond?: number | null;
+  readonly deliveryMethod?: EndpointDeliveryMethod | null;
   readonly payloadFormat?: EndpointPayloadFormat | null;
   readonly enabled?: boolean;
 }

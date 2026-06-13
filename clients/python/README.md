@@ -11,6 +11,7 @@ endpoint = client.create_endpoint(
     url="https://acme.example/webhooks/posthorn",
     event_types=["user.created"],
     rate_limit_per_second=10,
+    delivery_method="PUT",
 )
 
 sent = client.send_message(

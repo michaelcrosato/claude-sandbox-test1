@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
   rate_limit_per_second INTEGER,
   rate_limit_window_started_at TEXT,
   rate_limit_window_count INTEGER NOT NULL DEFAULT 0,
+  delivery_method TEXT NOT NULL DEFAULT 'POST',
   payload_format TEXT NOT NULL DEFAULT 'envelope',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -205,6 +206,7 @@ export function initializeSchema(db: DatabaseSync): void {
   migrateAppSystemSecretColumns(db);
   migrateEndpointSecretRotationColumns(db);
   migrateEndpointRateLimitColumns(db);
+  migrateEndpointDeliveryMethodColumns(db);
   migrateEndpointPayloadFormatColumns(db);
   migrateMessageDeduplicationColumns(db);
 }
@@ -267,6 +269,22 @@ function migrateEndpointPayloadFormatColumns(db: DatabaseSync): void {
   );
 
   for (const column of ENDPOINT_PAYLOAD_FORMAT_COLUMNS) {
+    if (!columns.has(column.name)) {
+      db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
+    }
+  }
+}
+
+function migrateEndpointDeliveryMethodColumns(db: DatabaseSync): void {
+  const columns = new Set(
+    (
+      db.prepare('PRAGMA table_info(endpoints)').all() as Array<{
+        readonly name: unknown;
+      }>
+    ).map((row) => String(row.name)),
+  );
+
+  for (const column of ENDPOINT_DELIVERY_METHOD_COLUMNS) {
     if (!columns.has(column.name)) {
       db.exec(`ALTER TABLE endpoints ADD COLUMN ${column.definition}`);
     }
@@ -364,6 +382,13 @@ const ENDPOINT_PAYLOAD_FORMAT_COLUMNS = [
   {
     name: 'payload_format',
     definition: "payload_format TEXT NOT NULL DEFAULT 'envelope'",
+  },
+] as const;
+
+const ENDPOINT_DELIVERY_METHOD_COLUMNS = [
+  {
+    name: 'delivery_method',
+    definition: "delivery_method TEXT NOT NULL DEFAULT 'POST'",
   },
 ] as const;
 

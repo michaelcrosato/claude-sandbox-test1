@@ -30,6 +30,7 @@ const tempDirs: string[] = [];
 let historicalDeliverySequence = 0;
 
 interface RecordedRequest {
+  readonly method: string;
   readonly headers: IncomingHttpHeaders;
   readonly body: string;
 }
@@ -83,6 +84,7 @@ describe('delivery worker', () => {
     let endpointSecret = '';
     let expectedMessageId = '';
     const receiver = await startReceiver((request) => {
+      expect(request.method).toBe('POST');
       verifyWebhook(endpointSecret, request.headers, request.body, {
         nowSeconds: Math.floor(NOW.getTime() / 1000),
       });
@@ -154,6 +156,42 @@ describe('delivery worker', () => {
     verifyWebhook(endpoint.secret, captured.request.headers, captured.request.body, {
       nowSeconds: Math.floor(NOW.getTime() / 1000),
     });
+    expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
+  });
+
+  it('uses endpoint deliveryMethod while signing the exact selected body', async () => {
+    const storage = makeStorage();
+    const endpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/put-payload-only', {
+      eventTypes: ['user.put_payload_only'],
+      deliveryMethod: 'PUT',
+      payloadFormat: 'payload_only',
+    });
+    const message = acceptMessage(storage, APP_ID, {
+      eventType: 'user.put_payload_only',
+      payload: { id: 44, nested: { ok: true } },
+    });
+    const captured = createCapturingFetch();
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: captured.fetch,
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(captured.request).not.toBeNull();
+    if (captured.request === null) throw new Error('Expected captured delivery request.');
+    const request = captured.request;
+    expect(request.method).toBe('PUT');
+    expect(request.redirect).toBe('manual');
+    expect(request.body).toBe(JSON.stringify({ id: 44, nested: { ok: true } }));
+    verifyWebhook(endpoint.secret, request.headers, request.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+    expect(() =>
+      verifyWebhook(endpoint.secret, request.headers, `${request.body}\n`, {
+        nowSeconds: Math.floor(NOW.getTime() / 1000),
+      }),
+    ).toThrow(WebhookVerificationError);
     expect(readDelivery(storage, message.fanout.deliveryIds[0]).status).toBe('succeeded');
   });
 
@@ -647,7 +685,7 @@ describe('delivery worker', () => {
       status: 307,
       headers: { Location: redirectedTarget.url },
     }));
-    createLocalEndpoint(storage, redirectingReceiver.url);
+    createLocalEndpoint(storage, redirectingReceiver.url, { deliveryMethod: 'PUT' });
     const message = acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 8 } });
     const deliveryId = message.fanout.deliveryIds[0];
 
@@ -658,6 +696,7 @@ describe('delivery worker', () => {
 
     expect(summary).toEqual({ claimed: 1, succeeded: 0, failed: 1, deadLettered: 0 });
     expect(redirectingReceiver.requests).toHaveLength(1);
+    expect(redirectingReceiver.requests[0]?.method).toBe('PUT');
     expect(redirectedTarget.requests).toEqual([]);
     expect(readDelivery(storage, deliveryId)).toMatchObject({
       status: 'pending',
@@ -814,6 +853,7 @@ function createLocalEndpoint(
     readonly eventTypes?: readonly string[];
     readonly headers?: Readonly<Record<string, string>>;
     readonly rateLimitPerSecond?: number | null;
+    readonly deliveryMethod?: 'POST' | 'PUT' | null;
     readonly payloadFormat?: 'envelope' | 'payload_only' | null;
   } = {},
 ): ReturnType<typeof createEndpoint> {
@@ -827,17 +867,19 @@ function createLocalEndpoint(
 
 function createCapturingFetch(): {
   readonly fetch: DeliveryFetch;
-  request: { readonly headers: Readonly<Record<string, string>>; readonly body: string } | null;
+  request: { readonly method: string; readonly headers: Readonly<Record<string, string>>; readonly body: string; readonly redirect: string } | null;
 } {
   const captured: {
     readonly fetch: DeliveryFetch;
-    request: { readonly headers: Readonly<Record<string, string>>; readonly body: string } | null;
+    request: { readonly method: string; readonly headers: Readonly<Record<string, string>>; readonly body: string; readonly redirect: string } | null;
   } = {
     request: null,
     fetch: async (_url, init) => {
       captured.request = {
+        method: init.method,
         headers: init.headers,
         body: init.body,
+        redirect: init.redirect,
       };
       return { status: 204 };
     },
@@ -858,6 +900,7 @@ async function startReceiver(
     request.on('end', () => {
       void (async () => {
         const recorded = {
+          method: request.method ?? '',
           headers: request.headers,
           body: Buffer.concat(chunks).toString('utf8'),
         };

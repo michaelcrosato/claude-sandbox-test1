@@ -1493,6 +1493,50 @@
         "roadmap/STATUS.md"
       ],
       "priority": 1
+    },
+    {
+      "dependencies": [
+        "F-0033"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0035/verify.log"
+      ],
+      "attempts": 1,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**"
+      ],
+      "id": "F-0035",
+      "epic": "delivery-transformations",
+      "title": "Endpoint delivery HTTP methods",
+      "spec_ref": "docs/PARITY.md#posthorn-gaps",
+      "description": "Add a safe endpoint-level delivery method option so tenants can send webhook deliveries as POST or PUT without arbitrary method, URL, header, or body transformations. This closes another narrow part of the payload-transformation parity gap while preserving existing signing, payload-format, redirect, and SSRF behavior.",
+      "acceptance": [
+        "Endpoint create and update accept an optional deliveryMethod value of POST or PUT, default existing and new endpoints to POST, allow null on update to reset to POST, and reject malformed values with invalid_request.",
+        "Endpoint read/list responses, OpenAPI, TypeScript SDK, tenant CLI, Python SDK, and README document the deliveryMethod field without claiming arbitrary transformations or non-webhook connectors are supported.",
+        "The delivery worker uses each endpoint's deliveryMethod for HTTP sends while preserving the selected payloadFormat body, Standard Webhooks signature over the exact raw body, JSON content type, custom non-secret headers, manual redirect handling, and existing retry behavior.",
+        "Endpoint test-send uses the same deliveryMethod and payloadFormat behavior as real deliveries and reports synchronous result metadata without persisting message, delivery, usage, or attempt rows.",
+        "Tests cover storage migration, endpoint create/update validation and serialization, worker method/body/signature behavior, endpoint test-send method behavior, client/CLI/Python propagation, OpenAPI contract, README docs, and parity matrix wording."
+      ],
+      "authorized_paths": [
+        "src/**",
+        "clients/python/**",
+        "tests/**",
+        "README.md",
+        "docs/PARITY.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0035.md",
+        "roadmap/evidence/F-0035/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

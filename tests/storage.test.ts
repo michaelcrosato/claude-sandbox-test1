@@ -63,6 +63,7 @@ describe('openStorage', () => {
       expect(columns).toContain('rate_limit_per_second');
       expect(columns).toContain('rate_limit_window_started_at');
       expect(columns).toContain('rate_limit_window_count');
+      expect(columns).toContain('delivery_method');
       expect(columns).toContain('payload_format');
       expect(columns).not.toContain('headers_json');
       expect(columns).not.toContain('signing_secret_hash');
@@ -174,6 +175,7 @@ describe('openStorage', () => {
       expect(columns.filter((name) => name === 'rate_limit_per_second')).toHaveLength(1);
       expect(columns.filter((name) => name === 'rate_limit_window_started_at')).toHaveLength(1);
       expect(columns.filter((name) => name === 'rate_limit_window_count')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'delivery_method')).toHaveLength(1);
       expect(columns.filter((name) => name === 'payload_format')).toHaveLength(1);
     } finally {
       db.close();
@@ -235,8 +237,12 @@ describe('openStorage', () => {
         .all()
         .map((row) => String(row.name));
       expect(columns.filter((name) => name === 'payload_format')).toHaveLength(1);
+      expect(columns.filter((name) => name === 'delivery_method')).toHaveLength(1);
       expect(db.prepare('SELECT payload_format FROM endpoints WHERE id = ?').get('ep_legacy')).toEqual({
         payload_format: 'envelope',
+      });
+      expect(db.prepare('SELECT delivery_method FROM endpoints WHERE id = ?').get('ep_legacy')).toEqual({
+        delivery_method: 'POST',
       });
     } finally {
       db.close();

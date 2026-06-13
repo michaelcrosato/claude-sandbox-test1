@@ -34,7 +34,7 @@ export const POSTHORN_ADMIN_CLI_ROUTES: readonly ClientRouteMapping[] = Object.f
 ]);
 
 const CLIENT_HELP = `Usage:
-  posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>] [--payload-format envelope|payload_only]
+  posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>] [--delivery-method POST|PUT] [--payload-format envelope|payload_only]
   posthorn client send <eventType> <jsonPayload> [--idempotency-key <key>] [--deduplication-key <key>] [--deduplication-window-seconds <integer>]
   posthorn client list-endpoints
   posthorn client get-message <messageId>
@@ -215,6 +215,7 @@ function parseCreateEndpointArgs(args: readonly string[]): {
   readonly url: string;
   readonly eventTypes?: readonly string[];
   readonly rateLimitPerSecond?: number;
+  readonly deliveryMethod?: 'POST' | 'PUT';
   readonly payloadFormat?: 'envelope' | 'payload_only';
 } {
   const [url, ...eventTypes] = args;
@@ -226,6 +227,7 @@ function parseCreateEndpointArgs(args: readonly string[]): {
     url: string;
     eventTypes?: string[];
     rateLimitPerSecond?: number;
+    deliveryMethod?: 'POST' | 'PUT';
     payloadFormat?: 'envelope' | 'payload_only';
   } = { url };
   const parsedEventTypes: string[] = [];
@@ -239,6 +241,14 @@ function parseCreateEndpointArgs(args: readonly string[]): {
         optionValue('create-endpoint', arg, eventTypes[index + 1]),
         arg,
       );
+      index += 1;
+      continue;
+    }
+    if (arg === '--delivery-method') {
+      if (input.deliveryMethod !== undefined) {
+        throw new CliUsageError('create-endpoint accepts --delivery-method once.');
+      }
+      input.deliveryMethod = parseDeliveryMethodOption(optionValue('create-endpoint', arg, eventTypes[index + 1]));
       index += 1;
       continue;
     }
@@ -263,6 +273,11 @@ function parseCreateEndpointArgs(args: readonly string[]): {
 function parsePayloadFormatOption(input: string): 'envelope' | 'payload_only' {
   if (input === 'envelope' || input === 'payload_only') return input;
   throw new CliUsageError('--payload-format requires envelope or payload_only.');
+}
+
+function parseDeliveryMethodOption(input: string): 'POST' | 'PUT' {
+  if (input === 'POST' || input === 'PUT') return input;
+  throw new CliUsageError('--delivery-method requires POST or PUT.');
 }
 
 function parseCreateAppArgs(args: readonly string[]): {

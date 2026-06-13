@@ -15,7 +15,7 @@ by SQLite by default, durable queue built in, zero runtime dependencies.
 This checkout is in the product-foundation phase: it has the public TypeScript entry point,
 configuration loading, SQLite storage initialization, health/readiness HTTP endpoints, Standard
 Webhooks signing/verification utilities, tenant endpoint CRUD, message intake with pending fanout
-queue creation, endpoint delivery throttling, endpoint payload formats, message deduplication windows, idempotent message retries, the importable retry delivery worker, the per-attempt
+queue creation, endpoint delivery throttling, endpoint delivery methods, endpoint payload formats, message deduplication windows, idempotent message retries, the importable retry delivery worker, the per-attempt
 audit log route, admin tenant/API-key provisioning, current-month usage metering with quota enforcement,
 batch message intake, Python SDK, build, lint, and test wiring. The API, SDK, dashboard, and deployment sections
 below describe the implemented Posthorn product contract being built through `roadmap/features.json`.
@@ -78,6 +78,8 @@ Key capabilities:
   guaranteed via a leased, store-backed queue (no Redis)
 - **Endpoint delivery throttling** — optional per-endpoint `rateLimitPerSecond` smooths
   webhook spikes while excess deliveries stay queued
+- **Endpoint delivery methods** — default to `POST`, or set `deliveryMethod: "PUT"`
+  when a receiver expects signed webhook bodies over `PUT`
 - **Endpoint payload formats** — keep Posthorn's default delivery envelope, or set
   `payloadFormat: "payload_only"` when a receiver expects the original JSON payload as the
   signed request body
@@ -112,9 +114,9 @@ Key capabilities:
 | POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
 | GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
 | GET | `/v1/endpoints` | Bearer | implemented | List endpoints. |
-| POST | `/v1/endpoints` | Bearer | implemented | Create an endpoint (`201`; signing secret shown once; optional `rateLimitPerSecond` and `payloadFormat`). |
+| POST | `/v1/endpoints` | Bearer | implemented | Create an endpoint (`201`; signing secret shown once; optional `rateLimitPerSecond`, `deliveryMethod`, and `payloadFormat`). |
 | GET | `/v1/endpoints/:id` | Bearer | implemented | Fetch one endpoint. |
-| PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint, including clearing `rateLimitPerSecond` with `null` or resetting `payloadFormat` with `null`. |
+| PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint, including clearing `rateLimitPerSecond` with `null` or resetting `deliveryMethod` / `payloadFormat` with `null`. |
 | DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
 | POST | `/v1/endpoints/:id/rotate-secret` | Bearer | implemented | Rotate signing secret (`201`; new secret shown once, previous secret signs during overlap). |
 | POST | `/v1/endpoints/:id/test` | Bearer | implemented | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
@@ -179,6 +181,7 @@ const endpoint = await client.createEndpoint({
   eventTypes: ["user.created"], // omit / null = all events
   headers: { "X-API-Key": "my-receiver-api-key" }, // custom delivery headers (optional)
   rateLimitPerSecond: 10, // optional delivery throttle for this receiver
+  deliveryMethod: "PUT", // optional: default is POST
   payloadFormat: "payload_only", // optional: deliver payload JSON directly instead of the envelope
 });
 
@@ -276,6 +279,7 @@ export POSTHORN_API_KEY=phk_...                      # a key from the admin API
 
 posthorn client create-endpoint https://acme.example/hook user.created \
   --rate-limit-per-second 10 \
+  --delivery-method PUT \
   --payload-format payload_only                    # secret printed ONCE
 posthorn client send user.created '{"id":42}' \
   --deduplication-key user.created:42 \
@@ -318,6 +322,7 @@ endpoint = client.create_endpoint(
     url="https://acme.example/hook",
     event_types=["user.created"],
     rate_limit_per_second=10,
+    delivery_method="PUT",
     payload_format="payload_only",
 )
 

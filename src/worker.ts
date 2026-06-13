@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import type { WorkerConfig } from './config';
+import type { EndpointDeliveryMethod, EndpointPayloadFormat } from './endpoints';
 import { revealEndpointSecret, SecretProtectionError } from './secret-protection';
 import type { PosthornStorage } from './storage';
 import { incrementDeliveryAttemptsForDelivery } from './usage';
@@ -41,7 +42,7 @@ export interface DeliveryWorker {
 }
 
 interface DeliveryFetchInit {
-  readonly method: 'POST';
+  readonly method: EndpointDeliveryMethod;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
   readonly redirect: 'manual';
@@ -264,6 +265,7 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
              deliveries.lease_expires_at,
              endpoints.url,
              endpoints.non_secret_headers_json,
+             endpoints.delivery_method,
              endpoints.payload_format,
              endpoints.signing_secret_ciphertext,
              endpoints.signing_secret_key_version,
@@ -460,7 +462,7 @@ async function sendDelivery(
     }, options.requestTimeoutMs);
 
     const response = await options.fetch(task.url, {
-      method: 'POST',
+      method: task.deliveryMethod,
       headers,
       body: rawBody,
       redirect: 'manual',
@@ -825,6 +827,7 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
     leaseExpiresAt: String(row.lease_expires_at),
     url: String(row.url),
     headers: parseStoredHeaders(row.non_secret_headers_json),
+    deliveryMethod: parseStoredDeliveryMethod(row.delivery_method),
     payloadFormat: parseStoredPayloadFormat(row.payload_format),
     signingSecretCiphertext: String(row.signing_secret_ciphertext),
     signingSecretKeyVersion: String(row.signing_secret_key_version),
@@ -841,6 +844,10 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
 
 function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
   return value === 'payload_only' ? 'payload_only' : 'envelope';
+}
+
+function parseStoredDeliveryMethod(value: unknown): EndpointDeliveryMethod {
+  return value === 'PUT' ? 'PUT' : 'POST';
 }
 
 function nullableString(value: unknown): string | null {
@@ -896,6 +903,7 @@ interface ClaimedDelivery {
   readonly leaseExpiresAt: string;
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
+  readonly deliveryMethod: EndpointDeliveryMethod;
   readonly payloadFormat: EndpointPayloadFormat;
   readonly signingSecretCiphertext: string;
   readonly signingSecretKeyVersion: string;
@@ -939,6 +947,7 @@ interface ClaimedDeliveryRow {
   readonly lease_expires_at: unknown;
   readonly url: unknown;
   readonly non_secret_headers_json: unknown;
+  readonly delivery_method: unknown;
   readonly payload_format: unknown;
   readonly signing_secret_ciphertext: unknown;
   readonly signing_secret_key_version: unknown;
@@ -951,8 +960,6 @@ interface ClaimedDeliveryRow {
   readonly event_type: unknown;
   readonly payload_json: unknown;
 }
-
-type EndpointPayloadFormat = 'envelope' | 'payload_only';
 
 interface DeliveryAttemptInsert {
   readonly deliveryId: string;

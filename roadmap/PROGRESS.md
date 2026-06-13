@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0035 done (Endpoint delivery HTTP methods)
+
+**What:** Added endpoint-level `deliveryMethod` support. Endpoints default to `POST` and can opt into `PUT`; create with `null` also defaults to `POST`, update with `null` resets to `POST`, and updates that omit the field keep the current value. Real deliveries and endpoint test-send now use the stored method while preserving payload-format body selection, Standard Webhooks signing over the exact raw body, JSON content type, custom non-secret headers, manual redirects, and existing URL safety behavior.
+
+**Verified:** Evidence saved at `roadmap/evidence/F-0035/verify.log`. Evaluator returned NEEDS_WORK for missing create-null and omitted-update coverage, then PASS after those assertions were added. Security reviewer returned APPROVE. Local checks passed: `npx vitest run tests/storage.test.ts tests/endpoints-http.test.ts tests/worker.test.ts tests/endpoint-test-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts` (73 tests), `npm run typecheck`, `npm run lint`, `npm test` (186 tests), `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** The implementation was straightforward, but the evaluator caught that the contract needed explicit tests for `deliveryMethod: null` on create and preserving a `PUT` method when later patches omit the field. The feature stays intentionally narrow: only `POST` and `PUT`, with no arbitrary methods, templates, URL rewrites, content-type changes, header mutation rules, or non-webhook connectors.
+
+**Next step:** Push the PR/CI evidence record, wait for PR #64 checks again, then mark it ready and merge on green.
+
+---
+
 ## 2026-06-12 — F-0034 done (Message deduplication windows)
 
 **What:** Added producer-supplied message deduplication windows. Message and batch intake now accept `deduplicationKey` plus optional `deduplicationWindowSeconds`; active duplicates within the same tenant, event type, key, and time window return the original accepted message/fanout without new message rows, delivery rows, or usage increments. Existing idempotency replay/conflict behavior still runs first.
