@@ -35,6 +35,7 @@ describe('posthorn client CLI', () => {
 
     expect(exitCode).toBe(0);
     expect(io.stdout).toContain('posthorn client create-endpoint');
+    expect(io.stdout).toContain('--rate-limit-per-second');
     expect(io.stdout).toContain('POSTHORN_URL');
     expect(io.stderr).toBe('');
   });
@@ -54,15 +55,24 @@ describe('posthorn client CLI', () => {
     const { address } = await startSeededGateway();
     const env = cliEnv(address);
 
-    const create = await runCli(['client', 'create-endpoint', 'https://example.com/hooks/cli', 'cli.created'], env);
+    const create = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli', 'cli.created', '--rate-limit-per-second', '2'],
+      env,
+    );
     expect(create.exitCode).toBe(0);
     const created = JSON.parse(create.stdout) as {
-      readonly endpoint: { readonly id: string; readonly url: string; readonly eventTypes: readonly string[] | null };
+      readonly endpoint: {
+        readonly id: string;
+        readonly url: string;
+        readonly eventTypes: readonly string[] | null;
+        readonly rateLimitPerSecond: number | null;
+      };
       readonly secret: string;
     };
     expect(created.endpoint).toMatchObject({
       url: 'https://example.com/hooks/cli',
       eventTypes: ['cli.created'],
+      rateLimitPerSecond: 2,
     });
     expect(created.secret).toMatch(/^whsec_/);
     expect(create.stdout).not.toContain(TENANT_KEY);
@@ -101,6 +111,22 @@ describe('posthorn client CLI', () => {
     const malformedPayload = await runCli(['client', 'send', 'cli.created', '{'], env);
     expect(malformedPayload.exitCode).toBe(1);
     expect(malformedPayload.stderr).toContain('Payload must be valid JSON.');
+
+    const malformedRateLimit = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--rate-limit-per-second', 'abc'],
+      env,
+    );
+    expect(malformedRateLimit.exitCode).toBe(1);
+    expect(malformedRateLimit.stderr).toContain('--rate-limit-per-second requires a positive safe integer.');
+    expect(malformedRateLimit.stderr).not.toContain(TENANT_KEY);
+
+    const tokenAsCreateEndpointOption = await runCli(
+      ['client', 'create-endpoint', 'https://example.com/hooks/cli', '--bogus', TENANT_KEY],
+      env,
+    );
+    expect(tokenAsCreateEndpointOption.exitCode).toBe(1);
+    expect(tokenAsCreateEndpointOption.stderr).toContain('Unknown option for create-endpoint.');
+    expect(tokenAsCreateEndpointOption.stderr).not.toContain(TENANT_KEY);
 
     const apiError = await runCli(['client', 'create-endpoint', 'http://127.0.0.1/hook'], env);
     expect(apiError.exitCode).toBe(1);

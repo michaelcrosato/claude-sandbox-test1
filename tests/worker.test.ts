@@ -261,6 +261,44 @@ describe('delivery worker', () => {
     expect(receiver.requests).toHaveLength(1);
   });
 
+  it('counts in-flight endpoint claims against the current throttle window', async () => {
+    const storage = makeStorage();
+    let releaseFetch: () => void = () => {
+      throw new Error('Delivery fetch was not waiting.');
+    };
+    let markFetchStarted: (() => void) | null = null;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    const deliveryFetch: DeliveryFetch = async () => {
+      markFetchStarted?.();
+      await new Promise<void>((release) => {
+        releaseFetch = release;
+      });
+      return { status: 204 };
+    };
+    createLocalEndpoint(storage, 'https://example.com/webhooks/in-flight-throttle', {
+      rateLimitPerSecond: 1,
+    });
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 13 } }, NOW);
+    acceptMessage(storage, APP_ID, { eventType: 'user.created', payload: { id: 14 } }, NOW);
+
+    const first = runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: deliveryFetch,
+    });
+    await fetchStarted;
+    const second = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      fetch: async () => {
+        throw new Error('Second tick should not send a throttled delivery.');
+      },
+    });
+    expect(second).toEqual({ claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 });
+    releaseFetch();
+    expect(await first).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+  });
+
   it('schedules retryable failures with exponential backoff and succeeds on a later due tick', async () => {
     const storage = makeStorage();
     let status = 503;
@@ -335,6 +373,104 @@ describe('delivery worker', () => {
       last_error: 'http_500',
     });
     expect(readAttempts(storage, deliveryId).map((attempt) => attempt.outcome)).toEqual(['failed', 'dead_letter']);
+  });
+
+  it('throttles endpoint delivery claims per second while other endpoints continue', async () => {
+    const storage = makeStorage();
+    const limitedEndpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/limited-throttle', {
+      eventTypes: ['limited.created'],
+      rateLimitPerSecond: 1,
+    });
+    const openEndpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/open-throttle', {
+      eventTypes: ['open.created'],
+    });
+    const limitedFirst = acceptMessage(storage, APP_ID, { eventType: 'limited.created', payload: { id: 15 } }, NOW);
+    const limitedSecond = acceptMessage(storage, APP_ID, { eventType: 'limited.created', payload: { id: 16 } }, NOW);
+    const open = acceptMessage(storage, APP_ID, { eventType: 'open.created', payload: { id: 17 } }, NOW);
+
+    const first = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      batchSize: 2,
+      fetch: async () => ({ status: 204 }),
+    });
+
+    expect(first).toEqual({ claimed: 2, succeeded: 2, failed: 0, deadLettered: 0 });
+    expect(readDelivery(storage, limitedFirst.fanout.deliveryIds[0])).toMatchObject({ status: 'succeeded' });
+    expect(readDelivery(storage, limitedSecond.fanout.deliveryIds[0])).toMatchObject({ status: 'pending' });
+    expect(readDelivery(storage, open.fanout.deliveryIds[0])).toMatchObject({ status: 'succeeded' });
+    expect(limitedFirst.fanout.endpointIds).toEqual([limitedEndpoint.endpoint.id]);
+    expect(open.fanout.endpointIds).toEqual([openEndpoint.endpoint.id]);
+
+    const tooSoon = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(NOW.getTime() + 500),
+      batchSize: 2,
+      fetch: async () => {
+        throw new Error('Throttle should leave the second limited delivery pending.');
+      },
+    });
+    expect(tooSoon).toEqual({ claimed: 0, succeeded: 0, failed: 0, deadLettered: 0 });
+    expect(readDelivery(storage, limitedSecond.fanout.deliveryIds[0])).toMatchObject({ status: 'pending' });
+
+    const afterWindow = await runDeliveryWorkerTick(storage, {
+      now: () => new Date(NOW.getTime() + 1_000),
+      batchSize: 2,
+      fetch: async () => ({ status: 204 }),
+    });
+    expect(afterWindow).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(readDelivery(storage, limitedSecond.fanout.deliveryIds[0])).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('does not let exhausted throttled endpoints starve unthrottled endpoint claims', async () => {
+    const storage = makeStorage();
+    const exhaustedEndpointIds: string[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const endpoint = createLocalEndpoint(storage, `https://example.com/webhooks/exhausted-${index}`, {
+        eventTypes: [`exhausted.${index}`],
+        rateLimitPerSecond: 1,
+      });
+      exhaustedEndpointIds.push(endpoint.endpoint.id);
+      storage.db
+        .prepare(
+          `
+            UPDATE endpoints
+            SET rate_limit_window_started_at = ?,
+                rate_limit_window_count = ?
+            WHERE id = ?
+          `,
+        )
+        .run(NOW.toISOString(), 1, endpoint.endpoint.id);
+      acceptMessage(
+        storage,
+        APP_ID,
+        { eventType: `exhausted.${index}`, payload: { id: index } },
+        new Date(NOW.getTime() - 1_000),
+      );
+    }
+    const openEndpoint = createLocalEndpoint(storage, 'https://example.com/webhooks/starvation-open', {
+      eventTypes: ['starvation.open'],
+    });
+    const open = acceptMessage(storage, APP_ID, { eventType: 'starvation.open', payload: { id: 20 } }, NOW);
+    const sentUrls: string[] = [];
+
+    const summary = await runDeliveryWorkerTick(storage, {
+      now: () => NOW,
+      batchSize: 1,
+      fetch: async (url) => {
+        sentUrls.push(url);
+        return { status: 204 };
+      },
+    });
+
+    expect(summary).toEqual({ claimed: 1, succeeded: 1, failed: 0, deadLettered: 0 });
+    expect(sentUrls).toEqual(['https://example.com/webhooks/starvation-open']);
+    expect(readDelivery(storage, open.fanout.deliveryIds[0])).toMatchObject({ status: 'succeeded' });
+    expect(open.fanout.endpointIds).toEqual([openEndpoint.endpoint.id]);
+    for (const endpointId of exhaustedEndpointIds) {
+      expect(readEndpointThrottleState(storage, endpointId)).toEqual({
+        rate_limit_window_started_at: NOW.toISOString(),
+        rate_limit_window_count: 1,
+      });
+    }
   });
 
   it('auto-disables endpoints after the default sustained failure window and excludes future fanout', async () => {
@@ -645,7 +781,11 @@ function seedApp(storage: PosthornStorage): void {
 function createLocalEndpoint(
   storage: PosthornStorage,
   url: string,
-  input: { readonly eventTypes?: readonly string[]; readonly headers?: Readonly<Record<string, string>> } = {},
+  input: {
+    readonly eventTypes?: readonly string[];
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly rateLimitPerSecond?: number | null;
+  } = {},
 ): ReturnType<typeof createEndpoint> {
   const endpoint = createEndpoint(storage, APP_ID, {
     url: 'https://example.com/webhooks/worker',
@@ -731,6 +871,22 @@ function readEndpointEnabled(storage: PosthornStorage, endpointId: string): bool
     | undefined;
   if (row === undefined) throw new Error(`Missing endpoint ${endpointId}.`);
   return Number(row.enabled) === 1;
+}
+
+function readEndpointThrottleState(
+  storage: PosthornStorage,
+  endpointId: string,
+): {
+  readonly rate_limit_window_started_at: string | null;
+  readonly rate_limit_window_count: number;
+} {
+  const row = storage.db
+    .prepare('SELECT rate_limit_window_started_at, rate_limit_window_count FROM endpoints WHERE id = ?')
+    .get(endpointId) as
+    | { readonly rate_limit_window_started_at: string | null; readonly rate_limit_window_count: number }
+    | undefined;
+  if (row === undefined) throw new Error(`Missing endpoint ${endpointId}.`);
+  return row;
 }
 
 function seedHistoricalAttempt(

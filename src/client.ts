@@ -61,12 +61,14 @@ export interface CreateEndpointInput {
   readonly url: string;
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly rateLimitPerSecond?: number | null;
 }
 
 export interface UpdateEndpointInput {
   readonly url?: string;
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly rateLimitPerSecond?: number | null;
   readonly enabled?: boolean;
 }
 

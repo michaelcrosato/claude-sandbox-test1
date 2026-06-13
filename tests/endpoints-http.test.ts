@@ -22,6 +22,7 @@ interface EndpointJson {
   readonly url: string;
   readonly eventTypes: readonly string[] | null;
   readonly headers: Readonly<Record<string, string>>;
+  readonly rateLimitPerSecond: number | null;
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -70,6 +71,7 @@ describe('endpoint management HTTP routes', () => {
       url: 'https://example.com/webhooks/users',
       eventTypes: ['user.created', 'user.deleted'],
       headers: { 'X-Trace-Id': 'tenant-a' },
+      rateLimitPerSecond: 5,
     });
 
     expect(createResponse.status).toBe(201);
@@ -78,6 +80,7 @@ describe('endpoint management HTTP routes', () => {
         url: 'https://example.com/webhooks/users',
         eventTypes: ['user.created', 'user.deleted'],
         headers: { 'X-Trace-Id': 'tenant-a' },
+        rateLimitPerSecond: 5,
         enabled: true,
       },
     });
@@ -86,16 +89,20 @@ describe('endpoint management HTTP routes', () => {
     expect(createResponse.body.secret).toMatch(/^whsec_/);
 
     const persisted = storage.db
-      .prepare('SELECT signing_secret_ciphertext, signing_secret_key_version, signing_secret_nonce FROM endpoints WHERE id = ?')
+      .prepare(
+        'SELECT signing_secret_ciphertext, signing_secret_key_version, signing_secret_nonce, rate_limit_per_second FROM endpoints WHERE id = ?',
+      )
       .get(createResponse.body.endpoint.id) as {
       signing_secret_ciphertext: string;
       signing_secret_key_version: string;
       signing_secret_nonce: string;
+      rate_limit_per_second: number;
     };
     expect(persisted.signing_secret_ciphertext).toMatch(/^sha256:/);
     expect(persisted.signing_secret_key_version).toBe('local-aes-256-gcm-v1');
     expect(persisted.signing_secret_nonce).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(persisted.signing_secret_ciphertext).not.toContain(createResponse.body.secret);
+    expect(persisted.rate_limit_per_second).toBe(5);
 
     const getResponse = await requestJson<EndpointReadJson>(
       address,
@@ -113,6 +120,7 @@ describe('endpoint management HTTP routes', () => {
     const first = await createEndpoint(address, TENANT_A_KEY, {
       url: 'https://example.com/hooks/first',
       eventTypes: ['invoice.paid'],
+      rateLimitPerSecond: 2,
     });
     const second = await createEndpoint(address, TENANT_A_KEY, {
       url: 'https://example.com/hooks/second',
@@ -132,6 +140,7 @@ describe('endpoint management HTTP routes', () => {
         url: 'https://example.com/hooks/renamed',
         eventTypes: null,
         headers: { 'X-Trace-Id': 'updated' },
+        rateLimitPerSecond: 3,
         enabled: false,
       },
     );
@@ -141,8 +150,19 @@ describe('endpoint management HTTP routes', () => {
       url: 'https://example.com/hooks/renamed',
       eventTypes: null,
       headers: { 'X-Trace-Id': 'updated' },
+      rateLimitPerSecond: 3,
       enabled: false,
     });
+
+    const clearRateLimit = await requestJson<EndpointReadJson>(
+      address,
+      'PATCH',
+      `/v1/endpoints/${first.endpoint.id}`,
+      TENANT_A_KEY,
+      { rateLimitPerSecond: null },
+    );
+    expect(clearRateLimit.status).toBe(200);
+    expect(clearRateLimit.body.endpoint.rateLimitPerSecond).toBeNull();
 
     const deleteResponse = await requestRaw(address, 'DELETE', `/v1/endpoints/${second.endpoint.id}`, TENANT_A_KEY);
     expect(deleteResponse.status).toBe(204);
@@ -382,6 +402,28 @@ describe('endpoint management HTTP routes', () => {
       { url: 'https://example.com/hook', headers: { Authorization: 'secret' } },
       'invalid_request',
     );
+    for (const rateLimitPerSecond of [0, -1, 1.5, '1', false]) {
+      await expectEndpointError(
+        address,
+        { url: 'https://example.com/hook', rateLimitPerSecond },
+        'invalid_request',
+      );
+    }
+
+    const valid = await createEndpoint(address, TENANT_A_KEY, {
+      url: 'https://example.com/hooks/update-validation',
+    });
+    for (const rateLimitPerSecond of [0, -1, 1.5, '1', false]) {
+      const response = await requestJson<ErrorJson>(
+        address,
+        'PATCH',
+        `/v1/endpoints/${valid.endpoint.id}`,
+        TENANT_A_KEY,
+        { rateLimitPerSecond },
+      );
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('invalid_request');
+    }
   });
 
   it('hides deleted endpoints from future reads and lists', async () => {

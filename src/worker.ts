@@ -96,6 +96,7 @@ const DEFAULT_WORKER_OPTIONS = {
 
 const DELIVERY_ATTEMPT_ID_PREFIX = 'datt_';
 const USER_AGENT = 'posthorn-delivery-worker';
+const CLAIM_CANDIDATE_POOL_MULTIPLIER = 16;
 const MANAGED_HEADER_NAMES = new Set([
   'content-length',
   'content-type',
@@ -191,33 +192,17 @@ export function calculateRetryBackoffMs(
 function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOptions): readonly ClaimedDelivery[] {
   const now = options.now();
   const nowIso = now.toISOString();
+  const throttleWindowStartsAt = new Date(now.getTime() - 1_000).toISOString();
   const leaseExpiresAt = new Date(now.getTime() + options.visibilityTimeoutMs).toISOString();
+  const candidates = selectClaimCandidates(storage, nowIso, throttleWindowStartsAt, options.batchSize);
+  if (candidates.length === 0) return [];
+
+  const endpointIds = [...new Set(candidates.map((candidate) => candidate.endpointId))];
   const selectedIds: string[] = [];
 
   storage.db.exec('BEGIN IMMEDIATE');
   try {
-    const rows = storage.db
-      .prepare(`
-        SELECT deliveries.id
-        FROM deliveries
-        INNER JOIN messages ON messages.id = deliveries.message_id
-        INNER JOIN endpoints ON endpoints.id = deliveries.endpoint_id
-        WHERE endpoints.enabled = 1
-          AND (
-            (
-              deliveries.status = 'pending'
-              AND (deliveries.next_attempt_at IS NULL OR deliveries.next_attempt_at <= ?)
-            )
-            OR (
-              deliveries.status = 'delivering'
-              AND deliveries.lease_expires_at IS NOT NULL
-              AND deliveries.lease_expires_at <= ?
-            )
-          )
-        ORDER BY COALESCE(deliveries.next_attempt_at, deliveries.created_at) ASC, deliveries.rowid ASC
-        LIMIT ?
-      `)
-      .all(nowIso, nowIso, options.batchSize) as unknown as Array<{ readonly id: unknown }>;
+    const throttleStates = readEndpointThrottleStates(storage, endpointIds, throttleWindowStartsAt, nowIso);
 
     const update = storage.db.prepare(`
       UPDATE deliveries
@@ -234,12 +219,33 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
             AND lease_expires_at <= ?
           )
         )
+        AND EXISTS (
+          SELECT 1
+          FROM endpoints
+          WHERE endpoints.id = deliveries.endpoint_id
+            AND endpoints.enabled = 1
+        )
+    `);
+    const updateThrottleState = storage.db.prepare(`
+      UPDATE endpoints
+      SET rate_limit_window_started_at = ?,
+          rate_limit_window_count = ?
+      WHERE id = ? AND rate_limit_per_second IS NOT NULL
     `);
 
-    for (const row of rows) {
-      const id = String(row.id);
-      const result = update.run(leaseExpiresAt, nowIso, id, nowIso, nowIso);
-      if (result.changes > 0) selectedIds.push(id);
+    for (const candidate of candidates) {
+      if (selectedIds.length >= options.batchSize) break;
+      const throttleState = throttleStates.get(candidate.endpointId);
+      if (throttleState === undefined || !hasThrottleCapacity(throttleState)) continue;
+
+      const result = update.run(leaseExpiresAt, nowIso, candidate.id, nowIso, nowIso);
+      if (result.changes > 0) {
+        selectedIds.push(candidate.id);
+        if (throttleState.rateLimit !== null) {
+          throttleState.windowCount += 1;
+          updateThrottleState.run(throttleState.windowStartedAt, throttleState.windowCount, candidate.endpointId);
+        }
+      }
     }
 
     storage.db.exec('COMMIT');
@@ -277,6 +283,139 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
   const byId = new Map(rows.map((row) => [String(row.id), deliveryFromRow(row)]));
 
   return selectedIds.map((id) => byId.get(id)).filter((task): task is ClaimedDelivery => task !== undefined);
+}
+
+function selectClaimCandidates(
+  storage: PosthornStorage,
+  nowIso: string,
+  throttleWindowStartsAt: string,
+  batchSize: number,
+): readonly ClaimCandidate[] {
+  const perEndpointCandidateLimit = batchSize;
+  const candidatePoolLimit = Math.max(batchSize, batchSize * CLAIM_CANDIDATE_POOL_MULTIPLIER);
+  const rows = storage.db
+    .prepare(
+      `
+        SELECT id, endpoint_id, due_at, delivery_rowid
+        FROM (
+          SELECT deliveries.id,
+                 deliveries.endpoint_id,
+                 COALESCE(deliveries.next_attempt_at, deliveries.created_at) AS due_at,
+                 deliveries.rowid AS delivery_rowid,
+                 CASE
+                   WHEN endpoints.rate_limit_per_second IS NULL THEN ?
+                   WHEN endpoints.rate_limit_window_started_at IS NULL
+                     OR endpoints.rate_limit_window_started_at <= ? THEN endpoints.rate_limit_per_second
+                   WHEN endpoints.rate_limit_window_count < endpoints.rate_limit_per_second THEN
+                     endpoints.rate_limit_per_second - endpoints.rate_limit_window_count
+                   ELSE 0
+                 END AS available_capacity,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY deliveries.endpoint_id
+                   ORDER BY COALESCE(deliveries.next_attempt_at, deliveries.created_at) ASC, deliveries.rowid ASC
+                 ) AS endpoint_rank
+          FROM deliveries
+          INNER JOIN messages ON messages.id = deliveries.message_id
+          INNER JOIN endpoints ON endpoints.id = deliveries.endpoint_id
+          WHERE endpoints.enabled = 1
+            AND (
+              endpoints.rate_limit_per_second IS NULL
+              OR endpoints.rate_limit_window_started_at IS NULL
+              OR endpoints.rate_limit_window_started_at <= ?
+              OR endpoints.rate_limit_window_count < endpoints.rate_limit_per_second
+            )
+            AND (
+              (
+                deliveries.status = 'pending'
+                AND (deliveries.next_attempt_at IS NULL OR deliveries.next_attempt_at <= ?)
+              )
+              OR (
+                deliveries.status = 'delivering'
+                AND deliveries.lease_expires_at IS NOT NULL
+                AND deliveries.lease_expires_at <= ?
+              )
+            )
+        )
+        WHERE available_capacity > 0
+          AND endpoint_rank <= available_capacity
+          AND endpoint_rank <= ?
+        ORDER BY due_at ASC, delivery_rowid ASC
+        LIMIT ?
+      `,
+    )
+    .all(
+      batchSize,
+      throttleWindowStartsAt,
+      throttleWindowStartsAt,
+      nowIso,
+      nowIso,
+      perEndpointCandidateLimit,
+      candidatePoolLimit,
+    ) as unknown as ClaimCandidateRow[];
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    endpointId: String(row.endpoint_id),
+  }));
+}
+
+function readEndpointThrottleStates(
+  storage: PosthornStorage,
+  endpointIds: readonly string[],
+  throttleWindowStartsAt: string,
+  nowIso: string,
+): Map<string, EndpointThrottleState> {
+  const rows = storage.db
+    .prepare(
+      `
+        SELECT id,
+               rate_limit_per_second,
+               rate_limit_window_started_at,
+               rate_limit_window_count
+        FROM endpoints
+        WHERE enabled = 1
+          AND id IN (${placeholders(endpointIds.length)})
+      `,
+    )
+    .all(...endpointIds) as unknown as EndpointThrottleStateRow[];
+
+  const states = new Map<string, EndpointThrottleState>();
+  for (const row of rows) {
+    const rateLimit = positiveIntegerOrNull(row.rate_limit_per_second);
+    if (rateLimit === null) {
+      states.set(String(row.id), { rateLimit: null, windowStartedAt: nowIso, windowCount: 0 });
+      continue;
+    }
+
+    const storedWindowStartedAt = nullableString(row.rate_limit_window_started_at);
+    const hasActiveWindow = storedWindowStartedAt !== null && storedWindowStartedAt > throttleWindowStartsAt;
+    states.set(String(row.id), {
+      rateLimit,
+      windowStartedAt: hasActiveWindow ? storedWindowStartedAt : nowIso,
+      windowCount: hasActiveWindow ? nonNegativeIntegerOrZero(row.rate_limit_window_count) : 0,
+    });
+  }
+
+  return states;
+}
+
+function hasThrottleCapacity(state: EndpointThrottleState): boolean {
+  return state.rateLimit === null || state.windowCount < state.rateLimit;
+}
+
+function positiveIntegerOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeIntegerOrZero(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function placeholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ');
 }
 
 async function deliverClaimedTask(
@@ -757,6 +896,29 @@ interface ClaimedDelivery {
   readonly messageId: string;
   readonly eventType: string;
   readonly payloadJson: string;
+}
+
+interface ClaimCandidate {
+  readonly id: string;
+  readonly endpointId: string;
+}
+
+interface ClaimCandidateRow {
+  readonly id: unknown;
+  readonly endpoint_id: unknown;
+}
+
+interface EndpointThrottleState {
+  readonly rateLimit: number | null;
+  readonly windowStartedAt: string;
+  windowCount: number;
+}
+
+interface EndpointThrottleStateRow {
+  readonly id: unknown;
+  readonly rate_limit_per_second: unknown;
+  readonly rate_limit_window_started_at: unknown;
+  readonly rate_limit_window_count: unknown;
 }
 
 interface ClaimedDeliveryRow {

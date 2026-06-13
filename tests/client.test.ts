@@ -42,9 +42,11 @@ describe('PosthornClient', () => {
       url: 'https://example.com/hooks/sdk',
       eventTypes: ['sdk.created'],
       headers: { 'X-Trace-Id': 'sdk-test' },
+      rateLimitPerSecond: 4,
     });
     expect(created.endpoint.id).toMatch(/^ep_/);
     expect(created.secret).toMatch(/^whsec_/);
+    expect(created.endpoint.rateLimitPerSecond).toBe(4);
 
     expect((await client.listEndpoints()).data).toEqual([created.endpoint]);
     expect(await client.getEndpoint(created.endpoint.id)).toEqual({ endpoint: created.endpoint });
@@ -52,12 +54,14 @@ describe('PosthornClient', () => {
     const updated = await client.updateEndpoint(created.endpoint.id, {
       headers: { 'X-Trace-Id': 'sdk-updated' },
       eventTypes: null,
+      rateLimitPerSecond: null,
       enabled: true,
     });
     expect(updated.endpoint).toMatchObject({
       id: created.endpoint.id,
       eventTypes: null,
       headers: { 'X-Trace-Id': 'sdk-updated' },
+      rateLimitPerSecond: null,
       enabled: true,
     });
 
@@ -505,13 +509,31 @@ interface DeliveredRequest {
 }
 
 function assertClientInputTypes(): void {
+  const createEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
+    url: 'https://example.com/hook',
+    rateLimitPerSecond: 1,
+  };
+  const updateEndpoint: Parameters<PosthornClient['updateEndpoint']>[1] = { rateLimitPerSecond: null };
   const endpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: 1, cursor: 'cursor' };
   const endpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: 7 };
+  const invalidCreateEndpoint: Parameters<PosthornClient['createEndpoint']>[0] = {
+    url: 'https://example.com/hook',
+    // @ts-expect-error endpoint rate limits are typed as numbers, not strings.
+    rateLimitPerSecond: '1',
+  };
   // @ts-expect-error endpoint delivery limits are typed as numbers, not strings.
   const invalidEndpointDeliveries: Parameters<PosthornClient['listEndpointDeliveries']>[1] = { limit: '1' };
   // @ts-expect-error endpoint stats days are typed as numbers, not strings.
   const invalidEndpointStats: Parameters<PosthornClient['getEndpointStats']>[1] = { days: '7' };
-  void [endpointDeliveries, endpointStats, invalidEndpointDeliveries, invalidEndpointStats];
+  void [
+    createEndpoint,
+    updateEndpoint,
+    endpointDeliveries,
+    endpointStats,
+    invalidCreateEndpoint,
+    invalidEndpointDeliveries,
+    invalidEndpointStats,
+  ];
 }
 
 function seedTenant(storage: PosthornStorage, appId: string, name: string, apiKey: string): void {

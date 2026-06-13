@@ -10,6 +10,7 @@ client = PosthornClient("https://posthorn.example.com", "phk_...")
 endpoint = client.create_endpoint(
     url="https://acme.example/webhooks/posthorn",
     event_types=["user.created"],
+    rate_limit_per_second=10,
 )
 
 sent = client.send_message(

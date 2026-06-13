@@ -34,7 +34,7 @@ export const POSTHORN_ADMIN_CLI_ROUTES: readonly ClientRouteMapping[] = Object.f
 ]);
 
 const CLIENT_HELP = `Usage:
-  posthorn client create-endpoint <url> [eventType...]
+  posthorn client create-endpoint <url> [eventType...] [--rate-limit-per-second <integer>]
   posthorn client send <eventType> <jsonPayload> [--idempotency-key <key>]
   posthorn client list-endpoints
   posthorn client get-message <messageId>
@@ -211,16 +211,43 @@ function createAdminClient(
   return new PosthornAdminClient({ baseUrl, adminToken, fetch: fetchImpl });
 }
 
-function parseCreateEndpointArgs(args: readonly string[]): { readonly url: string; readonly eventTypes?: readonly string[] } {
+function parseCreateEndpointArgs(args: readonly string[]): {
+  readonly url: string;
+  readonly eventTypes?: readonly string[];
+  readonly rateLimitPerSecond?: number;
+} {
   const [url, ...eventTypes] = args;
   if (url === undefined || url.trim() === '') {
     throw new CliUsageError('create-endpoint requires a URL.');
   }
 
-  return {
-    url,
-    ...(eventTypes.length === 0 ? {} : { eventTypes }),
-  };
+  const input: {
+    url: string;
+    eventTypes?: string[];
+    rateLimitPerSecond?: number;
+  } = { url };
+  const parsedEventTypes: string[] = [];
+  for (let index = 0; index < eventTypes.length; index += 1) {
+    const arg = eventTypes[index];
+    if (arg === '--rate-limit-per-second') {
+      if (input.rateLimitPerSecond !== undefined) {
+        throw new CliUsageError('create-endpoint accepts --rate-limit-per-second once.');
+      }
+      input.rateLimitPerSecond = parsePositiveSafeInteger(
+        optionValue('create-endpoint', arg, eventTypes[index + 1]),
+        arg,
+      );
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith('--') === true) {
+      throw new CliUsageError('Unknown option for create-endpoint.');
+    }
+    if (arg !== undefined) parsedEventTypes.push(arg);
+  }
+  if (parsedEventTypes.length > 0) input.eventTypes = parsedEventTypes;
+
+  return input;
 }
 
 function parseCreateAppArgs(args: readonly string[]): {
@@ -374,6 +401,15 @@ function parseSafeInteger(input: string, optionName: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     const suffix = optionName === '--monthly-message-quota' ? ' or null' : '';
     throw new CliUsageError(`${optionName} requires a non-negative safe integer${suffix}.`);
+  }
+
+  return value;
+}
+
+function parsePositiveSafeInteger(input: string, optionName: string): number {
+  const value = Number(input);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new CliUsageError(`${optionName} requires a positive safe integer.`);
   }
 
   return value;
