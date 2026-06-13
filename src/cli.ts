@@ -288,6 +288,9 @@ function parseCreateKeyArgs(args: readonly string[]): {
   if (args.length > 2) {
     throw new CliUsageError('create-key accepts at most one name.');
   }
+  if (args[1]?.startsWith('--') === true) {
+    throw new CliUsageError('Unknown option for create-key.');
+  }
 
   return {
     appId,

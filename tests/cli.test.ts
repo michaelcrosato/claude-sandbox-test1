@@ -236,6 +236,11 @@ describe('posthorn client CLI', () => {
     expect(malformedOverlap.exitCode).toBe(1);
     expect(malformedOverlap.stderr).toContain('--overlap-seconds requires a non-negative safe integer.');
 
+    const createKeyUnknownOption = await runCli(['admin', 'create-key', 'app_missing', '--bogus'], env);
+    expect(createKeyUnknownOption.exitCode).toBe(1);
+    expect(createKeyUnknownOption.stderr).toContain('Unknown option for create-key.');
+    expect(createKeyUnknownOption.stderr).not.toContain('--bogus');
+
     const app = JSON.parse((await runCli(['admin', 'create-app', 'Secret Tenant'], env)).stdout) as {
       readonly app: { readonly id: string };
     };
