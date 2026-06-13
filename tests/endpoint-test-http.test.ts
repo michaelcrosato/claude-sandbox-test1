@@ -122,6 +122,32 @@ describe('endpoint test-send HTTP route', () => {
     expect(delivered).toHaveLength(1);
   });
 
+  it('uses endpoint payloadFormat for signed test webhook bodies', async () => {
+    const delivered: DeliveredRequest[] = [];
+    const { address, endpointId, endpointSecret } = await startSeededGateway(
+      async (url, init) => {
+        delivered.push({ url, init });
+        return { status: 204 };
+      },
+      { payloadFormat: 'payload_only' },
+    );
+
+    const result = await requestJson<EndpointTestJson>(address, 'POST', `/v1/endpoints/${endpointId}/test`, TENANT_KEY, {
+      eventType: 'invoice.paid',
+      payload: { id: 'inv_125', total: 1250 },
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.test.payloadSource).toBe('explicit');
+    expect(delivered).toHaveLength(1);
+    expect(JSON.parse(delivered[0].init.body)).toEqual({ id: 'inv_125', total: 1250 });
+    expect(delivered[0].init.body).not.toContain(result.body.test.id);
+    expect(delivered[0].init.body).not.toContain('invoice.paid');
+    verifyWebhook(endpointSecret, delivered[0].init.headers, delivered[0].init.body, {
+      nowSeconds: Math.floor(NOW.getTime() / 1000),
+    });
+  });
+
   it('signs test webhooks with current and previous endpoint secrets during rotation overlap', async () => {
     const delivered: DeliveredRequest[] = [];
     const { address, storage, endpointId, endpointSecret } = await startSeededGateway(async (url, init) => {
@@ -189,6 +215,7 @@ interface DeliveredRequest {
 
 async function startSeededGateway(
   deliveryFetch: DeliveryFetch,
+  endpointInput: { readonly payloadFormat?: 'envelope' | 'payload_only' } = {},
 ): Promise<{
   address: GatewayAddress;
   storage: PosthornStorage;
@@ -202,6 +229,7 @@ async function startSeededGateway(
   const createdEndpoint = createEndpoint(storage, 'app_test', {
     url: 'https://example.com/hooks/test',
     headers: { 'X-Customer': 'acme' },
+    ...endpointInput,
   }, NOW);
   const endpoint = createdEndpoint.endpoint;
   const eventType = createEventType(storage, 'app_test', {

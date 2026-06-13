@@ -264,6 +264,7 @@ function claimDeliveries(storage: PosthornStorage, options: ResolvedWorkerOption
              deliveries.lease_expires_at,
              endpoints.url,
              endpoints.non_secret_headers_json,
+             endpoints.payload_format,
              endpoints.signing_secret_ciphertext,
              endpoints.signing_secret_key_version,
              endpoints.signing_secret_nonce,
@@ -676,6 +677,10 @@ function buildDeliveryBody(task: ClaimedDelivery): string {
     throw new InvalidPayloadError();
   }
 
+  if (task.payloadFormat === 'payload_only') {
+    return JSON.stringify(payload);
+  }
+
   return JSON.stringify({
     id: task.messageId,
     eventType: task.eventType,
@@ -820,6 +825,7 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
     leaseExpiresAt: String(row.lease_expires_at),
     url: String(row.url),
     headers: parseStoredHeaders(row.non_secret_headers_json),
+    payloadFormat: parseStoredPayloadFormat(row.payload_format),
     signingSecretCiphertext: String(row.signing_secret_ciphertext),
     signingSecretKeyVersion: String(row.signing_secret_key_version),
     signingSecretNonce: String(row.signing_secret_nonce),
@@ -831,6 +837,10 @@ function deliveryFromRow(row: ClaimedDeliveryRow): ClaimedDelivery {
     eventType: String(row.event_type),
     payloadJson: String(row.payload_json),
   };
+}
+
+function parseStoredPayloadFormat(value: unknown): EndpointPayloadFormat {
+  return value === 'payload_only' ? 'payload_only' : 'envelope';
 }
 
 function nullableString(value: unknown): string | null {
@@ -886,6 +896,7 @@ interface ClaimedDelivery {
   readonly leaseExpiresAt: string;
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
+  readonly payloadFormat: EndpointPayloadFormat;
   readonly signingSecretCiphertext: string;
   readonly signingSecretKeyVersion: string;
   readonly signingSecretNonce: string;
@@ -928,6 +939,7 @@ interface ClaimedDeliveryRow {
   readonly lease_expires_at: unknown;
   readonly url: unknown;
   readonly non_secret_headers_json: unknown;
+  readonly payload_format: unknown;
   readonly signing_secret_ciphertext: unknown;
   readonly signing_secret_key_version: unknown;
   readonly signing_secret_nonce: unknown;
@@ -939,6 +951,8 @@ interface ClaimedDeliveryRow {
   readonly event_type: unknown;
   readonly payload_json: unknown;
 }
+
+type EndpointPayloadFormat = 'envelope' | 'payload_only';
 
 interface DeliveryAttemptInsert {
   readonly deliveryId: string;

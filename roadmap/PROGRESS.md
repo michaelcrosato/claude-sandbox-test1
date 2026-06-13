@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0033 done (Endpoint payload delivery formats)
+
+**What:** Added endpoint-level `payloadFormat` support. Endpoints now default to the existing `envelope` body and can opt into `payload_only` so the worker and endpoint test-send POST only the original JSON payload while signing that exact raw body. The field is exposed through endpoint create/update/read/list, OpenAPI, the TypeScript SDK, tenant CLI, Python SDK, README, and the parity matrix.
+
+**Verified:** Evidence saved at `roadmap/evidence/F-0033/verify.log`. Evaluator returned NEEDS_WORK only because the evidence log had not been created yet, then PASS after the log was added. Security reviewer returned APPROVE. Local checks passed: `npx vitest run tests/storage.test.ts tests/endpoints-http.test.ts tests/worker.test.ts tests/endpoint-test-http.test.ts tests/client.test.ts tests/cli.test.ts tests/python-client.test.ts tests/openapi-contract.test.ts tests/parity-doc.test.ts` (69 tests), `npm run typecheck`, `npm run lint`, `npm test` (177 tests), `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** The first evaluator pass caught a process gap rather than a code gap: green checks are not enough without the durable verify log. The payload-format scope stayed intentionally narrow: no templates, user code, JSONPath, method changes, URL rewrites, header mutation rules, or content-type customization.
+
+**Next step:** Push F-0033, open the PR, wait for CI, then add the PR-number/CI record and merge on green.
+
+---
+
 ## 2026-06-12 — F-0032 done (Code-verified parity matrix)
 
 **What:** Added `docs/PARITY.md`, the README-promised comparison of Posthorn against Svix, Convoy, Hookdeck, and Stripe. The matrix is source-backed, ties Posthorn claims to implemented docs/tests, and keeps unsupported Posthorn gaps explicit: PostgreSQL/HA scale-out, payload transformations, deduplication rules beyond intake idempotency, and non-webhook destination connectors.

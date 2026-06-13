@@ -11,7 +11,13 @@ import type {
   EndpointDeliveryStats,
 } from './endpoint-observability';
 import type { EndpointTestResult } from './endpoint-tests';
-import type { CreateEndpointResult, EndpointRecord, RotateEndpointSecretInput, RotateEndpointSecretResult } from './endpoints';
+import type {
+  CreateEndpointResult,
+  EndpointPayloadFormat,
+  EndpointRecord,
+  RotateEndpointSecretInput,
+  RotateEndpointSecretResult,
+} from './endpoints';
 import type { CreateEventTypeResult, EventTypeRecord } from './event-types';
 import type {
   AcceptMessageBatchResult,
@@ -62,6 +68,7 @@ export interface CreateEndpointInput {
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond?: number | null;
+  readonly payloadFormat?: EndpointPayloadFormat | null;
 }
 
 export interface UpdateEndpointInput {
@@ -69,6 +76,7 @@ export interface UpdateEndpointInput {
   readonly eventTypes?: readonly string[] | null;
   readonly headers?: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond?: number | null;
+  readonly payloadFormat?: EndpointPayloadFormat | null;
   readonly enabled?: boolean;
 }
 

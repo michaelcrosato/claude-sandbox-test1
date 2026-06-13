@@ -51,16 +51,28 @@ describe('OpenAPI contract', () => {
     expect(body.components.schemas.Endpoint.properties.rateLimitPerSecond).toEqual({
       anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }],
     });
+    expect(body.components.schemas.Endpoint.properties.payloadFormat).toEqual({
+      type: 'string',
+      enum: ['envelope', 'payload_only'],
+    });
     expect(
       body.paths['/v1/endpoints'].post.requestBody.content['application/json'].schema.properties.rateLimitPerSecond,
     ).toEqual({
       anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }],
+    });
+    expect(body.paths['/v1/endpoints'].post.requestBody.content['application/json'].schema.properties.payloadFormat).toEqual({
+      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }],
     });
     expect(
       body.paths['/v1/endpoints/{id}'].patch.requestBody.content['application/json'].schema.properties
         .rateLimitPerSecond,
     ).toEqual({
       anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }],
+    });
+    expect(
+      body.paths['/v1/endpoints/{id}'].patch.requestBody.content['application/json'].schema.properties.payloadFormat,
+    ).toEqual({
+      anyOf: [{ type: 'string', enum: ['envelope', 'payload_only'] }, { type: 'null' }],
     });
     expect(operationSet(body)).toEqual(operationSet(createOpenApiDocument()));
     expect(operationSet(body)).toEqual(new Set(IMPLEMENTED_ROUTES.map(routeKey)));

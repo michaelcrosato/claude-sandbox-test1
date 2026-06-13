@@ -49,6 +49,7 @@ export { POSTHORN_ADMIN_CLI_ROUTES, POSTHORN_CLI_ROUTES, runPosthornCli } from '
 export type {
   CreateEndpointResult,
   EndpointDeliveryTarget,
+  EndpointPayloadFormat,
   EndpointRecord,
   EndpointValidationErrorCode,
   RotateEndpointSecretInput,

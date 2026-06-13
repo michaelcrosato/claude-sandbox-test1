@@ -23,6 +23,7 @@ interface EndpointJson {
   readonly eventTypes: readonly string[] | null;
   readonly headers: Readonly<Record<string, string>>;
   readonly rateLimitPerSecond: number | null;
+  readonly payloadFormat: 'envelope' | 'payload_only';
   readonly enabled: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -72,6 +73,7 @@ describe('endpoint management HTTP routes', () => {
       eventTypes: ['user.created', 'user.deleted'],
       headers: { 'X-Trace-Id': 'tenant-a' },
       rateLimitPerSecond: 5,
+      payloadFormat: 'payload_only',
     });
 
     expect(createResponse.status).toBe(201);
@@ -81,6 +83,7 @@ describe('endpoint management HTTP routes', () => {
         eventTypes: ['user.created', 'user.deleted'],
         headers: { 'X-Trace-Id': 'tenant-a' },
         rateLimitPerSecond: 5,
+        payloadFormat: 'payload_only',
         enabled: true,
       },
     });
@@ -90,19 +93,21 @@ describe('endpoint management HTTP routes', () => {
 
     const persisted = storage.db
       .prepare(
-        'SELECT signing_secret_ciphertext, signing_secret_key_version, signing_secret_nonce, rate_limit_per_second FROM endpoints WHERE id = ?',
+        'SELECT signing_secret_ciphertext, signing_secret_key_version, signing_secret_nonce, rate_limit_per_second, payload_format FROM endpoints WHERE id = ?',
       )
       .get(createResponse.body.endpoint.id) as {
       signing_secret_ciphertext: string;
       signing_secret_key_version: string;
       signing_secret_nonce: string;
       rate_limit_per_second: number;
+      payload_format: string;
     };
     expect(persisted.signing_secret_ciphertext).toMatch(/^sha256:/);
     expect(persisted.signing_secret_key_version).toBe('local-aes-256-gcm-v1');
     expect(persisted.signing_secret_nonce).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(persisted.signing_secret_ciphertext).not.toContain(createResponse.body.secret);
     expect(persisted.rate_limit_per_second).toBe(5);
+    expect(persisted.payload_format).toBe('payload_only');
 
     const getResponse = await requestJson<EndpointReadJson>(
       address,
@@ -141,6 +146,7 @@ describe('endpoint management HTTP routes', () => {
         eventTypes: null,
         headers: { 'X-Trace-Id': 'updated' },
         rateLimitPerSecond: 3,
+        payloadFormat: 'payload_only',
         enabled: false,
       },
     );
@@ -151,6 +157,7 @@ describe('endpoint management HTTP routes', () => {
       eventTypes: null,
       headers: { 'X-Trace-Id': 'updated' },
       rateLimitPerSecond: 3,
+      payloadFormat: 'payload_only',
       enabled: false,
     });
 
@@ -163,6 +170,16 @@ describe('endpoint management HTTP routes', () => {
     );
     expect(clearRateLimit.status).toBe(200);
     expect(clearRateLimit.body.endpoint.rateLimitPerSecond).toBeNull();
+
+    const resetPayloadFormat = await requestJson<EndpointReadJson>(
+      address,
+      'PATCH',
+      `/v1/endpoints/${first.endpoint.id}`,
+      TENANT_A_KEY,
+      { payloadFormat: null },
+    );
+    expect(resetPayloadFormat.status).toBe(200);
+    expect(resetPayloadFormat.body.endpoint.payloadFormat).toBe('envelope');
 
     const deleteResponse = await requestRaw(address, 'DELETE', `/v1/endpoints/${second.endpoint.id}`, TENANT_A_KEY);
     expect(deleteResponse.status).toBe(204);
@@ -409,6 +426,13 @@ describe('endpoint management HTTP routes', () => {
         'invalid_request',
       );
     }
+    for (const payloadFormat of ['payload', 'payloadOnly', '', 1, false, []]) {
+      await expectEndpointError(
+        address,
+        { url: 'https://example.com/hook', payloadFormat },
+        'invalid_request',
+      );
+    }
 
     const valid = await createEndpoint(address, TENANT_A_KEY, {
       url: 'https://example.com/hooks/update-validation',
@@ -420,6 +444,17 @@ describe('endpoint management HTTP routes', () => {
         `/v1/endpoints/${valid.endpoint.id}`,
         TENANT_A_KEY,
         { rateLimitPerSecond },
+      );
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('invalid_request');
+    }
+    for (const payloadFormat of ['payload', 'payloadOnly', '', 1, false, []]) {
+      const response = await requestJson<ErrorJson>(
+        address,
+        'PATCH',
+        `/v1/endpoints/${valid.endpoint.id}`,
+        TENANT_A_KEY,
+        { payloadFormat },
       );
       expect(response.status).toBe(400);
       expect(response.body.error.code).toBe('invalid_request');
