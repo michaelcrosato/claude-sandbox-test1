@@ -1,9 +1,12 @@
-VERIFY-COMMIT: pending-local-before-pr
+VERIFY-COMMIT: 67161d002b23ddc5ff37ab77b56ddf0144751f51
 
 Feature: F-0036 CloudEvents delivery payload format
 
 Pull request:
-- Pending.
+- PR #65: https://github.com/michaelcrosato/claude-sandbox-test1/pull/65
+- GitHub CI on PR #65 head 67161d002b23ddc5ff37ab77b56ddf0144751f51:
+  - verify: pass, run 27455691848, job 81159718997, completed 2026-06-13T03:50:59Z
+  - e2e: pass, run 27455691869, job 81159719034, completed 2026-06-13T03:49:50Z
 
 Fresh reviews:
 - evaluator: PASS

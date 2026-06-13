@@ -12,7 +12,7 @@
 
 **Surprises:** Assertion-shield risk showed up before commit work: changing existing payload-only assertions in place would weaken the old guardrails. The final tests keep those assertions and add CloudEvents coverage beside them.
 
-**Next step:** Push the branch, open the PR, wait for CI, then add the PR-number/CI record and merge on green.
+**Next step:** Push the PR/CI evidence record, wait for PR #65 checks again, then mark it ready and merge on green.
 
 ---
 

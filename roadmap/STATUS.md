@@ -6,7 +6,7 @@ The product scaffold, SQLite storage foundation, health/readiness HTTP server, S
 
 ## Ready for your QA
 
-F-0036 is ready for a PR. It adds built-in CloudEvents JSON delivery bodies while keeping the same signing and delivery safety rules.
+F-0036 is ready in PR #65. It adds built-in CloudEvents JSON delivery bodies while keeping the same signing and delivery safety rules.
 
 ## In progress
 
@@ -18,4 +18,4 @@ Nothing needs you right now.
 
 ## Health
 
-The latest local product checks passed with 188 tests. Fresh evaluator and security review passed.
+Automated checks passed on PR #65. The latest local product checks passed with 188 tests. Fresh evaluator and security review passed.
