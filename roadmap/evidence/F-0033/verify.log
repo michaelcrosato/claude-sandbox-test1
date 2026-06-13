@@ -4,7 +4,9 @@ Feature: F-0033 Endpoint payload delivery formats
 
 Pull request:
 - PR #62: https://github.com/michaelcrosato/claude-sandbox-test1/pull/62
-- GitHub CI: pending.
+- GitHub CI on PR #62 head 49c53c9a799f13ec3ac059f074aed1b9abe04b13:
+  - verify: pass, run 27453853047, job 81154458356, completed 2026-06-13T02:28:23Z
+  - e2e: pass, run 27453853053, job 81154443750, completed 2026-06-13T02:26:55Z
 
 Fresh reviews:
 - evaluator: NEEDS_WORK for missing roadmap/evidence/F-0033/verify.log despite green local checks; fixed by creating this evidence record.
