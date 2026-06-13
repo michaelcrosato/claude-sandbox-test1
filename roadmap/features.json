@@ -1360,6 +1360,51 @@
         "roadmap/STATUS.md"
       ],
       "priority": 2
+    },
+    {
+      "dependencies": [
+        "F-0031"
+      ],
+      "status": "done",
+      "passes": true,
+      "evidence": [
+        "roadmap/evidence/F-0032/verify.log"
+      ],
+      "attempts": 2,
+      "blocked_reason": null,
+      "forbidden_paths": [
+        ".claude/**",
+        ".github/workflows/**",
+        "scripts/**",
+        "src/**",
+        "clients/**",
+        "charts/**"
+      ],
+      "id": "F-0032",
+      "epic": "product-docs",
+      "title": "Code-verified parity matrix",
+      "spec_ref": "README.md#why-posthorn",
+      "description": "Add the missing docs/PARITY.md promised by the README: a sourced, code-verified comparison of Posthorn against comparable webhook products, showing implemented strengths and the short list of honest gaps without claiming unsupported scale-out or transformation features.",
+      "acceptance": [
+        "docs/PARITY.md exists and compares Posthorn with Svix, Convoy, Hookdeck, and Stripe across core webhook delivery capabilities using current official source links.",
+        "Every Posthorn-supported row in the matrix is tied to implemented product evidence such as README sections, route tests, artifact tests, or source-backed local docs, and unsupported capabilities are marked as not implemented rather than implied.",
+        "The matrix includes a short gap list for codeable next work, including PostgreSQL/HA scale-out, payload transformations, deduplication rules beyond intake idempotency, and non-webhook destination connectors, while keeping human-only commercial tasks out of scope.",
+        "README.md continues to link to docs/PARITY.md and the parity doc avoids secret-shaped sample values, stale pricing claims, and unsupported production claims.",
+        "A focused Vitest test validates that the parity document exists, includes required vendors and sources, preserves the current Posthorn capability boundary, and catches broken README parity links."
+      ],
+      "authorized_paths": [
+        "docs/PARITY.md",
+        "tests/parity-doc.test.ts",
+        "README.md",
+        "roadmap/features.json",
+        "roadmap/briefs/F-0032.md",
+        "roadmap/evidence/F-0032/**",
+        "roadmap/PROGRESS.md",
+        "roadmap/DECISIONS.md",
+        "roadmap/metrics.jsonl",
+        "roadmap/STATUS.md"
+      ],
+      "priority": 1
     }
   ]
 }

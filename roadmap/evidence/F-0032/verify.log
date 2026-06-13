@@ -1,0 +1,31 @@
+VERIFY-COMMIT: pending-local-before-pr
+
+Feature: F-0032 Code-verified parity matrix
+
+Pull request:
+- PR #61: https://github.com/michaelcrosato/claude-sandbox-test1/pull/61
+- GitHub CI on PR #61 final record commit 2f6f212c1cf8aae4db62f55e2fde7056e1b88e47:
+  - verify: pass, run 27453228625, job 81152657104, completed 2026-06-13T02:00:15Z
+  - e2e: pass, run 27453228635, job 81152641024, completed 2026-06-13T01:58:40Z
+
+Fresh reviews:
+- evaluator: NEEDS_WORK for unsupported competitor claims in docs/PARITY.md and incomplete README competitor list; fixed by adding Stripe to README, adding a Not verified legend, and downgrading unsupported competitor deployment/operator cells.
+- evaluator re-review: NEEDS_WORK for Stripe non-webhook destination connectors marked Not verified despite linked Stripe event-destination docs; fixed by marking Stripe non-webhook destination connectors Implemented and updating the guard test.
+- evaluator final re-review: PASS
+- security-reviewer: skipped because final diff is docs/test/state only with no runtime code, auth, API, data, dependency, workflow, or secret changes.
+
+Local checks:
+- npx vitest run tests/parity-doc.test.ts (6 passed)
+- npm run typecheck
+- npm run lint
+- npm test (174 passed)
+- npm run build
+- npx ts-node scripts/update-state.ts --validate (32 features, 31 passing before final state flip)
+- git diff --check
+- npx ts-node scripts/assertion-shield.ts
+
+Notes:
+- Full `npm test` generated clients/python/posthorn/__pycache__; it was removed after each run.
+- The parity matrix intentionally avoids pricing claims and marks unsupported Posthorn scale-out, transformation, field/window deduplication, and non-webhook connector rows as Not yet.
+
+VERIFY: PASS (exit 0)

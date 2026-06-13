@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-06-12 — F-0032 done (Code-verified parity matrix)
+
+**What:** Added `docs/PARITY.md`, the README-promised comparison of Posthorn against Svix, Convoy, Hookdeck, and Stripe. The matrix is source-backed, ties Posthorn claims to implemented docs/tests, and keeps unsupported Posthorn gaps explicit: PostgreSQL/HA scale-out, payload transformations, deduplication rules beyond intake idempotency, and non-webhook destination connectors.
+
+**Verified:** Evidence saved at `roadmap/evidence/F-0032/verify.log`. Evaluator returned NEEDS_WORK for unsupported competitor deployment/operator claims and an incomplete README competitor list, then NEEDS_WORK again for an incorrect Stripe non-webhook destination cell, then PASS after both source-backed corrections. Security review was skipped because the final diff is docs/test/state only. Local checks passed: `npx vitest run tests/parity-doc.test.ts` (6 tests), `npm run typecheck`, `npm run lint`, `npm test` (174 tests), `npm run build`, `npx ts-node scripts/update-state.ts --validate`, `git diff --check`, and `npx ts-node scripts/assertion-shield.ts`.
+
+**Surprises:** The first safe-looking fix overcorrected competitor cells to `Not verified`; Stripe's own event-destination docs support non-webhook destinations, so the final matrix marks that row as implemented for Stripe.
+
+**Next step:** Push F-0032, open the PR, wait for CI, then add the PR-number/CI record and merge on green.
+
+---
+
 ## 2026-06-12 — F-0031 done (Helm chart deployment reference)
 
 **What:** Added a starter Helm chart under `charts/posthorn` for the current single-pod SQLite deployment model. The chart includes a deployment, service, PVC, optional chart-created admin-token secret, support for an existing admin-token secret, health/readiness probes, and hardened pod defaults without claiming PostgreSQL, Redis, ingress, ServiceMonitor, or horizontal scaling support.
