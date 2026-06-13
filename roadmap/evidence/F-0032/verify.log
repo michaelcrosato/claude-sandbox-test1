@@ -2,6 +2,10 @@ VERIFY-COMMIT: pending-local-before-pr
 
 Feature: F-0032 Code-verified parity matrix
 
+Pull request:
+- PR #61: https://github.com/michaelcrosato/claude-sandbox-test1/pull/61
+- GitHub CI: pending after PR record update
+
 Fresh reviews:
 - evaluator: NEEDS_WORK for unsupported competitor claims in docs/PARITY.md and incomplete README competitor list; fixed by adding Stripe to README, adding a Not verified legend, and downgrading unsupported competitor deployment/operator cells.
 - evaluator re-review: NEEDS_WORK for Stripe non-webhook destination connectors marked Not verified despite linked Stripe event-destination docs; fixed by marking Stripe non-webhook destination connectors Implemented and updating the guard test.
