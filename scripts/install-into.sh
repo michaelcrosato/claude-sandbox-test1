@@ -186,14 +186,19 @@ else
   echo "  kept existing: roadmap/QUESTIONS.md"
 fi
 
-# ROADMAP.md
+# ROADMAP.md — seed the template's preamble (everything before its first "## "
+# section heading) then append the canonical empty skeleton. Using sed to take
+# the preamble (not head -N) keeps the generic operator guidance without copying
+# the template's own shipped-item bullets, and emits each heading exactly once:
+# head -5 used to capture the template's own "## Now" and then append a second
+# one, producing a duplicate "## Now" (reported by 3/9 fleet installs 2026-06-11).
 if [ ! -f "$TARGET/roadmap/ROADMAP.md" ]; then
   if [ -f "$TEMPLATE_ROOT/roadmap/ROADMAP.md" ]; then
-    head -5 "$TEMPLATE_ROOT/roadmap/ROADMAP.md" > "$TARGET/roadmap/ROADMAP.md"
-    printf '\n## Now\n\n## Next\n\n## Later\n\n## Ideas\n' >> "$TARGET/roadmap/ROADMAP.md"
+    sed '/^## /,$d' "$TEMPLATE_ROOT/roadmap/ROADMAP.md" > "$TARGET/roadmap/ROADMAP.md"
   else
-    printf '# Roadmap\n\n## Now\n\n## Next\n\n## Later\n\n## Ideas\n' > "$TARGET/roadmap/ROADMAP.md"
+    printf '# Roadmap\n\n' > "$TARGET/roadmap/ROADMAP.md"
   fi
+  printf '## Now\n\n## Next\n\n## Later\n\n## Ideas\n' >> "$TARGET/roadmap/ROADMAP.md"
   echo "  seeded: roadmap/ROADMAP.md"
 else
   echo "  kept existing: roadmap/ROADMAP.md"
@@ -332,6 +337,10 @@ echo "  3. Initialize and verify the engine:"
 echo "       bash scripts/init.sh"
 echo "       bash scripts/verify.sh"
 echo "     Both must pass before the first agent session."
+echo ""
+echo "     Windows local CLI note: run those commands from Git Bash. If PowerShell"
+echo "     resolves 'bash' to WSL, prepend Git Bash before launching Claude/CLI:"
+printf '%s\n' "       \$env:Path = 'C:\\Program Files\\Git\\bin;' + \$env:Path"
 echo ""
 echo "  4. Set 'develop' as the GitHub default branch."
 echo "     Protect master/main (PR + human approval) and develop (PR + green CI)."

@@ -1,8 +1,7 @@
 ---
 paths:
-  - "src/components/**"
-  - "src/views/**"
-  - "src/pages/**"
+  - "app/**"
+  - "components/**"
 ---
 
 # Frontend rules (loaded only when touching UI paths)

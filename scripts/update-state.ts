@@ -75,6 +75,15 @@ function validate(features: Feature[]): string[] {
     if (f.passes && f.evidence.length === 0) errors.push(`${f.id}: passes:true with no evidence (default-FAIL contract)`);
     if (f.status === 'done' && !f.passes) errors.push(`${f.id}: status:done requires passes:true (evidence-gated flow)`);
   }
+  // F-0025: single-in_progress invariant. The path-authorization guard (F-0007/F-0022)
+  // derives the active feature from the lone in_progress row; 2+ in_progress makes that
+  // ambiguous and (pre-F-0025) flipped the guard to permissive — a self-bypass. Reject it.
+  {
+    const wip = features.filter((f) => f.status === 'in_progress');
+    if (wip.length > 1) {
+      errors.push(`only one feature may be in_progress at a time (found ${wip.length}: ${wip.map((f) => f.id).join(', ')}) — the path guard derives scope from the single in_progress row`);
+    }
+  }
   for (const f of features) {
     for (const dep of f.dependencies ?? []) {
       if (!ids.has(dep)) errors.push(`${f.id}: dependency ${dep} does not exist`);
@@ -219,6 +228,14 @@ switch (cmd) {
     const [id, status, ...reason] = args;
     if (!id || !status) fail('--status requires <id> <status>');
     const f = find(data, id);
+    // F-0025: single-in_progress invariant — refuse to open a 2nd concurrent
+    // in_progress feature, which would make the path guard go permissive (self-bypass).
+    if (status === 'in_progress') {
+      const other = data.features.find((x) => x.id !== id && x.status === 'in_progress');
+      if (other) {
+        fail(`cannot set ${id} in_progress: ${other.id} is already in_progress (single-in_progress invariant — finish, block, or revert it first)`);
+      }
+    }
     f.status = status;
     f.blocked_reason = status === 'blocked' ? (reason.join(' ') || 'unspecified') : null;
     save(data);

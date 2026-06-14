@@ -49,6 +49,9 @@ jobs:
           tar -C "$HOME/.local/bin" -xzf /tmp/actionlint.tar.gz actionlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Install Playwright browsers (with OS deps)
+        run: npx playwright install --with-deps chromium
+
       - name: E2E suite (skips with notice until the product defines an e2e script)
         run: |
           if node -e "process.exit(require('./package.json').scripts?.e2e ? 0 : 1)"; then

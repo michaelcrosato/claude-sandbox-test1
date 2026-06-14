@@ -8,25 +8,52 @@ import { execFileSync } from 'node:child_process';
 
 const BASE_BRANCH = process.env.BASE_BRANCH || 'origin/develop';
 
+function refExists(ref: string): boolean {
+  // --verify --quiet resolves the ref without printing anything; stdio 'pipe'
+  // keeps git's stderr off the console so a missing upstream is silent.
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', ref], { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getGitDiff(): string {
   // execFileSync with arg arrays: BASE_BRANCH is env-supplied, so it must
   // never pass through a shell (security-guidance plugin finding).
   const diffs: string[] = [];
-  try {
-    // Committed work on this branch vs base
-    diffs.push(execFileSync('git', ['diff', `${BASE_BRANCH}...HEAD`], { encoding: 'utf8' }));
-  } catch {
+  if (refExists(BASE_BRANCH)) {
+    // Committed work on this branch vs base.
+    // -M (--find-renames) enables git rename detection: a pure .test.js→.test.ts
+    // rename emits only a "rename from/to" header with no "-expect(...)" content
+    // lines, so the shield sees no deleted assertions and correctly passes.
+    // A rename that ALSO removes/weakens an assertion still emits the "-expect(...)"
+    // deletion line in the diff hunk, so the parser flags it as usual (BLOCK).
+    // Laundering is not enabled: removing an assertion always surfaces a "-" line
+    // (whether in a rename hunk or a plain deletion). A deletion too dissimilar to
+    // pair as a rename is shown as a full file delete (all assertions flagged).
     try {
-      // Fallback: diff last commit if base branch is not fetched or available
-      diffs.push(execFileSync('git', ['diff', 'HEAD~1'], { encoding: 'utf8' }));
+      diffs.push(execFileSync('git', ['diff', '-M', `${BASE_BRANCH}...HEAD`], { encoding: 'utf8' }));
+    } catch {
+      // base resolved but the range diff failed — fall through to staged check
+    }
+  } else if (refExists('HEAD~1')) {
+    // base not fetched/available but prior history exists — diff the last commit
+    try {
+      diffs.push(execFileSync('git', ['diff', '-M', 'HEAD~1'], { encoding: 'utf8' }));
     } catch {
       // no usable history — staged check below may still apply
     }
+  } else {
+    // First commit before the upstream base exists yet — not an error, just no
+    // base to diff against. The staged check below still guards this commit.
+    console.log(`[Assertion Shield] No '${BASE_BRANCH}' upstream and no prior commit yet (first commit) — auditing staged changes only.`);
   }
   try {
     // Staged-but-uncommitted changes — what a pre-commit hook is actually
     // gating. Without --cached the hook only ever saw prior commits.
-    diffs.push(execFileSync('git', ['diff', '--cached'], { encoding: 'utf8' }));
+    diffs.push(execFileSync('git', ['diff', '-M', '--cached'], { encoding: 'utf8' }));
   } catch {
     console.log('Not in a git repository. Skipping assertion check.');
   }
@@ -44,6 +71,29 @@ function scanDiffForWeakening(diffText: string): Violation[] {
   const lines = diffText.split('\n');
   let currentFile = '';
   let currentNewFile = '';
+
+  // F-0027: distinguish "a pre-existing test lost coverage" (a real weakening, block)
+  // from "a test file created in THIS branch is being removed/edited" (removes no
+  // pre-existing coverage, so not a weakening). We only relax when BASE is available
+  // to compare against — with no upstream we cannot tell, so we stay strict.
+  const baseAvailable = refExists(BASE_BRANCH);
+  const baseExistsCache = new Map<string, boolean>();
+  const existedOnBase = (file: string): boolean => {
+    if (!file) return false;
+    const cached = baseExistsCache.get(file);
+    if (cached !== undefined) return cached;
+    let exists = false;
+    try {
+      // git cat-file -e BASE:path exits 0 iff the path exists on BASE. BASE_BRANCH is
+      // env-supplied → execFileSync arg array (no shell), same hardening as getDiff().
+      execFileSync('git', ['cat-file', '-e', `${BASE_BRANCH}:${file}`], { stdio: 'pipe' });
+      exists = true;
+    } catch {
+      exists = false;
+    }
+    baseExistsCache.set(file, exists);
+    return exists;
+  };
   // Added-line weakening (F-0009): skipping a test mutes it as effectively as
   // deleting its assertions.
   const skipPatterns = [/\.(only|skip)\s*\(/, /\b(xit|xdescribe|xtest)\s*\(/];
@@ -104,8 +154,28 @@ function scanDiffForWeakening(diffText: string): Violation[] {
           continue;
         }
 
+        // Skip CJS module import/require declarations (CJS→ESM migration boilerplate, not assertions):
+        // 'const|let|var X = require(...);' or a destructuring 'const { a, b } = require(...);',
+        // plus a bare 'use strict' pragma. These carry no test coverage.
+        // SECURITY (security-review): the pattern is anchored at BOTH ends — require(...) must be
+        // the ENTIRE right-hand side and the line must END there (optional ';'). Without the end
+        // anchor, a line like `const _ = require('x'); expect(role).toBe('admin');` would match the
+        // prefix and let a real deleted assertion slip past. A single LHS binding only (a bare
+        // identifier or one {...} destructure) — no ','-chained second binding, no trailing code.
+        const isModuleDecl =
+          /^(?:const|let|var)\s+(?:[A-Za-z_$][\w$]*|\{[^}]*\})\s*=\s*require\([^)]*\)\s*;?\s*$/.test(cleanedLine)
+          || cleanedLine === "'use strict';";
+        if (isModuleDecl) {
+          continue;
+        }
+
         const containsAssertion = assertionKeywords.some(keyword => cleanedLine.includes(keyword));
-        if (containsAssertion) {
+        // F-0027: only a deletion from a file that EXISTED on BASE is a weakening
+        // (when base is unavailable, stay strict and flag). A branch-new test file
+        // being removed/edited removes no pre-existing coverage → not flagged. The
+        // strict scan is otherwise unchanged, so content-gutting in an existing test
+        // (a deleted assertion line) is still blocked.
+        if (containsAssertion && (!baseAvailable || existedOnBase(currentFile))) {
           violations.push({
             file: currentFile,
             line: cleanedLine

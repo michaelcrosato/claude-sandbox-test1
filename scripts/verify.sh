@@ -4,8 +4,8 @@
 # Stack-aware: runs whatever gates the repo defines; engine meta-gates always run.
 set -u
 cd "$(dirname "$0")/.." || exit 1
-# shellcheck source=scripts/bash-node-bridge.sh
-. "$PWD/scripts/bash-node-bridge.sh"
+
+bash scripts/local-cli-preflight.sh || exit 1
 
 E2E=false
 [ "${1:-}" = "--e2e" ] && E2E=true
@@ -117,7 +117,7 @@ elif [ "${CI:-}" = "true" ]; then
 else
   echo "(actionlint not installed locally — enforced in CI)"
 fi
-step "hook contract tests" bash scripts/test-hooks.sh
+step "hook contract tests" "$BASH" scripts/test-hooks.sh
 
 # ---- E2E (opt-in) ----
 if $E2E; then

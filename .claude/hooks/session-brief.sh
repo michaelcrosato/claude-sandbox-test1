@@ -3,10 +3,6 @@
 # (AI_OPERATIONS_PLAN §6.3). Must never fail or block — informational only.
 set -u
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
-if [ -f "scripts/bash-node-bridge.sh" ]; then
-  # shellcheck disable=SC1091
-  . "scripts/bash-node-bridge.sh"
-fi
 
 echo "=== SESSION BRIEF ($(date -u '+%Y-%m-%d %H:%MZ')) ==="
 

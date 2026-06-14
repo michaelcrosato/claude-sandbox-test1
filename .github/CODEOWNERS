@@ -1,0 +1,26 @@
+# CODEOWNERS — guardrail-path map (optional-modules.md: branch-protection trigger)
+#
+# Required-review on `main` routes changes to these load-bearing paths to the
+# operator. This is intentionally a GUARDRAIL map, not full coverage: the engine's
+# safety surface (constitution, hooks, gates, state writer, CI, dependency manifest)
+# must not change without the operator in the loop. It is inert on branches without
+# required-review protection (see DECISIONS.md / optional-modules.md fork-5).
+
+# The constitution and operating plan
+/CLAUDE.md                      @michaelcrosato
+/AI_OPERATIONS_PLAN.md          @michaelcrosato
+
+# The whole Claude control surface: agents, skills, hooks, rules, settings, policy
+/.claude/                       @michaelcrosato
+
+# The gate and its enforcement scripts
+/scripts/                       @michaelcrosato
+
+# CI / automation workflows (privilege, trust-widening, secret exposure live here)
+/.github/                       @michaelcrosato
+
+# Line-ending / attribute discipline (CRLF here silently breaks the gates)
+/.gitattributes                 @michaelcrosato
+
+# The backlog state machine (single-writer; never hand-edited)
+/roadmap/features.json          @michaelcrosato

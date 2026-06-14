@@ -1,4 +1,4 @@
-# Operator Guide: How to run Posthorn (claude-sandbox-test1)
+# Operator Guide: How to run ForgeOps
 
 Welcome to your AI-coded repository! You do not need to run commands or read code. The AI workforce handles the execution, and you act as the planner and the final release authority.
 
@@ -55,3 +55,23 @@ If staging gets into a messy state and you want to restore the last known workin
 2. **One-click revert (do it yourself):** open the pull request that introduced the problem (the newest one on the "Pull requests → Closed" list), and click GitHub's **Revert** button at the bottom. That opens a ready-made undo PR — merge it and staging rolls back.
 
 Either way, the agents detect the rollback automatically and put the reverted work back into the backlog as "needs another attempt."
+
+---
+
+## 5. Local Windows CLI Recovery (Maintainers Only)
+
+If you personally run Claude Code or another local agent CLI on Windows and see repeated `PostToolUse hook (failed)` messages, or the prompt fills with `[I[O[I[O` text and stops accepting input, close the stuck terminal tab. The usual cause is PowerShell resolving `bash` to WSL instead of Git Bash.
+
+Launch the CLI from Git Bash, or run this in PowerShell before starting the CLI:
+
+```powershell
+$env:Path = 'C:\Program Files\Git\bin;' + $env:Path
+claude
+```
+
+If the shell still accepts commands but keeps echoing focus-event text, run:
+
+```powershell
+[Console]::Write("$([char]27)[?1004l")
+cls
+```

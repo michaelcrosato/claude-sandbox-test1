@@ -4,20 +4,20 @@
     "reasoning": {
       "model": "opus",
       "effort": "high",
-      "last_verified": "2026-06-13",
-      "notes": "Orchestrator, planner, evaluator, security-reviewer, db-engineer. Fable 5 (claude-fable-5) is a valid upgrade but access is temporarily suspended as of 2026-06-12; Opus 4 deprecation is on 2026-06-15, making the default opus (Opus 4.8) the primary reasoning model."
+      "last_verified": "2026-06-09",
+      "notes": "Orchestrator, planner, evaluator, security-reviewer, db-engineer. Fable 5 (claude-fable-5) is a valid upgrade for the hardest planning/evaluation passes; usage-credit pricing applies after 2026-06-22."
     },
     "builder": {
       "model": "sonnet",
       "effort": "high",
-      "last_verified": "2026-06-13",
-      "notes": "Routine implementation of one well-briefed feature. Sonnet 4 deprecation is on 2026-06-15; default sonnet resolves to Sonnet 4.6."
+      "last_verified": "2026-06-09",
+      "notes": "Routine implementation of one well-briefed feature. Sonnet 4.6 at ~60% of Opus per-token price."
     },
     "fast": {
       "model": "haiku",
       "effort": "medium",
-      "last_verified": "2026-06-13",
-      "notes": "Explorer/search/triage fan-out. Default haiku resolves to Haiku 4.5."
+      "last_verified": "2026-06-09",
+      "notes": "Explorer/search/triage fan-out. Returns conclusions, never file dumps."
     }
   }
 }

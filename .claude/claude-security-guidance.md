@@ -14,3 +14,11 @@ An operations engine for autonomous AI coding. The highest-value targets are the
 
 ## Credentials policy
 Dev-instance credentials live only in the cloud environment's env-var screen. If a credential appears in code, config, or logs: treat as leaked, flag for rotation.
+
+## Command guards: deterrent layer, not the security boundary
+
+The regex patterns in `.claude/hooks/guard-bash.sh` are a **deterrent and defense-in-depth layer, not the primary security boundary**. They catch common, obvious attack shapes (reading `.env` files, piping downloads to a shell, exfil-shaped POSTs, destructive deletions of root paths), but they are evadable: a sufficiently quoted or indirected command may slip past a regex. Do not treat them as the sole control.
+
+The real security boundary is the **execution environment itself**: agents run with dev-only credentials scoped to non-production resources, no production mounts are attached, and network egress is restricted. Even if a guard pattern is bypassed, the environment has nothing of value to exfiltrate and no production systems to damage. CI re-runs the full gate on every PR so any weakened or removed guard is caught before merge.
+
+Treat the regex guards as a fast feedback loop for the most common mistakes — not as a guarantee. Any change that weakens an existing deny pattern must be justified explicitly in the PR and flagged by the security reviewer.
