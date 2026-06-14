@@ -78,7 +78,8 @@ curl -sX POST localhost:3000/v1/messages \
 # -> 202 Accepted; the worker signs and POSTs it to your registered endpoint
 ```
 
-For production Compose/Helm/Prometheus, see **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+For production deployment with Prometheus monitoring, Docker Compose, and a starter Helm chart,
+see **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ---
 
@@ -221,6 +222,105 @@ serves the machine-readable 3.1 contract for codegen). Key surfaces:
   `verifyWebhook(secret, headers, rawBody)` (TS) / `verify_webhook(...)` (Python).
 - **Python SDK** covers a tenant subset only (no admin client, no endpoint update/delete/rotate/
   test, no event-type methods). Use the TypeScript SDK for the full surface.
+
+See [`docs/PARITY.md`](docs/PARITY.md) for the full, code-verified feature matrix vs. Svix,
+Convoy, Hookdeck, and Stripe — including the short worklist of gaps Posthorn is closing.
+
+## API Routes
+
+| Method | Path | Auth | Status | Purpose |
+| ------ | ---- | ---- | ------ | ------- |
+| GET | `/healthz` | none | implemented | Liveness probe (static — the process is up). |
+| GET | `/readyz` | none | implemented | Readiness probe — `200` when the storage backend is reachable, `503` when not. |
+| GET | `/metrics` | none | implemented | Prometheus text exposition (operator metrics). |
+| GET | `/openapi.json` | none | implemented | OpenAPI 3.1 contract (client codegen + interactive docs). |
+| POST | `/v1/messages` | Bearer | implemented | Accept an event and fan it out (`202`; optional idempotency and deduplication keys). |
+| POST | `/v1/messages/batch` | Bearer | implemented | Accept up to 100 events in one call; per-item results (`200`; supports the same idempotency and deduplication fields). |
+| GET | `/v1/messages` | Bearer | implemented | List messages, newest-first (keyset-paginated; filters: `eventType`, `after`, `before`). |
+| GET | `/v1/messages/:id` | Bearer | implemented | Read a message + per-endpoint delivery statuses. |
+| POST | `/v1/messages/:id/retry` | Bearer | implemented | Replay a message's dead-lettered deliveries. |
+| GET | `/v1/messages/:id/attempts` | Bearer | implemented | Per-attempt audit log (paginated). |
+| GET | `/v1/endpoints` | Bearer | implemented | List endpoints. |
+| POST | `/v1/endpoints` | Bearer | implemented | Create an endpoint (`201`; signing secret shown once; optional `rateLimitPerSecond`, `deliveryMethod`, and `payloadFormat`). |
+| GET | `/v1/endpoints/:id` | Bearer | implemented | Fetch one endpoint. |
+| PATCH | `/v1/endpoints/:id` | Bearer | implemented | Update an endpoint, including clearing `rateLimitPerSecond` with `null` or resetting `deliveryMethod` / `payloadFormat` with `null`. |
+| DELETE | `/v1/endpoints/:id` | Bearer | implemented | Delete an endpoint (`204`). |
+| POST | `/v1/endpoints/:id/rotate-secret` | Bearer | implemented | Rotate signing secret (`201`; new secret shown once, previous secret signs during overlap). |
+| POST | `/v1/endpoints/:id/test` | Bearer | implemented | Send a one-shot test delivery; returns result synchronously (a registered `eventType`'s `schemaExample` is used as the payload when none is supplied — `payloadSource` reports the source). |
+| GET | `/v1/endpoints/:id/deliveries` | Bearer | implemented | Endpoint delivery history (keyset-paginated with `?limit=` and `?cursor=`; payloads and secrets omitted). |
+| GET | `/v1/endpoints/:id/stats` | Bearer | implemented | Endpoint delivery stats over a trailing window (`?days=`): totals, status counts, success rate, avg duration, per-day trend, and a per-`failureReason` breakdown. |
+| GET | `/v1/deliveries` | Bearer | implemented | App-wide delivery listing (keyset-paginated; filters: `status`, `endpointId`, `eventType`, `failureReason`). |
+| GET | `/v1/usage` | Bearer | implemented | Tenant's own message + delivery usage and current-month quota status. |
+| POST | `/v1/portal/sessions` | Bearer | implemented | Mint a short-lived consumer portal session token for endpoint management. |
+| GET | `/v1/event-types` | Bearer | implemented | List active event types. |
+| POST | `/v1/event-types` | Bearer | implemented | Create an event type with an optional schema example. |
+| GET | `/v1/event-types/:id` | Bearer | implemented | Fetch one active event type. |
+| PATCH | `/v1/event-types/:id` | Bearer | implemented | Update an event type description or schema example. |
+| DELETE | `/v1/event-types/:id` | Bearer | implemented | Archive an event type. |
+| POST | `/v1/admin/apps` | Admin | implemented | Create a tenant. |
+| GET | `/v1/admin/apps` | Admin | implemented | List tenants. |
+| GET/PATCH/DELETE | `/v1/admin/apps/:id` | Admin | implemented | Read / update / delete a tenant. |
+| GET | `/v1/admin/apps/:id/usage` | Admin | implemented | Per-tenant usage (billing read model). |
+| POST | `/v1/admin/apps/:id/rotate-system-secret` | Admin | implemented | Rotate the app's system webhook signing secret (`201`; new secret shown once, previous secret kept for overlap). |
+| POST/GET | `/v1/admin/apps/:id/keys` | Admin | implemented | Mint / list API keys. |
+| DELETE | `/v1/admin/keys/:id` | Admin | implemented | Revoke an API key. |
+
+The admin routes are **disabled by default** — they 404 unless `POSTHORN_ADMIN_TOKEN` is set.
+`GET /openapi.json` serves a machine-readable OpenAPI 3.1 document; use it with
+`openapi-generator`, `oapi-codegen`, or Redoc to generate a typed client for any language.
+
+### Error responses
+
+Every non-2xx response uses one envelope — `{ "error": { "code": "...", "message": "..." } }` —
+where `code` is one stable, machine-readable string you can branch on (the human-readable
+`message` is for logs, not control flow). The set is **closed and enumerated** in the OpenAPI
+`Error.code` schema (a build-time test pins the spec to the values the API actually emits, so
+they cannot drift). In the SDK, `PosthornApiError.code` is typed as the union `ApiErrorCode`.
+
+| `code` | HTTP | Status | Meaning |
+| ------ | ---- | ------ | ------- |
+| `invalid_request` | 400 | implemented | Malformed request: a validation failure, a bad query parameter, or a missing/non-object body. |
+| `invalid_json` | 400 | implemented | The request body is not valid JSON. |
+| `url_not_allowed` | 400 | implemented | The endpoint URL targets a private/internal address (SSRF guard). |
+| `endpoint_disabled` | 400 | implemented | The target endpoint is disabled (e.g. a test-send to it). |
+| `unauthorized` | 401 | implemented | Missing, invalid, or revoked credential (API key, or admin token on a control-plane route). |
+| `not_found` | 404 | implemented | No such resource for your tenant, no route, or a disabled (hidden) feature surface. |
+| `method_not_allowed` | 405 | implemented | The path exists, but not for this HTTP method. |
+| `conflict` | 409 | implemented | A uniqueness/state conflict (e.g. an event type that already exists). |
+| `idempotency_conflict` | 409 | implemented | An idempotency key reused with a different payload. |
+| `payload_too_large` | 413 | implemented | The request body exceeded the configured maximum size. |
+| `quota_exceeded` | 429 | implemented | Your monthly message quota is reached. |
+| `internal_error` | 500/503 | implemented | An unexpected server-side fault or temporarily unavailable storage dependency. |
+
+### Admin CLI (control plane)
+
+The bundled CLI wraps both the tenant and admin APIs. Tenant commands use a `phk_` API key; admin
+commands need the control-plane token in `POSTHORN_ADMIN_TOKEN`:
+
+```bash
+export POSTHORN_ADMIN_TOKEN=...                      # the control-plane token
+posthorn \
+  admin create-app Acme --monthly-message-quota 100000
+posthorn \
+  admin create-key app_... Production                  # API key secret printed ONCE
+posthorn \
+  admin usage app_...                                  # billing usage for one tenant
+posthorn \
+  admin rotate-system-secret app_... --overlap-seconds 3600
+posthorn \
+  admin help
+```
+
+Commands print JSON to stdout, including one-time secrets returned by mutating calls.
+
+### Deployment & monitoring artifacts
+
+For production Docker Compose and starter Helm references with a Prometheus scrape config, see
+**[docs/DEPLOY.md](docs/DEPLOY.md)**.
+The Helm chart is a single-pod SQLite Kubernetes reference; PostgreSQL-backed scale-out remains future work.
+Prometheus alert rules are available in **[docs/prometheus-alerts.yml](docs/prometheus-alerts.yml)**,
+and an importable Grafana dashboard is available in
+**[docs/grafana-dashboard.json](docs/grafana-dashboard.json)**.
 
 ---
 

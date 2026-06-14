@@ -17,6 +17,10 @@ build/
 tmp/
 .cache/
 
+# Python build artifacts (clients/python is std-lib only; never ship bytecode)
+__pycache__/
+*.pyc
+
 # …but evidence is the product of the verification contract — it MUST ship
 # (evaluators open it; features.json records its paths; fresh clones resume from it)
 !roadmap/evidence/**
