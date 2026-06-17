@@ -150,6 +150,7 @@ describe('HTTP gateway', () => {
       }),
       port: 0,
     });
+    activeGateways.push(tempGateway);
     const tempAddr = await tempGateway.start();
     const busyPort = tempAddr.port;
 
@@ -168,6 +169,7 @@ describe('HTTP gateway', () => {
     await conflictingGateway.stop();
     activeGateways.pop();
     await tempGateway.stop();
+    activeGateways.pop();
   });
 });
 

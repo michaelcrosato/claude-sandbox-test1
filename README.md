@@ -445,7 +445,7 @@ npm start
 #### EADDRINUSE Port Conflict Handling
 
 If the configured port is already in use by another process (`EADDRINUSE`):
-- If `POSTHORN_PORT` is set to `0`, the server binds to a random ephemeral port as usual.
+- Port `0` can only be configured programmatically (e.g. `createGateway({ port: 0 })`) because the environment configuration validates `POSTHORN_PORT` to be >= 1. When configured programmatically with port `0`, the server binds to a random ephemeral port as usual.
 - If `POSTHORN_PORT` is set to a non-zero port, Posthorn will gracefully scan for an available port by incrementing the port number by 1, up to a maximum of `configuredPort + 100`. The server will bind to the first free port found in this range. If all 100 ports are in use, it will throw the original `EADDRINUSE` error.
 
 ## Monitoring
