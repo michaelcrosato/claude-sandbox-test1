@@ -141,6 +141,34 @@ describe('HTTP gateway', () => {
     const health = await fetch(`${address.url}/healthz`);
     expect(health.status).toBe(200);
   });
+
+  it('retries on EADDRINUSE by incrementing port up to basePort + 100', async () => {
+    const tempGateway = createGateway({
+      ...loadConfig({
+        POSTHORN_HOST: '127.0.0.1',
+        POSTHORN_DATA_DIR: ':memory:',
+      }),
+      port: 0,
+    });
+    const tempAddr = await tempGateway.start();
+    const busyPort = tempAddr.port;
+
+    const conflictingGateway = createGateway({
+      ...loadConfig({
+        POSTHORN_HOST: '127.0.0.1',
+        POSTHORN_DATA_DIR: ':memory:',
+      }),
+      port: busyPort,
+    });
+    activeGateways.push(conflictingGateway);
+
+    const conflictingAddr = await conflictingGateway.start();
+    expect(conflictingAddr.port).toBe(busyPort + 1);
+
+    await conflictingGateway.stop();
+    activeGateways.pop();
+    await tempGateway.stop();
+  });
 });
 
 function makeGateway(dependencies?: Parameters<typeof createGateway>[1]): Gateway {

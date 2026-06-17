@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Posthorn Tenant</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --ink: #172033;
+      --muted: #5e6678;
+      --line: #d7dce6;
+      --panel: #ffffff;
+      --primary: #1f6feb;
+      --primary-ink: #ffffff;
+      --danger: #b42318;
+      --success: #067647;
+      --warning: #946200;
+      --focus: #7c3aed;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 64px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--ink);
+      color: #ffffff;
+      font-size: 14px;
+    }
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    nav a {
+      min-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 0 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    nav a[aria-current="page"] {
+      border-color: var(--line);
+      background: #f2f5fa;
+      color: var(--ink);
+    }
+    main {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 20px 24px 32px;
+    }
+    .page-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .stack { display: grid; gap: 18px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 0;
+    }
+    form, .controls {
+      display: grid;
+      gap: 12px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    input, select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid #b9c0cc;
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: var(--ink);
+      background: #ffffff;
+      font: inherit;
+    }
+    input:focus, select:focus, button:focus-visible {
+      outline: 3px solid rgba(124, 58, 237, 0.2);
+      outline-offset: 1px;
+      border-color: var(--focus);
+    }
+    button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #ffffff;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { border-color: #98a2b3; }
+    button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: var(--primary-ink);
+    }
+    button.danger {
+      border-color: #fecdca;
+      color: var(--danger);
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .row > * { flex: 1 1 160px; }
+    .row > button { flex: 0 0 auto; }
+    .status {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: var(--muted);
+      padding: 8px 10px;
+      overflow-wrap: anywhere;
+    }
+    .status[data-state="success"] {
+      color: var(--success);
+      background: #ecfdf3;
+      border-color: #abefc6;
+    }
+    .status[data-state="error"] {
+      color: var(--danger);
+      background: #fef3f2;
+      border-color: #fecdca;
+    }
+    .status[data-state="loading"] {
+      color: var(--warning);
+      background: #fffaeb;
+      border-color: #fedf89;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+      background: #ffffff;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    tr:last-child td { border-bottom: 0; }
+    tr.selected td { background: #eef4ff; }
+    .mono {
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: #eef2f6;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .pill.success { background: #dcfae6; color: var(--success); }
+    .pill.error { background: #fee4e2; color: var(--danger); }
+    .secret {
+      display: none;
+      border: 1px solid #abefc6;
+      border-radius: 8px;
+      background: #ecfdf3;
+      padding: 12px;
+      overflow-wrap: anywhere;
+    }
+    .secret[data-visible="true"] { display: block; }
+    .details {
+      display: grid;
+      gap: 12px;
+    }
+    pre {
+      margin: 0;
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101828;
+      color: #f9fafb;
+      padding: 12px;
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 16px;
+      }
+      nav { justify-content: flex-start; }
+      main { padding: 16px; }
+      .page-head { align-items: flex-start; flex-direction: column; }
+      .grid { grid-template-columns: 1fr; }
+      table { min-width: 560px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">P</span><span>Posthorn</span></div>
+    <nav aria-label="Dashboard">
+      <a href="/dashboard">Admin</a>
+      <a href="/dashboard/tenant" aria-current="page">Tenant</a>
+      <a href="/openapi.json">OpenAPI</a>
+    </nav>
+  </header>
+  <main>
+    
+    <div class="page-head">
+      <h1>Tenant Dashboard</h1>
+      <button id="refresh-tenant" class="primary" type="button">Refresh</button>
+    </div>
+    <div class="grid">
+      <div class="stack">
+        <section>
+          <h2>Tenant Session</h2>
+          <form id="tenant-auth-form">
+            <label>API key
+              <input id="tenant-key" name="apiKey" type="password" autocomplete="current-password" required>
+            </label>
+            <button class="primary" type="submit">Connect</button>
+          </form>
+          <p id="tenant-auth-status" class="status" data-state="success">Connected.</p>
+        </section>
+        <section>
+          <h2>Usage</h2>
+          <p id="tenant-usage-status" class="status" data-state="success">Usage loaded.</p>
+          <div id="tenant-usage-summary" class="row">
+<div><span class="pill">Month</span><div class="mono">2026-06</div></div>
+<div><span class="pill">Messages</span><div class="mono">12450</div></div>
+<div><span class="pill">Delivery attempts</span><div class="mono">13100</div></div>
+<div><span class="pill">Remaining</span><div class="mono">Unlimited</div></div>
+</div>
+        </section>
+        <section>
+          <h2>Endpoints</h2>
+          <p id="endpoint-status" class="status" data-state="success">2 endpoints.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Endpoint</th>
+                  <th>Events</th>
+                  <th>Enabled</th>
+                </tr>
+              </thead>
+              <tbody id="endpoint-rows">
+<tr>
+  <td class="mono">ep_001
+https://acme.com/webhooks</td>
+  <td>user.created, user.deleted</td>
+  <td>Yes</td>
+</tr>
+<tr>
+  <td class="mono">ep_002
+https://acme.com/analytics</td>
+  <td>All</td>
+  <td>Yes</td>
+</tr>
+</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <div class="stack">
+        <section>
+          <h2>Message History</h2>
+          <p id="message-list-status" class="status" data-state="success">2 messages.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Message</th>
+                  <th>Event</th>
+                  <th>Created</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="message-rows">
+<tr>
+  <td class="mono">msg_001</td>
+  <td>user.created</td>
+  <td>6/17/2026, 12:00:00 PM</td>
+  <td><button class="primary" type="button">Inspect</button></td>
+</tr>
+<tr>
+  <td class="mono">msg_002</td>
+  <td>payment.succeeded</td>
+  <td>6/17/2026, 12:05:00 PM</td>
+  <td><button class="primary" type="button">Inspect</button></td>
+</tr>
+</tbody>
+            </table>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button id="load-more-messages" type="button" disabled>Load More</button>
+          </div>
+        </section>
+        <section>
+          <h2>Delivery Status</h2>
+          <p id="message-status" class="status" data-state="empty">Select a message.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Delivery</th>
+                  <th>Endpoint</th>
+                  <th>Status</th>
+                  <th>Attempts</th>
+                </tr>
+              </thead>
+              <tbody id="delivery-rows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h2>Attempt Audit Log</h2>
+          <p id="attempt-status" class="status" data-state="empty">Select a message.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Attempt</th>
+                  <th>Outcome</th>
+                  <th>HTTP</th>
+                  <th>Reason</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="attempt-rows"></tbody>
+            </table>
+          </div>
+          <details class="details" style="margin-top:12px">
+            <summary>Payload</summary>
+            <pre id="message-payload">{}</pre>
+          </details>
+        </section>
+      </div>
+    </div>
+  </main>
+  
+  
+</body>
+</html>

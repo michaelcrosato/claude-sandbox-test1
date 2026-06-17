@@ -170,20 +170,32 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
     });
 
     const host = normalizedConfig.host ?? '0.0.0.0';
-    const port = normalizedConfig.port ?? 3000;
-    try {
-      address = await listen(server, host, port);
-      return address;
-    } catch (error) {
-      const failedServer = server;
-      const failedStorage = storage;
-      server = null;
-      storage = null;
-      address = null;
-      readinessError = null;
-      await closeServer(failedServer);
-      failedStorage?.close();
-      throw error;
+    const basePort = normalizedConfig.port ?? 3000;
+    const isValidPort = Number.isInteger(basePort) && basePort >= 0 && basePort <= 65535;
+
+    let currentPort = basePort;
+    while (true) {
+      try {
+        address = await listen(server, host, currentPort);
+        return address;
+      } catch (error) {
+        const err = asError(error);
+        if (err.message.includes('EADDRINUSE') || (err as any).code === 'EADDRINUSE') {
+          if (isValidPort && basePort !== 0 && currentPort < basePort + 100) {
+            currentPort++;
+            continue;
+          }
+        }
+        const failedServer = server;
+        const failedStorage = storage;
+        server = null;
+        storage = null;
+        address = null;
+        readinessError = null;
+        await closeServer(failedServer);
+        failedStorage?.close();
+        throw error;
+      }
     }
   }
 }
