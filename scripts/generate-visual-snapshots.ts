@@ -1,9 +1,9 @@
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { renderAdminDashboardPage, renderTenantDashboardPage } from '../src/dashboard';
 
-const OUTPUT_DIR = 'C:/dev/claude-sandbox-test1/roadmap/evidence/frontend-visuals';
+const OUTPUT_DIR = resolve(__dirname, '../roadmap/evidence/frontend-visuals');
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // 1. Generate Populated Admin Dashboard HTML
@@ -170,15 +170,39 @@ tenantDetailsHtml = tenantDetailsHtml.replace(/<script>[\s\S]*?<\/script>/g, '')
 writeFileSync(join(OUTPUT_DIR, 'tenant-dashboard-details.html'), tenantDetailsHtml);
 
 // 4. Find Browser Binary
-let browserPath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-if (!existsSync(browserPath)) {
+let browserPath = '';
+if (process.platform === 'win32') {
+  const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-  if (existsSync(edgePath)) {
+  if (existsSync(chromePath)) {
+    browserPath = chromePath;
+  } else if (existsSync(edgePath)) {
     browserPath = edgePath;
-  } else {
-    console.error('Neither Google Chrome nor Microsoft Edge was found at standard locations.');
-    process.exit(1);
   }
+} else if (process.platform === 'darwin') {
+  const chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (existsSync(chromePath)) {
+    browserPath = chromePath;
+  }
+} else {
+  // Linux or POSIX
+  const candidates = ['google-chrome', 'chrome', 'microsoft-edge-stable'];
+  for (const candidate of candidates) {
+    try {
+      const path = execSync(`which ${candidate}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+      if (path) {
+        browserPath = path;
+        break;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+if (!browserPath) {
+  console.log('No suitable browser (Google Chrome or Microsoft Edge) was found on this system. Failing gracefully.');
+  process.exit(0);
 }
 
 const capture = (filename: string) => {
@@ -196,4 +220,4 @@ capture('admin-dashboard');
 capture('tenant-dashboard');
 capture('tenant-dashboard-details');
 
-console.log('[visuals] Generation complete. Files saved in C:/dev/claude-sandbox-test1/roadmap/evidence/frontend-visuals/');
+console.log(`[visuals] Generation complete. Files saved in ${OUTPUT_DIR}/`);

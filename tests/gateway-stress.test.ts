@@ -108,4 +108,34 @@ describe('Gateway Stress and Extreme Ports Tests', () => {
 
     await gateway.stop();
   });
+
+  it('throws EADDRINUSE cleanly without throwing RangeError when port scan would exceed 65535', async () => {
+    let listenCount = 0;
+    const attemptedPorts: number[] = [];
+    const basePort = 65500;
+
+    (Server.prototype as any).listen = function (this: Server, port: any, _host: any, _cb: any) {
+      listenCount++;
+      attemptedPorts.push(port);
+      const err = new Error('listen EADDRINUSE: address already in use 127.0.0.1:' + port);
+      (err as any).code = 'EADDRINUSE';
+      process.nextTick(() => {
+        this.emit('error', err);
+      });
+      return this;
+    };
+
+    const gateway = createGateway({
+      host: '127.0.0.1',
+      dataDir: ':memory:',
+      port: basePort,
+    });
+
+    await expect(gateway.start()).rejects.toThrow('EADDRINUSE');
+    expect(listenCount).toBe(36);
+    expect(attemptedPorts[0]).toBe(65500);
+    expect(attemptedPorts[35]).toBe(65535);
+
+    await gateway.stop();
+  });
 });

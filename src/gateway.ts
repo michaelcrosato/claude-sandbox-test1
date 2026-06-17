@@ -180,8 +180,8 @@ export function createGateway(config: GatewayConfig = {}, dependencies: GatewayD
         return address;
       } catch (error) {
         const err = asError(error);
-        if (err.message.includes('EADDRINUSE') || (err as any).code === 'EADDRINUSE') {
-          if (isValidPort && basePort !== 0 && currentPort < basePort + 100) {
+        if (err.message.includes('EADDRINUSE') || (err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          if (isValidPort && basePort !== 0 && currentPort < basePort + 100 && currentPort < 65535) {
             currentPort++;
             continue;
           }
