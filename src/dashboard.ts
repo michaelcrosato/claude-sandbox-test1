@@ -259,6 +259,7 @@ function dashboardDocument(options: {
       font-family: "Courier New", monospace;
       font-size: 12px;
       overflow-wrap: anywhere;
+      white-space: pre-wrap;
     }
     .pill {
       display: inline-flex;
@@ -614,7 +615,7 @@ function adminScript(): string {
   authForm.addEventListener('submit', (event) => {
     event.preventDefault();
     token = ph.byId('admin-token').value.trim();
-    selectedApp = null;
+    clearSelectedTenantView();
     void loadAdmin();
   });
   refresh.addEventListener('click', () => void loadAdmin());
@@ -642,10 +643,15 @@ function adminScript(): string {
       ph.setStatus('admin-auth-status', 'success', 'Connected.');
       ph.setStatus('create-key-status', selectedApp ? 'empty' : 'error', selectedApp ? 'Ready.' : 'Select a tenant.');
       renderTenants();
-      if (selectedApp) await loadSelectedTenant();
+      if (selectedApp) {
+        await loadSelectedTenant();
+      } else {
+        clearSelectedTenantView();
+      }
     } catch (error) {
       tenants = [];
       renderTenants();
+      clearSelectedTenantView();
       ph.setStatus('admin-auth-status', 'error', ph.errorMessage(error));
       ph.setStatus('tenant-list-status', 'error', ph.errorMessage(error));
     }
@@ -727,7 +733,11 @@ function adminScript(): string {
     renderTenants();
     ph.byId('created-secret').dataset.visible = 'false';
     ph.setStatus('create-key-status', selectedApp ? 'empty' : 'error', selectedApp ? 'Ready.' : 'Select a tenant.');
-    void loadSelectedTenant();
+    if (selectedApp) {
+      void loadSelectedTenant();
+    } else {
+      clearSelectedTenantView();
+    }
   }
 
   async function loadSelectedTenant() {
@@ -740,6 +750,7 @@ function adminScript(): string {
       ph.clear(ph.byId('usage-summary'));
       return;
     }
+    ph.clear(ph.byId('usage-summary'));
     ph.setStatus('usage-status', 'loading', 'Loading usage...');
     try {
       const body = await ph.api('/v1/admin/apps/' + encodeURIComponent(selectedApp.id) + '/usage', token);
@@ -805,6 +816,14 @@ function adminScript(): string {
       ph.setStatus('key-list-status', 'error', ph.errorMessage(error));
     }
   }
+
+  function clearSelectedTenantView() {
+    selectedApp = null;
+    ph.clear(ph.byId('usage-summary'));
+    ph.clear(ph.byId('key-rows'));
+    ph.setStatus('usage-status', 'empty', 'Select a tenant.');
+    ph.setStatus('key-list-status', 'empty', 'Select a tenant.');
+  }
 })();`;
 }
 
@@ -825,7 +844,7 @@ function tenantScript(): string {
     token = ph.byId('tenant-key').value.trim();
     messages = [];
     nextCursor = null;
-    selectedMessage = null;
+    clearSelectedMessage();
     void loadTenant(true);
   });
   refresh.addEventListener('click', () => void loadTenant(true));
@@ -838,7 +857,11 @@ function tenantScript(): string {
     }
     ph.setStatus('tenant-auth-status', 'loading', 'Loading tenant data...');
     try {
-      await Promise.all([loadUsage(), loadEndpoints(), loadMessages(resetMessages)]);
+      const promises = [loadUsage(), loadEndpoints(), loadMessages(resetMessages)];
+      if (selectedMessage) {
+        promises.push(loadMessageStatus(selectedMessage.id), loadAttempts(selectedMessage.id));
+      }
+      await Promise.all(promises);
       ph.setStatus('tenant-auth-status', 'success', 'Connected.');
     } catch {
       ph.setStatus('tenant-auth-status', 'error', 'One or more requests failed.');
@@ -846,6 +869,7 @@ function tenantScript(): string {
   }
 
   async function loadUsage() {
+    ph.clear(ph.byId('tenant-usage-summary'));
     ph.setStatus('tenant-usage-status', 'loading', 'Loading usage...');
     try {
       const body = await ph.api('/v1/usage', token);
@@ -998,6 +1022,15 @@ function tenantScript(): string {
     } catch (error) {
       ph.setStatus('attempt-status', 'error', ph.errorMessage(error));
     }
+  }
+
+  function clearSelectedMessage() {
+    selectedMessage = null;
+    ph.clear(ph.byId('delivery-rows'));
+    ph.clear(ph.byId('attempt-rows'));
+    ph.byId('message-payload').textContent = '{}';
+    ph.setStatus('message-status', 'empty', 'Select a message.');
+    ph.setStatus('attempt-status', 'empty', 'Select a message.');
   }
 })();`;
 }

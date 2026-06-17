@@ -429,6 +429,25 @@ All settings are environment variables.
 | `POSTHORN_WORKER_ATTEMPT_BUDGET` | `8` | Failed attempts before a delivery is dead-lettered. |
 | `POSTHORN_ENDPOINT_AUTO_DISABLE_AFTER_MS` | `432000000` | Auto-disable window (5 days). `0` = off. |
 
+### Configurable Port & Graceful Conflict Fallback
+
+You can configure the HTTP port using the `POSTHORN_PORT` environment variable:
+
+```bash
+# On Linux/macOS
+POSTHORN_PORT=8080 npm start
+
+# On Windows (PowerShell)
+$env:POSTHORN_PORT="8080"
+npm start
+```
+
+#### EADDRINUSE Port Conflict Handling
+
+If the configured port is already in use by another process (`EADDRINUSE`):
+- If `POSTHORN_PORT` is set to `0`, the server binds to a random ephemeral port as usual.
+- If `POSTHORN_PORT` is set to a non-zero port, Posthorn will gracefully scan for an available port by incrementing the port number by 1, up to a maximum of `configuredPort + 100`. The server will bind to the first free port found in this range. If all 100 ports are in use, it will throw the original `EADDRINUSE` error.
+
 ## Monitoring
 
 `GET /metrics` serves Prometheus text exposition (instance-aggregate, no auth required):
